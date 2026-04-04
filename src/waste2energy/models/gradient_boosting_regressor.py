@@ -1,0 +1,55 @@
+from __future__ import annotations
+
+from dataclasses import asdict, dataclass
+from pathlib import Path
+
+import joblib
+import pandas as pd
+from sklearn.ensemble import GradientBoostingRegressor
+
+from ..config import RANDOM_STATE
+
+
+@dataclass(frozen=True)
+class GradientBoostingConfig:
+    n_estimators: int = 300
+    learning_rate: float = 0.05
+    max_depth: int = 3
+    min_samples_split: int = 2
+    min_samples_leaf: int = 1
+    subsample: float = 0.9
+    random_state: int = RANDOM_STATE
+
+
+def build_model(config: GradientBoostingConfig | None = None) -> GradientBoostingRegressor:
+    active_config = config or GradientBoostingConfig()
+    return GradientBoostingRegressor(**asdict(active_config))
+
+
+def train_model(
+    x_frame: pd.DataFrame,
+    y_series: pd.Series,
+    sample_weight: pd.Series | None = None,
+    config: GradientBoostingConfig | None = None,
+):
+    model = build_model(config=config)
+    fit_kwargs = {}
+    if sample_weight is not None:
+        fit_kwargs["sample_weight"] = sample_weight
+    model.fit(x_frame, y_series, **fit_kwargs)
+    return model
+
+
+def build_feature_importance(model, feature_columns: list[str]) -> pd.DataFrame:
+    importance = pd.DataFrame(
+        {
+            "feature_name": feature_columns,
+            "importance_gain_proxy": model.feature_importances_,
+        }
+    )
+    return importance.sort_values("importance_gain_proxy", ascending=False).reset_index(drop=True)
+
+
+def save_model(model, path: Path) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    joblib.dump(model, path)
