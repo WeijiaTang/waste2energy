@@ -135,6 +135,7 @@ Outputs go to:
 - `data/processed/model_ready/paper1_ml_dataset_htc_scope.csv`
 - `data/processed/model_ready/paper1_ml_matrix_htc_scope.csv`
 - `data/processed/model_ready/optimization_input_dataset.csv`
+- `data/processed/model_ready/optimization_pathway_readiness_summary.csv`
 - `data/processed/model_ready/blending_assumptions.csv`
 
 ## Current Direct-ML Exports
@@ -169,6 +170,25 @@ Recommended usage:
 - `scripts/data-process/03_ingest_gcam_policy_reference.py`
 - `scripts/data-process/04_build_mixed_waste_features.py`
 - `scripts/data-process/05_build_model_ready_tables.py`
+
+## Current Planning-Dataset Builder
+
+Use the dedicated planning-layer builder below when refreshing the Paper 1 optimization-ready table:
+
+- `python scripts/data-process/11_build_planning_mult_pathway_dataset.py`
+
+This script writes:
+
+- `paper1_planning_pathway_prototypes.csv`: pathway candidate prototypes before scenario crossing
+- `optimization_input_dataset.csv`: the planning-layer model-ready table used by `waste2energy-plan`
+- `optimization_pathway_readiness_summary.csv`: pathway-by-pathway writing guardrail for process basis, performance basis, and claim boundary
+- `optimization_input_dataset_assumptions.json`: repository-native assumptions and readiness manifest
+
+Interpretation rule:
+
+- `baseline` and `ad` are optimization-ready regional comparison pathways, not direct process-observation datasets
+- `pyrolysis` and `htc` are synthetic mixed-feed candidates anchored to observed literature conditions and repository-side subtype references
+- cost remains proxy-based across the current shared planning table, even though pyrolysis-side economic reference columns are now carried for future calibration
 
 ## Guardrails
 

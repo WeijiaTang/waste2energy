@@ -52,6 +52,7 @@ def run_baseline_policies(
                     {
                         "scenario_name": spec.scenario_name,
                         "policy_name": policy_name,
+                        "episode_index": 1,
                         "step_index": step_index,
                         "throughput_action": action[0],
                         "severity_action": action[1],

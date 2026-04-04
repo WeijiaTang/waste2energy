@@ -5,6 +5,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 MODEL_READY_DIR = ROOT / "data" / "processed" / "model_ready"
+FIGURES_TABLES_DIR = ROOT / "data" / "processed" / "figures_tables"
 OUTPUTS_ROOT = ROOT / "outputs"
 SURROGATE_OUTPUTS_DIR = OUTPUTS_ROOT / "xgboost"
 PLANNING_OUTPUTS_DIR = OUTPUTS_ROOT / "planning"

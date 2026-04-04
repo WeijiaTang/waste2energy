@@ -65,6 +65,9 @@ The suite also writes:
 - `outputs/xgboost/traditional_ml_suite_summary.csv`
 - `outputs/xgboost/traditional_ml_suite_summary.json`
 
+The `outputs/xgboost/` root is now a historical experiment root, not an XGBoost-only namespace.
+The standard `traditional_ml_suite_summary*.csv` files may contain all configured model families.
+
 ## Validation Tiers
 
 The training package now supports multiple validation strategies through `--split-strategy`:
@@ -85,12 +88,48 @@ Current result files worth comparing are:
 
 - `outputs/xgboost/traditional_ml_suite_summary.csv`
 - `outputs/xgboost/traditional_ml_suite_summary_strict_group.csv`
-- `outputs/xgboost/leave_study_out/traditional_ml_suite_summary_leave_study_out.csv`
-- `outputs/xgboost/leave_study_out_htc_paper1/traditional_ml_suite_summary_leave_study_out.csv`
+- `outputs/xgboost/traditional_ml_suite_summary_leave_study_out.csv`
 
 For Paper 1 writing, prefer `strict_group` as the main benchmark table and use `leave_study_out` as the stronger generalization stress test.
 
+## Confirmatory Audit
+
+Regenerate the current paper-facing audit package:
+
+```powershell
+python scripts/run_confirmatory_audit.py
+```
+
+Or use the installed CLI:
+
+```powershell
+waste2energy-audit
+```
+
+This writes a reviewer-facing audit bundle under `outputs/audit/`:
+
+- `ml_split_coverage_summary.csv`
+- `ml_best_result_summary.csv`
+- `ml_claim_flag_table.csv`
+- `operation_comparison_summary.csv`
+- `operation_claim_flag_table.csv`
+- `artifact_inventory.csv`
+- `audit_manifest.json`
+
+Interpretation rule:
+
+- `ml_split_coverage_summary.csv` checks whether each validation tier has complete model coverage
+- `ml_claim_flag_table.csv` is the manuscript guardrail for what can and cannot be claimed from `strict_group` and `leave_study_out`
+- `operation_claim_flag_table.csv` is the appendix guardrail for conservative SAC behavior, scenario-conditional TD3 gains, and violation-aware reading
+- `artifact_inventory.csv` is the first file to check before a submission freeze or results refresh
+
 ## Planning Layer Baseline
+
+Refresh the multi-pathway optimization-ready dataset before a planning rerun:
+
+```powershell
+python scripts/data-process/11_build_planning_mult_pathway_dataset.py
+```
 
 Run the current planning-layer baseline:
 
@@ -117,6 +156,11 @@ Key planning artifacts are written under `outputs/planning/baseline/`:
 - `portfolio_allocations.csv`
 - `portfolio_summary.csv`
 - `scenario_summary.csv`
+- `pathway_summary.csv`
+- `main_results_table.csv`
+- `main_results_visual_metrics_long.csv`
+- `main_results_visual_annotations.csv`
+- `main_results_visual_manifest.json`
 - `run_config.json`
 
 Interpretation rule for the current planning layer:
@@ -124,7 +168,31 @@ Interpretation rule for the current planning layer:
 - `scenario_recommendations.csv` is the ranked single-case view
 - `portfolio_allocations.csv` is the planning-layer allocation view
 - `scenario_summary.csv` is the manuscript-facing scenario digest
+- `pathway_summary.csv` is the pathway-facing competition table for `baseline / ad / pyrolysis / htc`
+- `main_results_table.csv` is the compressed Paper 1 Results table that joins pathway competition, baseline-portfolio selection, robustness support, and claim boundary
+- `main_results_visual_metrics_long.csv` is the plotting-ready long table for score, energy, environment, portfolio share, and stress support
+- `main_results_visual_annotations.csv` is the figure annotation sidecar for pathway labels, basis, and claim boundary
+- `main_results_visual_manifest.json` records recommended figure panels and field mappings
 - `run_config.json` records whether each objective is still proxy-based or already publication-ready
+
+To regenerate the manuscript-facing planning Results table directly:
+
+```powershell
+python scripts/run_planning_results_table.py
+```
+
+The same outputs are also copied to `data/processed/figures_tables/`, including:
+
+- `paper1_planning_results_table.csv`
+- `paper1_planning_visual_metrics_long.csv`
+- `paper1_planning_visual_annotations.csv`
+- `paper1_planning_visual_manifest.json`
+
+Current boundary:
+
+- the planning dataset now includes `baseline`, `ad`, `pyrolysis`, and `htc` in one optimization-ready table
+- `optimization_pathway_readiness_summary.csv` and `optimization_input_dataset_assumptions.json` are the manuscript-safe files for pathway basis, readiness, and claim boundaries
+- the current default scoring still tends to select HTC mixed-feed candidates, but that is now a result of the shared optimization layer rather than a missing-pathway artifact
 
 ## Scenario And Robustness Layer
 
@@ -160,8 +228,9 @@ Interpretation rule for the current scenario layer:
 
 Current boundary:
 
-- the robustness layer is built on the same HTC mixed-feed planning dataset used by the planning layer
-- robustness conclusions should therefore be written as planning-parameter stress evidence, not as full four-pathway uncertainty proof
+- the robustness layer now runs on the shared four-pathway planning dataset
+- current default scenario robustness is still HTC-dominant, while AD can surface under stronger environment-priority stress
+- robustness conclusions should therefore be written as four-pathway planning evidence with mixed readiness, not as uniformly process-calibrated proof across all pathways
 
 ## Operation Appendix Environment
 
@@ -199,6 +268,7 @@ Current environment definition:
 Current appendix boundary:
 
 - the environment and simple baseline policies are ready
+- the appendix environment is now derived from the four-pathway planning outputs, even though the current dominant candidate remains HTC under the baseline planning configuration
 - DRL training is the next layer, not part of the current main-paper logic
 
 ## Gymnasium And SB3 Appendix
@@ -228,6 +298,9 @@ Key files are:
 - `operation_environment_specs.csv`
 - `training_summary.csv`
 - `evaluation_rollouts.csv`
+- `evaluation_episode_summary.csv`
+- `seed_aggregate_summary.csv`
+- `policy_behavior_summary.csv`
 - `run_config.json`
 
 Current DRL appendix rule:
@@ -241,27 +314,46 @@ Current DRL appendix rule:
 Run the current multi-seed RL-vs-baseline comparison:
 
 ```powershell
-python scripts/run_operation_rl.py --mode compare --seeds 42,43 --total-timesteps 256 --evaluation-episodes 5
+python scripts/run_operation_rl.py --mode compare --seeds 42,43,44,45,46 --total-timesteps 512 --evaluation-episodes 5
 ```
 
 This writes a formal comparison package under `outputs/operation/comparison/`:
 
+- `baseline_rollout_steps.csv`
 - `baseline_policy_summary.csv`
 - `sac_training_summary.csv`
 - `td3_training_summary.csv`
+- `sac_evaluation_rollouts.csv`
+- `td3_evaluation_rollouts.csv`
+- `sac_evaluation_episode_summary.csv`
+- `td3_evaluation_episode_summary.csv`
 - `sac_seed_aggregate_summary.csv`
 - `td3_seed_aggregate_summary.csv`
+- `policy_behavior_comparison.csv`
 - `rl_vs_baseline_comparison.csv`
 - `run_config.json`
 
 Interpretation rule:
 
 - `baseline_policy_summary.csv` is the deterministic control reference table
+- `baseline_rollout_steps.csv` and `*_evaluation_rollouts.csv` are the step-level evidence used to explain policy behavior
+- `*_evaluation_episode_summary.csv` is the episode-level stability evidence behind the seed aggregates
 - `*_training_summary.csv` stores per-seed RL runs
 - `*_seed_aggregate_summary.csv` is the manuscript-facing RL aggregate per scenario
+- `policy_behavior_comparison.csv` summarizes how often each policy actually changes throughput and severity, which is the key file for explaining why SAC often matches `hold_plan`
 - `rl_vs_baseline_comparison.csv` is the appendix comparison table that ranks SAC, TD3, and the deterministic baselines within each scenario
+  and now includes:
+  `reward_improvement_vs_hold_plan_abs`,
+  `reward_improvement_vs_hold_plan_pct`,
+  and `violation_aware_rank_within_scenario`
 
 Current evidence rule:
 
 - use the comparison table to discuss relative behavior of RL and heuristic control under the current HTC-derived appendix environment
 - do not write strong RL superiority claims until the comparison is expanded with longer training, more seeds, and sensitivity checks
+
+Upgraded appendix experiment recommendation:
+
+- use at least `5` seeds such as `42,43,44,45,46`
+- use higher training budgets such as `512` timesteps or above for first-round comparison
+- read `reward_improvement_vs_hold_plan_abs`, `reward_improvement_vs_hold_plan_pct`, and `violation_aware_rank_within_scenario` from `rl_vs_baseline_comparison.csv`

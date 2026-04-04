@@ -25,6 +25,7 @@ waste2energy-train = "waste2energy.cli:main"
 waste2energy-plan = "waste2energy.planning.cli:main"
 waste2energy-scenario = "waste2energy.scenarios.cli:main"
 waste2energy-operation = "waste2energy.operation.cli:main"
+waste2energy-audit = "waste2energy.audit:main"
 
 [tool.setuptools]
 package-dir = {"" = "src"}

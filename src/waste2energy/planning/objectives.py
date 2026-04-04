@@ -26,12 +26,18 @@ def enrich_with_objectives(bundle: PlanningInputBundle) -> tuple[pd.DataFrame, d
     moisture = pd.to_numeric(frame["feedstock_moisture_pct"], errors="coerce").fillna(0.0)
     energy_multiplier = pd.to_numeric(frame["energy_price_multiplier"], errors="coerce").fillna(1.0)
     policy_multiplier = pd.to_numeric(frame["policy_multiplier"], errors="coerce").fillna(1.0)
+    explicit_energy_intensity = _optional_numeric_column(frame, "pathway_energy_intensity_mj_per_ton")
+    energy_intensity = explicit_energy_intensity.fillna(1000.0 * char_yield * char_hhv)
 
-    frame["recoverable_energy_proxy_mj_per_year"] = allocation_ton * 1000.0 * char_yield * char_hhv
-    frame["stored_carbon_proxy_ton_per_year"] = allocation_ton * 1000.0 * carbon_fraction * carbon_retention / 1000.0
-    frame["avoided_baseline_emissions_proxy_kgco2e_per_year"] = (
-        allocation_ton * baseline_emission * carbon_retention * policy_multiplier
+    explicit_environment_benefit = _optional_numeric_column(
+        frame, "pathway_environment_benefit_kgco2e_per_ton"
     )
+    environment_intensity = explicit_environment_benefit.fillna(baseline_emission * carbon_retention)
+    environment_intensity = environment_intensity * policy_multiplier
+
+    frame["recoverable_energy_proxy_mj_per_year"] = allocation_ton * energy_intensity
+    frame["stored_carbon_proxy_ton_per_year"] = allocation_ton * 1000.0 * carbon_fraction * carbon_retention / 1000.0
+    frame["avoided_baseline_emissions_proxy_kgco2e_per_year"] = allocation_ton * environment_intensity
 
     severity = (
         0.45 * _normalize(process_temperature)
@@ -51,12 +57,8 @@ def enrich_with_objectives(bundle: PlanningInputBundle) -> tuple[pd.DataFrame, d
         support_relief=support_relief,
     )
 
-    frame["planning_energy_intensity_mj_per_ton"] = (
-        allocation_ton * 1000.0 * char_yield * char_hhv / allocation_ton_safe
-    ).fillna(0.0)
-    frame["planning_environment_intensity_kgco2e_per_ton"] = (
-        allocation_ton * baseline_emission * carbon_retention * policy_multiplier / allocation_ton_safe
-    ).fillna(0.0)
+    frame["planning_energy_intensity_mj_per_ton"] = energy_intensity.fillna(0.0)
+    frame["planning_environment_intensity_kgco2e_per_ton"] = environment_intensity.fillna(0.0)
     frame["planning_cost_intensity_proxy_or_real_per_ton"] = cost_intensity.fillna(0.0)
 
     frame["planning_energy_objective"] = frame["recoverable_energy_proxy_mj_per_year"]
@@ -65,8 +67,16 @@ def enrich_with_objectives(bundle: PlanningInputBundle) -> tuple[pd.DataFrame, d
     frame["planning_cost_objective"] = frame["total_cost_proxy_or_real"]
 
     readiness = {
-        "energy_objective_status": "semi_physical_proxy_from_char_yield_and_char_hhv",
-        "environment_objective_status": "proxy_from_baseline_emission_and_carbon_retention",
+        "energy_objective_status": (
+            "mixed_explicit_pathway_energy_and_char_fallback"
+            if explicit_energy_intensity.notna().any()
+            else "semi_physical_proxy_from_char_yield_and_char_hhv"
+        ),
+        "environment_objective_status": (
+            "mixed_explicit_pathway_benefit_and_carbon_retention_fallback"
+            if explicit_environment_benefit.notna().any()
+            else "proxy_from_baseline_emission_and_carbon_retention"
+        ),
         "cost_objective_status": cost_status,
     }
     return frame, readiness
@@ -91,18 +101,38 @@ def _build_cost_terms(
     throughput_scale: pd.Series,
     support_relief: pd.Series,
 ) -> tuple[pd.Series, pd.Series, str]:
-    proxy_intensity = ((0.70 * severity + 0.30 * throughput_scale) / support_relief).fillna(0.0)
+    base_factor = _optional_numeric_column(frame, "pathway_cost_proxy_base_factor").fillna(1.0)
+    proxy_intensity = (base_factor * ((0.70 * severity + 0.30 * throughput_scale) / support_relief)).fillna(0.0)
 
     if "unit_treatment_cost_usd_per_ton" in real_cost_columns:
-        intensity = pd.to_numeric(frame["unit_treatment_cost_usd_per_ton"], errors="coerce").fillna(0.0)
+        explicit = pd.to_numeric(frame["unit_treatment_cost_usd_per_ton"], errors="coerce")
+        intensity = explicit.where(explicit.notna(), proxy_intensity).fillna(0.0)
         annual = intensity * allocation_ton
-        return intensity, annual, "real_unit_from_unit_treatment_cost_usd_per_ton"
+        status = (
+            "mixed_real_unit_and_proxy_from_unit_treatment_cost_usd_per_ton"
+            if explicit.notna().any() and explicit.isna().any()
+            else "real_unit_from_unit_treatment_cost_usd_per_ton"
+        )
+        return intensity, annual, status
 
     for annual_column in ["net_system_cost_usd_per_year", "total_system_cost_usd_per_year"]:
         if annual_column in real_cost_columns:
-            annual = pd.to_numeric(frame[annual_column], errors="coerce").fillna(0.0)
-            intensity = (annual / allocation_ton_safe).fillna(0.0)
-            return intensity, annual, f"real_annual_from_{annual_column}"
+            explicit_annual = pd.to_numeric(frame[annual_column], errors="coerce")
+            explicit_intensity = (explicit_annual / allocation_ton_safe).replace([np.inf, -np.inf], np.nan)
+            intensity = explicit_intensity.where(explicit_intensity.notna(), proxy_intensity).fillna(0.0)
+            annual = explicit_annual.where(explicit_annual.notna(), intensity * allocation_ton).fillna(0.0)
+            status = (
+                f"mixed_real_annual_and_proxy_from_{annual_column}"
+                if explicit_annual.notna().any() and explicit_annual.isna().any()
+                else f"real_annual_from_{annual_column}"
+            )
+            return intensity, annual, status
 
     annual = proxy_intensity * allocation_ton
     return proxy_intensity, annual, "proxy_only_process_and_support_index"
+
+
+def _optional_numeric_column(frame: pd.DataFrame, column: str) -> pd.Series:
+    if column not in frame.columns:
+        return pd.Series(np.nan, index=frame.index, dtype=float)
+    return pd.to_numeric(frame[column], errors="coerce")

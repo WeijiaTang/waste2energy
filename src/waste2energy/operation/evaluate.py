@@ -62,6 +62,7 @@ def evaluate_trained_model(
             step_index += 1
             episode_reward += float(reward)
             components = step_info["reward_components"]
+            discrete_action = step_info["discrete_action"]
             episode_energy += float(components["realized_energy"])
             episode_environment += float(components["realized_environment"])
             episode_cost += float(components["realized_cost"])
@@ -70,16 +71,26 @@ def evaluate_trained_model(
                 {
                     "episode_index": episode_index,
                     "step_index": step_index,
+                    "throughput_action": int(discrete_action[0]),
+                    "severity_action": int(discrete_action[1]),
                     "reward": reward,
                     "throughput_ton_per_year": step_info["state"]["throughput_ton_per_year"],
                     "candidate_share_of_effective_budget": step_info["state"][
                         "candidate_share_of_effective_budget"
                     ],
                     "severity_offset": step_info["state"]["severity_offset"],
+                    "energy_disturbance_multiplier": step_info["state"]["energy_disturbance_multiplier"],
+                    "environment_disturbance_multiplier": step_info["state"][
+                        "environment_disturbance_multiplier"
+                    ],
+                    "cost_disturbance_multiplier": step_info["state"]["cost_disturbance_multiplier"],
+                    "capacity_pressure": step_info["state"]["capacity_pressure"],
+                    "coverage_pressure": step_info["state"]["coverage_pressure"],
                     "realized_energy": components["realized_energy"],
                     "realized_environment": components["realized_environment"],
                     "realized_cost": components["realized_cost"],
                     "violation_penalty": components["violation_penalty"],
+                    "switching_penalty": components["switching_penalty"],
                 }
             )
         episode_rows.append(

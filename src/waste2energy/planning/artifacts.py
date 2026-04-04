@@ -17,6 +17,7 @@ def write_planning_outputs(
     portfolio_allocations: pd.DataFrame,
     portfolio_summary: pd.DataFrame,
     scenario_summary: pd.DataFrame,
+    pathway_summary: pd.DataFrame,
     output_dir: str | None,
     config,
     bundle,
@@ -33,6 +34,7 @@ def write_planning_outputs(
         "portfolio_allocations": target_dir / "portfolio_allocations.csv",
         "portfolio_summary": target_dir / "portfolio_summary.csv",
         "scenario_summary": target_dir / "scenario_summary.csv",
+        "pathway_summary": target_dir / "pathway_summary.csv",
         "run_config": target_dir / "run_config.json",
     }
 
@@ -43,6 +45,7 @@ def write_planning_outputs(
     portfolio_allocations.to_csv(outputs["portfolio_allocations"], index=False)
     portfolio_summary.to_csv(outputs["portfolio_summary"], index=False)
     scenario_summary.to_csv(outputs["scenario_summary"], index=False)
+    pathway_summary.to_csv(outputs["pathway_summary"], index=False)
 
     run_config = build_run_manifest(
         dataset_path=str(bundle.dataset_path),

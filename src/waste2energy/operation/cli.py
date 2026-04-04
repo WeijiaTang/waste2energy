@@ -13,6 +13,8 @@ from .artifacts import (
 from .comparison import (
     build_baseline_policy_summary,
     build_comparison_table,
+    build_policy_behavior_comparison,
+    build_rl_policy_behavior_summary,
     build_rl_policy_summary,
 )
 from .inputs import build_operation_environment_specs
@@ -42,7 +44,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--total-timesteps",
         type=int,
-        default=256,
+        default=512,
         help="Training timesteps per scenario for RL mode.",
     )
     parser.add_argument(
@@ -53,7 +55,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--seeds",
-        default="42",
+        default="42,43,44,45,46",
         help="Comma-separated random seeds for RL mode or compare mode.",
     )
     return parser
@@ -94,10 +96,14 @@ def main() -> int:
                 horizon_steps=args.horizon_steps,
                 evaluation_episodes=args.evaluation_episodes,
             )
+            policy_behavior_summary = build_rl_policy_behavior_summary(evaluation_rollouts)
             outputs = write_operation_rl_outputs(
                 environment_specs=environment_specs,
                 training_summary=training_summary,
                 evaluation_rollouts=evaluation_rollouts,
+                evaluation_episode_summary=evaluation_episode_summary,
+                seed_aggregate_summary=seed_aggregate_summary,
+                policy_behavior_summary=policy_behavior_summary,
                 output_dir=args.output_dir or None,
                 algorithm=args.algorithm,
             )
@@ -106,20 +112,23 @@ def main() -> int:
                 "algorithm": args.algorithm,
                 "environment_count": int(len(environment_specs)),
                 "training_run_count": int(len(training_summary)),
+                "seed_aggregate_count": int(len(seed_aggregate_summary)),
                 "outputs": outputs,
             }
         else:
-            _, baseline_rollout_summary = run_baseline_policies(
+            baseline_rollout_steps, baseline_rollout_summary = run_baseline_policies(
                 environment_specs,
                 horizon_steps=args.horizon_steps,
             )
             baseline_policy_summary = build_baseline_policy_summary(baseline_rollout_summary)
 
             rl_training_summaries: dict[str, object] = {}
+            rl_evaluation_rollouts: dict[str, object] = {}
+            rl_evaluation_episode_summaries: dict[str, object] = {}
             rl_seed_aggregate_summaries: dict[str, object] = {}
             rl_policy_summaries = []
             for algorithm in ["sac", "td3"]:
-                training_summary, _, _, seed_aggregate_summary = train_rl_agents(
+                training_summary, evaluation_rollouts, evaluation_episode_summary, seed_aggregate_summary = train_rl_agents(
                     environment_specs,
                     algorithm=algorithm,
                     total_timesteps=args.total_timesteps,
@@ -128,6 +137,8 @@ def main() -> int:
                     evaluation_episodes=args.evaluation_episodes,
                 )
                 rl_training_summaries[algorithm] = training_summary
+                rl_evaluation_rollouts[algorithm] = evaluation_rollouts
+                rl_evaluation_episode_summaries[algorithm] = evaluation_episode_summary
                 rl_seed_aggregate_summaries[algorithm] = seed_aggregate_summary
                 rl_policy_summaries.append(build_rl_policy_summary(seed_aggregate_summary))
 
@@ -135,17 +146,28 @@ def main() -> int:
                 baseline_policy_summary,
                 rl_policy_summaries,
             )
+            policy_behavior_comparison = build_policy_behavior_comparison(
+                baseline_rollout_steps,
+                list(rl_evaluation_rollouts.values()),
+            )
             outputs = write_operation_comparison_outputs(
+                baseline_rollout_steps=baseline_rollout_steps,
                 baseline_summary=baseline_policy_summary,
                 rl_training_summaries=rl_training_summaries,
+                rl_evaluation_rollouts=rl_evaluation_rollouts,
+                rl_evaluation_episode_summaries=rl_evaluation_episode_summaries,
                 rl_seed_aggregate_summaries=rl_seed_aggregate_summaries,
                 comparison_table=comparison_table,
+                policy_behavior_comparison=policy_behavior_comparison,
                 output_dir=args.output_dir or None,
+                seeds=seeds,
+                total_timesteps=args.total_timesteps,
             )
             payload = {
                 "mode": "compare",
                 "environment_count": int(len(environment_specs)),
                 "comparison_row_count": int(len(comparison_table)),
+                "policy_behavior_row_count": int(len(policy_behavior_comparison)),
                 "outputs": outputs,
             }
     except Exception as exc:

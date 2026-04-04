@@ -41,6 +41,7 @@ def run_planning_baseline(
         portfolio_allocations=execution["portfolio_allocations"],
         portfolio_summary=execution["portfolio_summary"],
         scenario_summary=execution["scenario_summary"],
+        pathway_summary=execution["pathway_summary"],
         output_dir=output_dir,
         config=active_config,
         bundle=bundle,
@@ -74,6 +75,10 @@ def execute_planning_pipeline(bundle, config: PlanningConfig) -> dict[str, objec
         recommendations=scenario_recommendations,
         portfolio_summary=portfolio_summary,
     )
+    pathway_summary = build_pathway_summary(
+        scored=scored,
+        portfolio_allocations=portfolio_allocations,
+    )
     return {
         "objective_frame": objective_frame,
         "objective_readiness": readiness,
@@ -84,6 +89,7 @@ def execute_planning_pipeline(bundle, config: PlanningConfig) -> dict[str, objec
         "portfolio_allocations": portfolio_allocations,
         "portfolio_summary": portfolio_summary,
         "scenario_summary": scenario_summary,
+        "pathway_summary": pathway_summary,
     }
 
 
@@ -262,6 +268,59 @@ def build_scenario_summary(
         .sort_values("scenario_name")
         .reset_index(drop=True)
     )
+
+
+def build_pathway_summary(
+    *,
+    scored: pd.DataFrame,
+    portfolio_allocations: pd.DataFrame,
+) -> pd.DataFrame:
+    rows: list[dict[str, object]] = []
+    allocation_map = {
+        (scenario_name, pathway): frame.copy()
+        for (scenario_name, pathway), frame in portfolio_allocations.groupby(
+            ["scenario_name", "pathway"], dropna=False
+        )
+    }
+
+    for (scenario_name, pathway), scenario_pathway_frame in scored.groupby(
+        ["scenario_name", "pathway"], dropna=False
+    ):
+        best_case = scenario_pathway_frame.sort_values(
+            ["planning_score", "planning_energy_objective"],
+            ascending=[False, False],
+        ).iloc[0]
+        allocation_frame = allocation_map.get((scenario_name, pathway), pd.DataFrame())
+        rows.append(
+            {
+                "scenario_name": scenario_name,
+                "pathway": pathway,
+                "candidate_count": int(len(scenario_pathway_frame)),
+                "best_case_id": best_case["optimization_case_id"],
+                "best_case_score": float(best_case["planning_score"]),
+                "best_case_energy_objective": float(best_case["planning_energy_objective"]),
+                "best_case_environment_objective": float(best_case["planning_environment_objective"]),
+                "best_case_cost_objective": float(best_case["planning_cost_objective"]),
+                "best_case_manure_subtype": best_case.get("manure_subtype"),
+                "best_case_blend_manure_ratio": best_case.get("blend_manure_ratio"),
+                "best_case_blend_wet_waste_ratio": best_case.get("blend_wet_waste_ratio"),
+                "portfolio_selected_count": int(len(allocation_frame)),
+                "portfolio_allocated_feed_ton_per_year": _sum_column(
+                    allocation_frame, "allocated_feed_ton_per_year"
+                ),
+                "portfolio_allocated_feed_share": _sum_column(allocation_frame, "allocated_feed_share"),
+                "portfolio_energy_objective": _sum_column(allocation_frame, "allocated_energy_objective"),
+                "portfolio_environment_objective": _sum_column(
+                    allocation_frame, "allocated_environment_objective"
+                ),
+                "portfolio_cost_objective": _sum_column(allocation_frame, "allocated_cost_objective"),
+                "portfolio_top_case_id": _first_value(allocation_frame, "optimization_case_id"),
+            }
+        )
+
+    return pd.DataFrame(rows).sort_values(
+        ["scenario_name", "best_case_score"], ascending=[True, False]
+    ).reset_index(drop=True)
 
 
 def _select_portfolio_candidates(scenario_frame: pd.DataFrame, config: PlanningConfig) -> pd.DataFrame:
