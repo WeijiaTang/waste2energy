@@ -16,3 +16,7 @@ docs/
 
 # results
 /outputs/
+waste2energy-paper/sections/*.tex
+results/paper/tiff/*.tiff
+waste2energy-paper/jocp-main.*
+waste2energy-paper/cls/jocp-preamble.tex

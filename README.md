@@ -188,6 +188,21 @@ The same outputs are also copied to `data/processed/figures_tables/`, including:
 - `paper1_planning_visual_annotations.csv`
 - `paper1_planning_visual_manifest.json`
 
+To generate manuscript-grade planning figures from these plotting-ready files:
+
+```powershell
+python scripts/plot/plot_paper1_planning_results.py
+```
+
+This writes `eps`, `pdf`, `png`, and `tiff` versions to format-specific folders under `results/paper/`, for example:
+
+- `results/paper/pdf/`
+- `results/paper/png/`
+- `results/paper/eps/`
+- `results/paper/tiff/`
+
+It also writes `paper1_planning_figure_manifest.json` to `results/paper/`.
+
 Current boundary:
 
 - the planning dataset now includes `baseline`, `ad`, `pyrolysis`, and `htc` in one optimization-ready table
