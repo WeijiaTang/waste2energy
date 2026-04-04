@@ -1,0 +1,67 @@
+{
+  "dataset_name": "optimization_input_dataset",
+  "prototype_dataset_name": "paper1_mixed_waste_feature_prototypes",
+  "generation_method": "weighted median blending using repository-derived reference samples",
+  "base_pathway": "htc",
+  "wet_waste_reference_group": "food_waste",
+  "region_id": "us_ca",
+  "region_name": "California",
+  "wet_waste_reference_source": "california_food_waste_model_input.csv",
+  "region_scenario_source": "paper1_region_scenario_placeholder.csv",
+  "manure_reference_source": "manure_pyrolysis_energy_balance_long.csv",
+  "energy_reference_source": "paper1_region_scenario_placeholder.csv",
+  "emission_reference_source": "paper1_region_scenario_placeholder.csv",
+  "capacity_reference_source": "paper1_region_scenario_placeholder.csv",
+  "facility_inventory_reference_source": "paper1_region_scenario_placeholder.csv",
+  "policy_reference_source": "paper1_region_scenario_placeholder.csv",
+  "assumptions": [
+    "Mixed-feed rows are synthetic prototypes, not direct experimental observations.",
+    "Feedstock chemistry is blended using weighted averages between repository-derived food-waste and manure references.",
+    "Manure subtype moisture and heating-value fields are overridden using ManurePyrolysisIAM energy-balance references.",
+    "Char yield and char HHV are partly adjusted using manure subtype biochar-yield and calorific-value references.",
+    "Carbon-retention values fall back to manure and food-waste repository medians because subtype-specific carbon-retention measurements were not available in the copied workbook.",
+    "Optimization rows are created by crossing synthetic mixed-feed prototypes with California us_ca regional scenarios.",
+    "Scenario wet-waste availability fields are proxies derived from California food-waste generation and the current collection-rate reference.",
+    "Explicit California electricity and natural-gas price values are carried into optimization rows from the regional scenario placeholder dataset.",
+    "EPA WARM food-waste baseline waste-treatment emission factors are carried into optimization rows as regional environmental parameters.",
+    "California SWIS facility-inventory metadata is carried into optimization rows as regional infrastructure context.",
+    "SB 1383 policy context is carried into optimization rows as regional policy-reference metadata rather than as a direct process-model coefficient."
+  ],
+  "feature_prototype_row_count": 60,
+  "optimization_row_count": 180,
+  "blend_cases": [
+    "manure_dominant",
+    "balanced_mixed_feed",
+    "wet_waste_enhanced"
+  ],
+  "scenario_names": [
+    "baseline_region_case",
+    "high_supply_case",
+    "policy_support_case"
+  ],
+  "manure_subtypes": [
+    "beef",
+    "dairy",
+    "goat",
+    "poultry",
+    "swine"
+  ],
+  "baseline_energy_prices": {
+    "electricity_price_usd_per_kwh_reference": 0.2704,
+    "natural_gas_price_usd_per_mcf_reference": 11.48
+  },
+  "baseline_waste_treatment_emission_factor": {
+    "management_pathway": "california_weighted_food_waste_management_mix",
+    "factor_unit": "kgCO2e_per_short_ton",
+    "factor_value": 329.9817049835864
+  },
+  "policy_reference_metrics": {
+    "policy_effective_year_reference": 2022.0,
+    "policy_organic_waste_disposal_reduction_target_pct_reference": 75.0,
+    "policy_edible_food_recovery_target_pct_reference": 20.0,
+    "policy_procurement_target_ton_per_capita_reference": 0.08
+  },
+  "facility_capacity_status": "manual_export_processed",
+  "facility_capacity_reporting_cycle_reference": "2025-2034",
+  "organics_facility_inventory_status": "official_reference_connected"
+}

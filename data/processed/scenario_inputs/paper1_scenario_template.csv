@@ -1,0 +1,7 @@
+scenario_group,scenario_name,blend_manure_ratio,blend_wet_waste_ratio,energy_price_multiplier,policy_multiplier,technology_efficiency_multiplier
+feedstock_composition,manure_dominant,0.7,0.3,1.0,1.0,1.0
+feedstock_composition,balanced_mixed_feed,0.5,0.5,1.0,1.0,1.0
+feedstock_composition,wet_waste_enhanced,0.3,0.7,1.0,1.0,1.0
+market_condition,high_energy_price,,,1.2,1.0,1.0
+policy_environment,policy_support,,,1.0,1.2,1.0
+technology_condition,optimistic_efficiency,,,1.0,1.0,1.1

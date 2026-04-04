@@ -1,0 +1,29 @@
+source_repo,source_file,table_role,paper1_priority,row_count,column_count,columns
+ManurePyrolysisIAM,all_biochar_ghg_cdr_sources.csv,environmental_reference,medium,24,18,Unnamed: 0|1990|2005|2010|2015|2020|2025|2030|2035|2040|2045|2050|2055|2060|SSP|Version|Units|GHG_ER_type
+ManurePyrolysisIAM,biochar_c_avoidance.csv,environmental_reference,high,15,28,Unnamed: 0|1990|2005|2010|2015|2020|2025|2030|2035|2040|2045|2050|2055|2060|SSP|Version|GCAM|sector|subsector|technology|output|concentration|input|product|fuel|LandLeaf|GHG|Units
+ManurePyrolysisIAM,biochar_c_sequestration.csv,environmental_reference,high,15,28,Unnamed: 0|1990|2005|2010|2015|2020|2025|2030|2035|2040|2045|2050|2055|2060|SSP|Version|GCAM|sector|subsector|technology|output|concentration|input|product|fuel|LandLeaf|GHG|Units
+ManurePyrolysisIAM,biochar_ghg_avoided_decomposition.csv,environmental_reference,high,6,18,Unnamed: 0|1990|2005|2010|2015|2020|2025|2030|2035|2040|2045|2050|2055|2060|SSP|Version|GHG|Units
+ManurePyrolysisIAM,biochar_LUC_emissions.csv,environmental_reference,medium,3,17,Unnamed: 0|1990|2005|2010|2015|2020|2025|2030|2035|2040|2045|2050|2055|2060|SSP|Version|Units
+ManurePyrolysisIAM,biochar_manure_supply_GWP_kg_FU.csv,environmental_reference,high,18,17,Unnamed: 0|1990|2005|2010|2015|2020|2025|2030|2035|2040|2045|2050|2055|2060|SSP|Version|Units
+ManurePyrolysisIAM,biochar_price.csv,economic_reference,high,96,28,Unnamed: 0|1990|2005|2010|2015|2020|2025|2030|2035|2040|2045|2050|2055|2060|SSP|Version|GCAM|sector|subsector|technology|output|concentration|input|product|fuel|LandLeaf|GHG|Units
+ManurePyrolysisIAM,biochar_soil_N2O_flux.csv,environmental_reference,high,3,18,Unnamed: 0|1990|2005|2010|2015|2020|2025|2030|2035|2040|2045|2050|2055|2060|SSP|Version|GHG|Units
+ManurePyrolysisIAM,change_in_food_prices.csv,economic_reference,medium,198,19,Unnamed: 0|1990|2005|2010|2015|2020|2025|2030|2035|2040|2045|2050|2055|2060|SSP|Version|GCAM|input|cat
+ManurePyrolysisIAM,change_in_N.csv,general_reference,low,3,17,Unnamed: 0|1990|2005|2010|2015|2020|2025|2030|2035|2040|2045|2050|2055|2060|SSP|Version|Units
+ManurePyrolysisIAM,CI_change_in_pcals.csv,market_reference,low,990,29,Unnamed: 0|1990|2005|2010|2015|2020|2025|2030|2035|2040|2045|2050|2055|2060|SSP|Version|GCAM|sector|subsector|technology|output|concentration|input|product|fuel|LandLeaf|GHG|Units|categorization
+ManurePyrolysisIAM,CI_perc_change_in_pcals.csv,market_reference,low,2067,29,Unnamed: 0|1990|2005|2010|2015|2020|2025|2030|2035|2040|2045|2050|2055|2060|SSP|Version|GCAM|sector|subsector|technology|output|concentration|input|product|fuel|LandLeaf|GHG|Units|categorization
+ManurePyrolysisIAM,CI_percent_change_in_animal_feed.csv,market_reference,low,384,29,Unnamed: 0|1990|2005|2010|2015|2020|2025|2030|2035|2040|2045|2050|2055|2060|SSP|Version|GCAM|sector|subsector|technology|output|concentration|input|product|fuel|LandLeaf|GHG|Units|categorization
+ManurePyrolysisIAM,CI_percent_change_in_animal_herd.csv,market_reference,low,480,29,Unnamed: 0|1990|2005|2010|2015|2020|2025|2030|2035|2040|2045|2050|2055|2060|SSP|Version|GCAM|sector|subsector|technology|output|concentration|input|product|fuel|LandLeaf|GHG|Units|categorization
+ManurePyrolysisIAM,CI_total_change_in_animal_feed.csv,market_reference,low,3,17,Unnamed: 0|1990|2005|2010|2015|2020|2025|2030|2035|2040|2045|2050|2055|2060|SSP|Version|Units
+ManurePyrolysisIAM,CI_total_change_in_animal_herd.csv,market_reference,low,3,17,Unnamed: 0|1990|2005|2010|2015|2020|2025|2030|2035|2040|2045|2050|2055|2060|SSP|Version|Units
+ManurePyrolysisIAM,crop-basin-region-biochar-application-rate_CI.csv,general_reference,low,21075,12,Unnamed: 0.1|Unnamed: 0|region|GCAM_region_ID|GCAM_commodity|GCAM_subsector|GLU|Irr_Rfd|kg_bio_ha|kg_P_ha|cat|Version
+ManurePyrolysisIAM,feedstock_cost_pyrolysis.csv,economic_reference,high,480,29,Unnamed: 0|1990|2005|2010|2015|2020|2025|2030|2035|2040|2045|2050|2055|2060|SSP|Version|GCAM|sector|subsector|technology|output|concentration|input|product|fuel|LandLeaf|GHG|Units|categorization
+ManurePyrolysisIAM,global_CI_change_in_pcals.csv,market_reference,low,3,17,Unnamed: 0|1990|2005|2010|2015|2020|2025|2030|2035|2040|2045|2050|2055|2060|SSP|Version|Units
+ManurePyrolysisIAM,global_CI_perc_change_in_pcals.csv,market_reference,low,3,17,Unnamed: 0|1990|2005|2010|2015|2020|2025|2030|2035|2040|2045|2050|2055|2060|SSP|Version|Units
+ManurePyrolysisIAM,global_LUC.csv,environmental_reference,medium,33,18,Unnamed: 0|1990|2005|2010|2015|2020|2025|2030|2035|2040|2045|2050|2055|2060|SSP|Version|LandLeaf|Units
+ManurePyrolysisIAM,land_use_by_mgmt.csv,land_use_reference,low,9,17,Unnamed: 0|MGMT|Version|1990|2005|2010|2015|2020|2025|2030|2035|2040|2045|2050|2055|2060|Units
+ManurePyrolysisIAM,land_use_by_mgmt_and_crop.csv,land_use_reference,low,132,19,Unnamed: 0|Crop|MGMT|Version|1990|2005|2010|2015|2020|2025|2030|2035|2040|2045|2050|2055|2060|Units|cat
+ManurePyrolysisIAM,percent_change_in_food_prices.csv,economic_reference,medium,198,20,Unnamed: 0|1990|2005|2010|2015|2020|2025|2030|2035|2040|2045|2050|2055|2060|SSP|Version|GCAM|input|Units|cat
+ManurePyrolysisIAM,percent_difference_in_N.csv,general_reference,low,3,17,Unnamed: 0|1990|2005|2010|2015|2020|2025|2030|2035|2040|2045|2050|2055|2060|SSP|Version|Units
+ManurePyrolysisIAM,regional_land_mgmt.csv,land_use_reference,low,127,6,Biochar Application:<br>499700 km<sup>2</sup>| Argentina| 3.6244222816832887|%|1490|km2
+ManurePyrolysisIAM,total_cost_pyrolysis.csv,economic_reference,high,480,29,Unnamed: 0|1990|2005|2010|2015|2020|2025|2030|2035|2040|2045|2050|2055|2060|SSP|Version|GCAM|sector|subsector|technology|output|concentration|input|product|fuel|LandLeaf|GHG|Units|categorization
+ManurePyrolysisIAM,unit_cost_pyrolysis.csv,economic_reference,high,3360,28,Unnamed: 0|1990|2005|2010|2015|2020|2025|2030|2035|2040|2045|2050|2055|2060|SSP|Version|GCAM|sector|subsector|technology|output|concentration|input|product|fuel|LandLeaf|GHG|Units

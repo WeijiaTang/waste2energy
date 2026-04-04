@@ -1,0 +1,161 @@
+source_repo,source_file,source_dataset_kind,livestock_type,constant_name,value,units,notes
+ManurePyrolysisIAM,pyrolysis_energy_balance.xlsx,energy_balance_reference,swine,Initial Moisture Content,0.76,%,"Based on the process flow, mass balance, and energy balance diagram from: Zhou, A., Wang, X., Yu, S., Deng, S., Tan, H. and Mikulčić, H., 2023. Process design and optimization on self-sustaining pyrolysis and carbonization of municipal sewage sludge. Waste Management, 159, pp.125-133."
+ManurePyrolysisIAM,pyrolysis_energy_balance.xlsx,energy_balance_reference,swine,Moisture Content After Drying,0.06,%,76% moisture content of feedstock results in a balanced system
+ManurePyrolysisIAM,pyrolysis_energy_balance.xlsx,energy_balance_reference,swine,enthalpy of steam,2.676,MJ/kg,
+ManurePyrolysisIAM,pyrolysis_energy_balance.xlsx,energy_balance_reference,swine,heat exchange efficiency,0.9,%,
+ManurePyrolysisIAM,pyrolysis_energy_balance.xlsx,energy_balance_reference,swine,drying of sludge as percentage of water evaporation,1.063,%,As a simplification of the Aspen Simulation
+ManurePyrolysisIAM,pyrolysis_energy_balance.xlsx,energy_balance_reference,swine,energy of dry sludge as percentage of wet sludge,1.0133292677614671,%,As a simplification of the Aspen Simulation
+ManurePyrolysisIAM,pyrolysis_energy_balance.xlsx,energy_balance_reference,swine,energy in biochar as a percentage of calorific value of biochar,1.0309831880996392,%,
+ManurePyrolysisIAM,pyrolysis_energy_balance.xlsx,energy_balance_reference,swine,energy lost in pyrolysis as a percentage of input energy,0.021536345269311783,%,
+ManurePyrolysisIAM,pyrolysis_energy_balance.xlsx,energy_balance_reference,swine,,,,
+ManurePyrolysisIAM,pyrolysis_energy_balance.xlsx,energy_balance_reference,swine,Inputs,,Units,
+ManurePyrolysisIAM,pyrolysis_energy_balance.xlsx,energy_balance_reference,swine,input manure,0.005,kg,"calorific value derived from equation  0.4047C − 0.0043L (C = Carbon%wt, L=Lignin%wt)"
+ManurePyrolysisIAM,pyrolysis_energy_balance.xlsx,energy_balance_reference,swine,dry manure calorific value,13.585399,MJ/kg,"Maksimuk, Y., Antonava, Z., Krouk, V., Korsakova, A. and Kursevich, V., 2021. Prediction of higher heating value (HHV) based on the structural composition for biomass. Fuel, 299, p.120860."
+ManurePyrolysisIAM,pyrolysis_energy_balance.xlsx,energy_balance_reference,swine,dry manure,0.001276595744680851,kg,
+ManurePyrolysisIAM,pyrolysis_energy_balance.xlsx,energy_balance_reference,swine,steam,0.003723404255319149,kg,
+ManurePyrolysisIAM,pyrolysis_energy_balance.xlsx,energy_balance_reference,swine,biochar yield,0.468,%,calorific value derived from equation: HHV = 32.9C + 162.7H − 16.2O − 954.4S + 1.408
+ManurePyrolysisIAM,pyrolysis_energy_balance.xlsx,energy_balance_reference,swine,biochar calorific value,8.065859999999999,MJ/kg,remaining energy in input not in biochar is in the gas or lost
+ManurePyrolysisIAM,pyrolysis_energy_balance.xlsx,energy_balance_reference,swine,pyrolysis biochar,0.0005974468085106383,kg,"Qian, C., Li, Q., Zhang, Z., Wang, X., Hu, J. and Cao, W., 2020. Prediction of higher heating values of biochar from proximate and ultimate analysis. Fuel, 265, p.116925."
+ManurePyrolysisIAM,pyrolysis_energy_balance.xlsx,energy_balance_reference,swine,,,,
+ManurePyrolysisIAM,pyrolysis_energy_balance.xlsx,energy_balance_reference,swine,Energy Balance,,Units,
+ManurePyrolysisIAM,pyrolysis_energy_balance.xlsx,energy_balance_reference,swine,energy of manure into drying,0.0163024788,MJ,
+ManurePyrolysisIAM,pyrolysis_energy_balance.xlsx,energy_balance_reference,swine,energy of dry manure from drying/into pyrolysis,0.01651977890510084,MJ,
+ManurePyrolysisIAM,pyrolysis_energy_balance.xlsx,energy_balance_reference,swine,energy in biochar,0.004968227891413514,MJ,
+ManurePyrolysisIAM,pyrolysis_energy_balance.xlsx,energy_balance_reference,swine,energy in flue gas from pyrolysis,,MJ,"These don't need to be calculated, because we assume the energy out from pyrolysis is the remainder of energy input and biochar, as the energy used in pyrolysis will already be taken out of the energy in the gas"
+ManurePyrolysisIAM,pyrolysis_energy_balance.xlsx,energy_balance_reference,swine,energy in flue gas from burning,,MJ,"Energy in to the system is in the feedstock, output is in the volatiles and biochar"
+ManurePyrolysisIAM,pyrolysis_energy_balance.xlsx,energy_balance_reference,swine,energy consumption from pyrolysis,,MJ,The energy in biochar is known
+ManurePyrolysisIAM,pyrolysis_energy_balance.xlsx,energy_balance_reference,swine,energy loss from pyrolysis,0.00035577566227294505,MJ,
+ManurePyrolysisIAM,pyrolysis_energy_balance.xlsx,energy_balance_reference,swine,energy in flue gas from pyrolysis/into drying,0.011551551013687326,MJ,
+ManurePyrolysisIAM,pyrolysis_energy_balance.xlsx,energy_balance_reference,swine,energy in steam from drying,0.009963829787234044,MJ,
+ManurePyrolysisIAM,pyrolysis_energy_balance.xlsx,energy_balance_reference,swine,energy consumption from drying,0.010591551063829788,MJ,
+ManurePyrolysisIAM,pyrolysis_energy_balance.xlsx,energy_balance_reference,swine,energy loss from drying,0.0010591551063829786,MJ,
+ManurePyrolysisIAM,pyrolysis_energy_balance.xlsx,energy_balance_reference,swine,flue gas waste heat,-4.450964730348325e-05,MJ,
+ManurePyrolysisIAM,pyrolysis_energy_balance.xlsx,energy_balance_reference,swine,flue gas output energy as percentage of input energy,-0.002730238011625769,%,
+ManurePyrolysisIAM,pyrolysis_energy_balance.xlsx,energy_balance_reference,goat,Initial Moisture Content,0.77,%,"Based on the process flow, mass balance, and energy balance diagram from: Zhou, A., Wang, X., Yu, S., Deng, S., Tan, H. and Mikulčić, H., 2023. Process design and optimization on self-sustaining pyrolysis and carbonization of municipal sewage sludge. Waste Management, 159, pp.125-133."
+ManurePyrolysisIAM,pyrolysis_energy_balance.xlsx,energy_balance_reference,goat,Moisture Content After Drying,0.06,%,77% moisture content of feedstock after mechanical separation results in a balanced system
+ManurePyrolysisIAM,pyrolysis_energy_balance.xlsx,energy_balance_reference,goat,enthalpy of steam,2.676,MJ/kg,
+ManurePyrolysisIAM,pyrolysis_energy_balance.xlsx,energy_balance_reference,goat,heat exchange efficiency,0.9,%,
+ManurePyrolysisIAM,pyrolysis_energy_balance.xlsx,energy_balance_reference,goat,drying of sludge as percentage of water evaporation,1.063,%,As a simplification of the Aspen Simulation
+ManurePyrolysisIAM,pyrolysis_energy_balance.xlsx,energy_balance_reference,goat,energy of dry sludge as percentage of wet sludge,1.0133292677614671,%,As a simplification of the Aspen Simulation
+ManurePyrolysisIAM,pyrolysis_energy_balance.xlsx,energy_balance_reference,goat,energy in biochar as a percentage of calorific value of biochar,1.0309831880996392,%,
+ManurePyrolysisIAM,pyrolysis_energy_balance.xlsx,energy_balance_reference,goat,energy lost in pyrolysis as a percentage of input energy,0.021536345269311783,%,
+ManurePyrolysisIAM,pyrolysis_energy_balance.xlsx,energy_balance_reference,goat,,,,
+ManurePyrolysisIAM,pyrolysis_energy_balance.xlsx,energy_balance_reference,goat,Inputs,,Units,
+ManurePyrolysisIAM,pyrolysis_energy_balance.xlsx,energy_balance_reference,goat,input manure,0.05,kg,
+ManurePyrolysisIAM,pyrolysis_energy_balance.xlsx,energy_balance_reference,goat,dry manure calorific value,15.399901,MJ/kg,
+ManurePyrolysisIAM,pyrolysis_energy_balance.xlsx,energy_balance_reference,goat,dry manure,0.01223404255319149,kg,
+ManurePyrolysisIAM,pyrolysis_energy_balance.xlsx,energy_balance_reference,goat,steam,0.03776595744680851,kg,
+ManurePyrolysisIAM,pyrolysis_energy_balance.xlsx,energy_balance_reference,goat,biochar yield,0.4866,%,
+ManurePyrolysisIAM,pyrolysis_energy_balance.xlsx,energy_balance_reference,goat,biochar calorific value,9.533719999999999,MJ/kg,remaining energy in input not in biochar is in the gas or lost
+ManurePyrolysisIAM,pyrolysis_energy_balance.xlsx,energy_balance_reference,goat,pyrolysis biochar,0.005953085106382978,kg,
+ManurePyrolysisIAM,pyrolysis_energy_balance.xlsx,energy_balance_reference,goat,,,,
+ManurePyrolysisIAM,pyrolysis_energy_balance.xlsx,energy_balance_reference,goat,Energy Balance,,Units,
+ManurePyrolysisIAM,pyrolysis_energy_balance.xlsx,energy_balance_reference,goat,energy of manure into drying,0.17709886149999998,MJ,
+ManurePyrolysisIAM,pyrolysis_energy_balance.xlsx,energy_balance_reference,goat,energy of dry manure from drying/into pyrolysis,0.17945945964518448,MJ,
+ManurePyrolysisIAM,pyrolysis_energy_balance.xlsx,energy_balance_reference,goat,energy in biochar,0.0585134988229913,MJ,
+ManurePyrolysisIAM,pyrolysis_energy_balance.xlsx,energy_balance_reference,goat,energy in flue gas from pyrolysis,,MJ,"These don't need to be calculated, because we assume the energy out from pyrolysis is the remainder of energy input and biochar, as the energy used in pyrolysis will already be taken out of the energy in the gas"
+ManurePyrolysisIAM,pyrolysis_energy_balance.xlsx,energy_balance_reference,goat,energy in flue gas from burning,,MJ,"Energy in to the system is in the feedstock, output is in the volatiles and biochar"
+ManurePyrolysisIAM,pyrolysis_energy_balance.xlsx,energy_balance_reference,goat,energy consumption from pyrolysis,,MJ,The energy in biochar is known
+ManurePyrolysisIAM,pyrolysis_energy_balance.xlsx,energy_balance_reference,goat,energy loss from pyrolysis,0.0038649008847628174,MJ,
+ManurePyrolysisIAM,pyrolysis_energy_balance.xlsx,energy_balance_reference,goat,energy in flue gas from pyrolysis/into drying,0.12094596082219318,MJ,
+ManurePyrolysisIAM,pyrolysis_energy_balance.xlsx,energy_balance_reference,goat,energy in steam from drying,0.10106170212765958,MJ,
+ManurePyrolysisIAM,pyrolysis_energy_balance.xlsx,energy_balance_reference,goat,energy consumption from drying,0.10742858936170213,MJ,
+ManurePyrolysisIAM,pyrolysis_energy_balance.xlsx,energy_balance_reference,goat,energy loss from drying,0.01074285893617021,MJ,
+ManurePyrolysisIAM,pyrolysis_energy_balance.xlsx,energy_balance_reference,goat,flue gas waste heat,0.002915900728416077,MJ,
+ManurePyrolysisIAM,pyrolysis_energy_balance.xlsx,energy_balance_reference,goat,flue gas output energy as percentage of input energy,0.01646481916212701,%,
+ManurePyrolysisIAM,pyrolysis_energy_balance.xlsx,energy_balance_reference,poultry,Initial Moisture Content,0.73,%,"Based on the process flow, mass balance, and energy balance diagram from: Zhou, A., Wang, X., Yu, S., Deng, S., Tan, H. and Mikulčić, H., 2023. Process design and optimization on self-sustaining pyrolysis and carbonization of municipal sewage sludge. Waste Management, 159, pp.125-133."
+ManurePyrolysisIAM,pyrolysis_energy_balance.xlsx,energy_balance_reference,poultry,Moisture Content After Drying,0.15,%,73% moisture content of feedstock after mechanical separation results in a balanced system
+ManurePyrolysisIAM,pyrolysis_energy_balance.xlsx,energy_balance_reference,poultry,enthalpy of steam,2.676,MJ/kg,
+ManurePyrolysisIAM,pyrolysis_energy_balance.xlsx,energy_balance_reference,poultry,heat exchange efficiency,0.9,%,
+ManurePyrolysisIAM,pyrolysis_energy_balance.xlsx,energy_balance_reference,poultry,drying of sludge as percentage of water evaporation,1.063,%,As a simplification of the Aspen Simulation
+ManurePyrolysisIAM,pyrolysis_energy_balance.xlsx,energy_balance_reference,poultry,energy of dry sludge as percentage of wet sludge,1.0133292677614671,%,As a simplification of the Aspen Simulation
+ManurePyrolysisIAM,pyrolysis_energy_balance.xlsx,energy_balance_reference,poultry,energy in biochar as a percentage of calorific value of biochar,1.0309831880996392,%,
+ManurePyrolysisIAM,pyrolysis_energy_balance.xlsx,energy_balance_reference,poultry,energy lost in pyrolysis as a percentage of input energy,0.021536345269311783,%,
+ManurePyrolysisIAM,pyrolysis_energy_balance.xlsx,energy_balance_reference,poultry,,,,
+ManurePyrolysisIAM,pyrolysis_energy_balance.xlsx,energy_balance_reference,poultry,Inputs,,Units,
+ManurePyrolysisIAM,pyrolysis_energy_balance.xlsx,energy_balance_reference,poultry,input manure,1.0,kg,
+ManurePyrolysisIAM,pyrolysis_energy_balance.xlsx,energy_balance_reference,poultry,dry manure calorific value,15.2,MJ/kg,
+ManurePyrolysisIAM,pyrolysis_energy_balance.xlsx,energy_balance_reference,poultry,dry manure,0.31764705882352945,kg,
+ManurePyrolysisIAM,pyrolysis_energy_balance.xlsx,energy_balance_reference,poultry,steam,0.6823529411764706,kg,
+ManurePyrolysisIAM,pyrolysis_energy_balance.xlsx,energy_balance_reference,poultry,biochar yield,0.4674,%,
+ManurePyrolysisIAM,pyrolysis_energy_balance.xlsx,energy_balance_reference,poultry,biochar calorific value,12.6,MJ/kg,remaining energy in input not in biochar is in the gas or lost
+ManurePyrolysisIAM,pyrolysis_energy_balance.xlsx,energy_balance_reference,poultry,pyrolysis biochar,0.14846823529411765,kg,
+ManurePyrolysisIAM,pyrolysis_energy_balance.xlsx,energy_balance_reference,poultry,,,,
+ManurePyrolysisIAM,pyrolysis_energy_balance.xlsx,energy_balance_reference,poultry,Energy Balance,,Units,
+ManurePyrolysisIAM,pyrolysis_energy_balance.xlsx,energy_balance_reference,poultry,energy of manure into drying,4.104,MJ,
+ManurePyrolysisIAM,pyrolysis_energy_balance.xlsx,energy_balance_reference,poultry,energy of dry manure from drying/into pyrolysis,4.158703314893061,MJ,
+ManurePyrolysisIAM,pyrolysis_energy_balance.xlsx,energy_balance_reference,poultry,energy in biochar,1.9286600073937155,MJ,
+ManurePyrolysisIAM,pyrolysis_energy_balance.xlsx,energy_balance_reference,poultry,energy in flue gas from pyrolysis,,MJ,"These don't need to be calculated, because we assume the energy out from pyrolysis is the remainder of energy input and biochar, as the energy used in pyrolysis will already be taken out of the energy in the gas"
+ManurePyrolysisIAM,pyrolysis_energy_balance.xlsx,energy_balance_reference,poultry,energy in flue gas from burning,,MJ,"Energy in to the system is in the feedstock, output is in the volatiles and biochar"
+ManurePyrolysisIAM,pyrolysis_energy_balance.xlsx,energy_balance_reference,poultry,energy consumption from pyrolysis,,MJ,The energy in biochar is known
+ManurePyrolysisIAM,pyrolysis_energy_balance.xlsx,energy_balance_reference,poultry,energy loss from pyrolysis,0.0895632704621684,MJ,
+ManurePyrolysisIAM,pyrolysis_energy_balance.xlsx,energy_balance_reference,poultry,energy in flue gas from pyrolysis/into drying,2.2300433074993453,MJ,
+ManurePyrolysisIAM,pyrolysis_energy_balance.xlsx,energy_balance_reference,poultry,energy in steam from drying,1.8259764705882355,MJ,
+ManurePyrolysisIAM,pyrolysis_energy_balance.xlsx,energy_balance_reference,poultry,energy consumption from drying,1.9410129882352942,MJ,
+ManurePyrolysisIAM,pyrolysis_energy_balance.xlsx,energy_balance_reference,poultry,energy loss from drying,0.1941012988235294,MJ,
+ManurePyrolysisIAM,pyrolysis_energy_balance.xlsx,energy_balance_reference,poultry,flue gas waste heat,0.06569895273235109,MJ,
+ManurePyrolysisIAM,pyrolysis_energy_balance.xlsx,energy_balance_reference,poultry,flue gas output energy as percentage of input energy,0.0160085167476489,%,
+ManurePyrolysisIAM,pyrolysis_energy_balance.xlsx,energy_balance_reference,dairy,Initial Moisture Content,0.72,%,"Based on the process flow, mass balance, and energy balance diagram from: Zhou, A., Wang, X., Yu, S., Deng, S., Tan, H. and Mikulčić, H., 2023. Process design and optimization on self-sustaining pyrolysis and carbonization of municipal sewage sludge. Waste Management, 159, pp.125-133."
+ManurePyrolysisIAM,pyrolysis_energy_balance.xlsx,energy_balance_reference,dairy,Moisture Content After Drying,0.13,%,72% moisture content of feedstock after mechanical separation results in a balanced system
+ManurePyrolysisIAM,pyrolysis_energy_balance.xlsx,energy_balance_reference,dairy,enthalpy of steam,2.676,MJ/kg,
+ManurePyrolysisIAM,pyrolysis_energy_balance.xlsx,energy_balance_reference,dairy,heat exchange efficiency,0.9,%,
+ManurePyrolysisIAM,pyrolysis_energy_balance.xlsx,energy_balance_reference,dairy,drying of sludge as percentage of water evaporation,1.063,%,As a simplification of the Aspen Simulation
+ManurePyrolysisIAM,pyrolysis_energy_balance.xlsx,energy_balance_reference,dairy,energy of dry sludge as percentage of wet sludge,1.0133292677614671,%,As a simplification of the Aspen Simulation
+ManurePyrolysisIAM,pyrolysis_energy_balance.xlsx,energy_balance_reference,dairy,energy in biochar as a percentage of calorific value of biochar,1.0309831880996392,%,
+ManurePyrolysisIAM,pyrolysis_energy_balance.xlsx,energy_balance_reference,dairy,energy lost in pyrolysis as a percentage of input energy,0.021536345269311783,%,
+ManurePyrolysisIAM,pyrolysis_energy_balance.xlsx,energy_balance_reference,dairy,,,,
+ManurePyrolysisIAM,pyrolysis_energy_balance.xlsx,energy_balance_reference,dairy,Inputs,,Units,
+ManurePyrolysisIAM,pyrolysis_energy_balance.xlsx,energy_balance_reference,dairy,input manure,0.01,kg,
+ManurePyrolysisIAM,pyrolysis_energy_balance.xlsx,energy_balance_reference,dairy,dry manure calorific value,15.26,MJ/kg,
+ManurePyrolysisIAM,pyrolysis_energy_balance.xlsx,energy_balance_reference,dairy,dry manure,0.0032183908045977016,kg,
+ManurePyrolysisIAM,pyrolysis_energy_balance.xlsx,energy_balance_reference,dairy,steam,0.006781609195402299,kg,
+ManurePyrolysisIAM,pyrolysis_energy_balance.xlsx,energy_balance_reference,dairy,biochar yield,0.4301,%,
+ManurePyrolysisIAM,pyrolysis_energy_balance.xlsx,energy_balance_reference,dairy,biochar calorific value,15.3,MJ/kg,remaining energy in input not in biochar is in the gas or lost
+ManurePyrolysisIAM,pyrolysis_energy_balance.xlsx,energy_balance_reference,dairy,pyrolysis biochar,0.0013842298850574714,kg,
+ManurePyrolysisIAM,pyrolysis_energy_balance.xlsx,energy_balance_reference,dairy,,,,
+ManurePyrolysisIAM,pyrolysis_energy_balance.xlsx,energy_balance_reference,dairy,Energy Balance,,Units,
+ManurePyrolysisIAM,pyrolysis_energy_balance.xlsx,energy_balance_reference,dairy,energy of manure into drying,0.04272800000000001,MJ,
+ManurePyrolysisIAM,pyrolysis_energy_balance.xlsx,energy_balance_reference,dairy,energy of dry manure from drying/into pyrolysis,0.04329753295291198,MJ,
+ManurePyrolysisIAM,pyrolysis_energy_balance.xlsx,energy_balance_reference,dairy,energy in biochar,0.02183490142137804,MJ,
+ManurePyrolysisIAM,pyrolysis_energy_balance.xlsx,energy_balance_reference,dairy,energy in flue gas from pyrolysis,,MJ,"These don't need to be calculated, because we assume the energy out from pyrolysis is the remainder of energy input and biochar, as the energy used in pyrolysis will already be taken out of the energy in the gas"
+ManurePyrolysisIAM,pyrolysis_energy_balance.xlsx,energy_balance_reference,dairy,energy in flue gas from burning,,MJ,"Energy in to the system is in the feedstock, output is in the volatiles and biochar"
+ManurePyrolysisIAM,pyrolysis_energy_balance.xlsx,energy_balance_reference,dairy,energy consumption from pyrolysis,,MJ,The energy in biochar is known
+ManurePyrolysisIAM,pyrolysis_energy_balance.xlsx,energy_balance_reference,dairy,energy loss from pyrolysis,0.0009324706189833169,MJ,
+ManurePyrolysisIAM,pyrolysis_energy_balance.xlsx,energy_balance_reference,dairy,energy in flue gas from pyrolysis/into drying,0.021462631531533938,MJ,
+ManurePyrolysisIAM,pyrolysis_energy_balance.xlsx,energy_balance_reference,dairy,energy in steam from drying,0.018147586206896552,MJ,
+ManurePyrolysisIAM,pyrolysis_energy_balance.xlsx,energy_balance_reference,dairy,energy consumption from drying,0.019290884137931032,MJ,
+ManurePyrolysisIAM,pyrolysis_energy_balance.xlsx,energy_balance_reference,dairy,energy loss from drying,0.0019290884137931029,MJ,
+ManurePyrolysisIAM,pyrolysis_energy_balance.xlsx,energy_balance_reference,dairy,flue gas waste heat,-0.0001160466610510034,MJ,
+ManurePyrolysisIAM,pyrolysis_energy_balance.xlsx,energy_balance_reference,dairy,flue gas output energy as percentage of input energy,-0.0027159394554157313,%,
+ManurePyrolysisIAM,pyrolysis_energy_balance.xlsx,energy_balance_reference,beef,Initial Moisture Content,0.68,%,"Based on the process flow, mass balance, and energy balance diagram from: Zhou, A., Wang, X., Yu, S., Deng, S., Tan, H. and Mikulčić, H., 2023. Process design and optimization on self-sustaining pyrolysis and carbonization of municipal sewage sludge. Waste Management, 159, pp.125-133."
+ManurePyrolysisIAM,pyrolysis_energy_balance.xlsx,energy_balance_reference,beef,Moisture Content After Drying,0.13,%,68% moisture content of feedstock after mechanical separation results in a balanced system
+ManurePyrolysisIAM,pyrolysis_energy_balance.xlsx,energy_balance_reference,beef,enthalpy of steam,2.676,MJ/kg,
+ManurePyrolysisIAM,pyrolysis_energy_balance.xlsx,energy_balance_reference,beef,heat exchange efficiency,0.9,%,
+ManurePyrolysisIAM,pyrolysis_energy_balance.xlsx,energy_balance_reference,beef,drying of sludge as percentage of water evaporation,1.063,%,As a simplification of the Aspen Simulation
+ManurePyrolysisIAM,pyrolysis_energy_balance.xlsx,energy_balance_reference,beef,energy of dry sludge as percentage of wet sludge,1.0133292677614671,%,As a simplification of the Aspen Simulation
+ManurePyrolysisIAM,pyrolysis_energy_balance.xlsx,energy_balance_reference,beef,energy in biochar as a percentage of calorific value of biochar,1.0309831880996392,%,
+ManurePyrolysisIAM,pyrolysis_energy_balance.xlsx,energy_balance_reference,beef,energy lost in pyrolysis as a percentage of input energy,0.021536345269311783,%,
+ManurePyrolysisIAM,pyrolysis_energy_balance.xlsx,energy_balance_reference,beef,,,,
+ManurePyrolysisIAM,pyrolysis_energy_balance.xlsx,energy_balance_reference,beef,Inputs,,Units,
+ManurePyrolysisIAM,pyrolysis_energy_balance.xlsx,energy_balance_reference,beef,input manure,0.01,kg,
+ManurePyrolysisIAM,pyrolysis_energy_balance.xlsx,energy_balance_reference,beef,dry manure calorific value,13.72,MJ/kg,
+ManurePyrolysisIAM,pyrolysis_energy_balance.xlsx,energy_balance_reference,beef,dry manure,0.0036781609195402297,kg,
+ManurePyrolysisIAM,pyrolysis_energy_balance.xlsx,energy_balance_reference,beef,steam,0.00632183908045977,kg,
+ManurePyrolysisIAM,pyrolysis_energy_balance.xlsx,energy_balance_reference,beef,biochar yield,0.465,%,
+ManurePyrolysisIAM,pyrolysis_energy_balance.xlsx,energy_balance_reference,beef,biochar calorific value,13.75,MJ/kg,remaining energy in input not in biochar is in the gas or lost
+ManurePyrolysisIAM,pyrolysis_energy_balance.xlsx,energy_balance_reference,beef,pyrolysis biochar,0.001710344827586207,kg,
+ManurePyrolysisIAM,pyrolysis_energy_balance.xlsx,energy_balance_reference,beef,,,,
+ManurePyrolysisIAM,pyrolysis_energy_balance.xlsx,energy_balance_reference,beef,Energy Balance,,Units,
+ManurePyrolysisIAM,pyrolysis_energy_balance.xlsx,energy_balance_reference,beef,energy of manure into drying,0.043904,MJ,
+ManurePyrolysisIAM,pyrolysis_energy_balance.xlsx,energy_balance_reference,beef,energy of dry manure from drying/into pyrolysis,0.04448920817179945,MJ,
+ManurePyrolysisIAM,pyrolysis_energy_balance.xlsx,energy_balance_reference,beef,energy in biochar,0.024245880492550134,MJ,
+ManurePyrolysisIAM,pyrolysis_energy_balance.xlsx,energy_balance_reference,beef,energy in flue gas from pyrolysis,,MJ,"These don't need to be calculated, because we assume the energy out from pyrolysis is the remainder of energy input and biochar, as the energy used in pyrolysis will already be taken out of the energy in the gas"
+ManurePyrolysisIAM,pyrolysis_energy_balance.xlsx,energy_balance_reference,beef,energy in flue gas from burning,,MJ,"Energy in to the system is in the feedstock, output is in the volatiles and biochar"
+ManurePyrolysisIAM,pyrolysis_energy_balance.xlsx,energy_balance_reference,beef,energy consumption from pyrolysis,,MJ,The energy in biochar is known
+ManurePyrolysisIAM,pyrolysis_energy_balance.xlsx,energy_balance_reference,beef,energy loss from pyrolysis,0.0009581349479461603,MJ,
+ManurePyrolysisIAM,pyrolysis_energy_balance.xlsx,energy_balance_reference,beef,energy in flue gas from pyrolysis/into drying,0.02024332767924932,MJ,
+ManurePyrolysisIAM,pyrolysis_energy_balance.xlsx,energy_balance_reference,beef,energy in steam from drying,0.016917241379310347,MJ,
+ManurePyrolysisIAM,pyrolysis_energy_balance.xlsx,energy_balance_reference,beef,energy consumption from drying,0.017983027586206898,MJ,
+ManurePyrolysisIAM,pyrolysis_energy_balance.xlsx,energy_balance_reference,beef,energy loss from drying,0.0017983027586206894,MJ,
+ManurePyrolysisIAM,pyrolysis_energy_balance.xlsx,energy_balance_reference,beef,flue gas waste heat,-1.5559578427331157e-05,MJ,
+ManurePyrolysisIAM,pyrolysis_energy_balance.xlsx,energy_balance_reference,beef,flue gas output energy as percentage of input energy,-0.0003544000188440952,%,

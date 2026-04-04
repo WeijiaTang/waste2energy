@@ -1,0 +1,56 @@
+[
+  {
+    "dataset_id": "eia_california_electricity_profile_snapshot",
+    "source_url": "https://www.eia.gov/electricity/state/california/",
+    "output_file": "data\\raw\\external-region-data\\california\\energy_prices\\eia_california_electricity_profile_2024.html",
+    "downloaded_at_utc": "2026-04-03T14:45:54+00:00",
+    "status": "downloaded",
+    "record_count": "21",
+    "notes": "Official California electricity profile HTML snapshot."
+  },
+  {
+    "dataset_id": "eia_california_electricity_profile_summary",
+    "source_url": "https://www.eia.gov/electricity/state/california/",
+    "output_file": "data\\raw\\external-region-data\\california\\energy_prices\\eia_california_electricity_profile_summary_2024.csv",
+    "downloaded_at_utc": "2026-04-03T14:45:54+00:00",
+    "status": "generated",
+    "record_count": "21",
+    "notes": "Structured summary table extracted from the California electricity profile page."
+  },
+  {
+    "dataset_id": "eia_california_natural_gas_history_snapshot",
+    "source_url": "https://www.eia.gov/dnav/ng/hist/n3035ca3A.htm",
+    "output_file": "data\\raw\\external-region-data\\california\\energy_prices\\eia_california_natural_gas_industrial_price_history.html",
+    "downloaded_at_utc": "2026-04-03T14:45:54+00:00",
+    "status": "downloaded",
+    "record_count": "29",
+    "notes": "Official California natural gas industrial price history HTML snapshot."
+  },
+  {
+    "dataset_id": "eia_california_natural_gas_history_xls",
+    "source_url": "https://www.eia.gov/dnav/ng/hist_xls/N3035CA3a.xls",
+    "output_file": "data\\raw\\external-region-data\\california\\energy_prices\\eia_california_natural_gas_industrial_price_history.xls",
+    "downloaded_at_utc": "2026-04-03T14:45:54+00:00",
+    "status": "downloaded",
+    "record_count": "29",
+    "notes": "Official California natural gas industrial price history XLS file."
+  },
+  {
+    "dataset_id": "eia_california_natural_gas_history_structured",
+    "source_url": "https://www.eia.gov/dnav/ng/hist/n3035ca3A.htm",
+    "output_file": "data\\raw\\external-region-data\\california\\energy_prices\\eia_california_natural_gas_industrial_price_annual.csv",
+    "downloaded_at_utc": "2026-04-03T14:45:54+00:00",
+    "status": "generated",
+    "record_count": "29",
+    "notes": "Structured annual California industrial natural gas price series extracted from EIA history page."
+  },
+  {
+    "dataset_id": "eia_california_energy_price_reference",
+    "source_url": "https://www.eia.gov/electricity/state/california/",
+    "output_file": "data\\raw\\external-region-data\\california\\energy_prices\\california_energy_price_reference.csv",
+    "downloaded_at_utc": "2026-04-03T14:45:54+00:00",
+    "status": "generated",
+    "record_count": "2",
+    "notes": "Combined California electricity and natural gas baseline price references aligned to 2024."
+  }
+]

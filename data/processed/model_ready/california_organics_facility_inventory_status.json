@@ -1,0 +1,17 @@
+{
+  "dataset_name": "california_organics_facility_inventory",
+  "status": "official_reference_connected",
+  "checked_at_utc": "2026-04-04T00:27:02+00:00",
+  "raw_files": [
+    "data\\raw\\external-region-data\\california\\wet_waste_supply\\calrecycle_swis_sites_export.xlsx",
+    "data\\raw\\external-region-data\\california\\wet_waste_supply\\calrecycle_swis_site_activities_export.xlsx",
+    "data\\raw\\external-region-data\\california\\wet_waste_supply\\calrecycle_swis_site_wastes_export.xlsx"
+  ],
+  "inventory_output_file": "data\\processed\\scenario_inputs\\california_organics_facility_inventory.csv",
+  "summary_output_file": "data\\processed\\scenario_inputs\\california_organics_facility_summary.csv",
+  "notes": [
+    "Inventory is built from official CalRecycle SWIS site, activity, and waste exports.",
+    "Technology-group aggregation is based on SWIS activity categories and accepted waste types.",
+    "Ton-based annualization excludes cubic-yard-only rows from throughput and capacity totals."
+  ]
+}

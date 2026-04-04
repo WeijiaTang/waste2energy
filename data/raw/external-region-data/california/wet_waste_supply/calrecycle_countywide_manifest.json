@@ -1,0 +1,57 @@
+[
+  {
+    "dataset_id": "calrecycle_county_reference",
+    "source_organization": "California Department of Resources Recycling and Recovery",
+    "source_url_template": "https://www2.calrecycle.ca.gov/WasteCharacterization/_LocalGovernmentsByCounty",
+    "study_id": "",
+    "output_file": "data\\raw\\external-region-data\\california\\wet_waste_supply\\calrecycle_county_reference.json",
+    "downloaded_at_utc": "2026-04-03T13:20:35+00:00",
+    "status": "downloaded",
+    "record_count": "58",
+    "notes": "County and countywide jurisdiction lookup table derived from the public WasteCharacterization site."
+  },
+  {
+    "dataset_id": "calrecycle_residential_populations_countywide",
+    "source_organization": "California Department of Resources Recycling and Recovery",
+    "source_url_template": "https://www2.calrecycle.ca.gov/WasteCharacterization/_ResidentialPopulationsByStudy",
+    "study_id": "103",
+    "output_file": "data\\raw\\external-region-data\\california\\wet_waste_supply\\calrecycle_residential_populations_countywide.json",
+    "downloaded_at_utc": "2026-04-03T13:20:35+00:00",
+    "status": "downloaded",
+    "record_count": "58",
+    "notes": "Countywide residential population estimates keyed by countywide jurisdiction."
+  },
+  {
+    "dataset_id": "calrecycle_residential_streams_countywide",
+    "source_organization": "California Department of Resources Recycling and Recovery",
+    "source_url_template": "https://www2.calrecycle.ca.gov/WasteCharacterization/_ResidentialStreamsGridData",
+    "study_id": "103",
+    "output_file": "data\\raw\\external-region-data\\california\\wet_waste_supply\\calrecycle_residential_streams_countywide.json",
+    "downloaded_at_utc": "2026-04-03T13:20:35+00:00",
+    "status": "downloaded",
+    "record_count": "3944",
+    "notes": "Countywide residential material streams using the countywide local-government selection."
+  },
+  {
+    "dataset_id": "calrecycle_business_group_totals_countywide",
+    "source_organization": "California Department of Resources Recycling and Recovery",
+    "source_url_template": "https://www2.calrecycle.ca.gov/WasteCharacterization/_BusinessGroupStreamsGridData",
+    "study_id": "104",
+    "output_file": "data\\raw\\external-region-data\\california\\wet_waste_supply\\calrecycle_business_group_totals_countywide.json",
+    "downloaded_at_utc": "2026-04-03T13:20:35+00:00",
+    "status": "downloaded",
+    "record_count": "986",
+    "notes": "Countywide business-group totals across all materials."
+  },
+  {
+    "dataset_id": "calrecycle_business_other_organic_streams_countywide",
+    "source_organization": "California Department of Resources Recycling and Recovery",
+    "source_url_template": "https://www2.calrecycle.ca.gov/WasteCharacterization/_BusinessGroupStreamsGridData",
+    "study_id": "104",
+    "output_file": "data\\raw\\external-region-data\\california\\wet_waste_supply\\calrecycle_business_other_organic_streams_countywide.json",
+    "downloaded_at_utc": "2026-04-03T13:20:35+00:00",
+    "status": "downloaded",
+    "record_count": "4930",
+    "notes": "Countywide business-group streams for food and other-organic material IDs."
+  }
+]

@@ -1,0 +1,106 @@
+{
+  "dataset_family": "ml_ready_direct_use",
+  "source_files": [
+    "data\\processed\\unified_features\\wet_waste_biomass_opt_combined_standardized.csv",
+    "data\\processed\\unified_features\\paper1_mixed_waste_feature_prototypes.csv"
+  ],
+  "outputs": [
+    "data\\processed\\model_ready\\ml_training_dataset_htc_direct.csv",
+    "data\\processed\\model_ready\\ml_training_matrix_htc_direct.csv",
+    "data\\processed\\model_ready\\ml_training_dataset_pyrolysis_direct.csv",
+    "data\\processed\\model_ready\\ml_training_matrix_pyrolysis_direct.csv",
+    "data\\processed\\model_ready\\paper1_ml_dataset_htc_scope.csv",
+    "data\\processed\\model_ready\\paper1_ml_matrix_htc_scope.csv"
+  ],
+  "dataset_summaries": {
+    "ml_training_dataset_htc_direct": {
+      "row_count": 458,
+      "feature_columns": [
+        "feedstock_carbon_pct",
+        "feedstock_hydrogen_pct",
+        "feedstock_nitrogen_pct",
+        "feedstock_oxygen_pct",
+        "feedstock_moisture_pct",
+        "feedstock_volatile_matter_pct",
+        "feedstock_fixed_carbon_pct",
+        "feedstock_ash_pct",
+        "process_temperature_c",
+        "residence_time_min"
+      ],
+      "categorical_columns": [
+        "feedstock_group"
+      ],
+      "target_columns": [
+        "product_char_yield_pct",
+        "product_char_hhv_mj_per_kg",
+        "energy_recovery_pct",
+        "carbon_retention_pct"
+      ],
+      "notes": [
+        "Observed HTC rows only.",
+        "Suitable for direct supervised learning without pathway-wide missing columns."
+      ]
+    },
+    "ml_training_dataset_pyrolysis_direct": {
+      "row_count": 370,
+      "feature_columns": [
+        "feedstock_carbon_pct",
+        "feedstock_hydrogen_pct",
+        "feedstock_nitrogen_pct",
+        "feedstock_oxygen_pct",
+        "feedstock_volatile_matter_pct",
+        "feedstock_fixed_carbon_pct",
+        "feedstock_ash_pct",
+        "feedstock_hhv_mj_per_kg",
+        "process_temperature_c",
+        "residence_time_min",
+        "heating_rate_c_per_min"
+      ],
+      "categorical_columns": [],
+      "target_columns": [
+        "product_char_yield_pct",
+        "product_char_hhv_mj_per_kg",
+        "energy_recovery_pct",
+        "carbon_retention_pct"
+      ],
+      "notes": [
+        "Observed pyrolysis rows only.",
+        "Feedstock-group labels are omitted because the copied pyrolysis rows do not preserve them consistently."
+      ]
+    },
+    "paper1_ml_dataset_htc_scope": {
+      "row_count": 239,
+      "observed_rows": 179,
+      "synthetic_rows": 60,
+      "feature_columns": [
+        "blend_manure_ratio",
+        "blend_wet_waste_ratio",
+        "feedstock_carbon_pct",
+        "feedstock_hydrogen_pct",
+        "feedstock_nitrogen_pct",
+        "feedstock_oxygen_pct",
+        "feedstock_moisture_pct",
+        "feedstock_volatile_matter_pct",
+        "feedstock_fixed_carbon_pct",
+        "feedstock_ash_pct",
+        "process_temperature_c",
+        "residence_time_min"
+      ],
+      "categorical_columns": [
+        "feedstock_group",
+        "manure_subtype",
+        "row_origin"
+      ],
+      "target_columns": [
+        "product_char_yield_pct",
+        "product_char_hhv_mj_per_kg",
+        "energy_recovery_pct",
+        "carbon_retention_pct"
+      ],
+      "notes": [
+        "Paper 1 scoped HTC dataset built from observed manure and food-waste rows plus synthetic mixed-feed prototypes.",
+        "Synthetic rows should be treated as augmentation or scenario-screening support, not as a blind substitute for observed validation data."
+      ]
+    }
+  }
+}

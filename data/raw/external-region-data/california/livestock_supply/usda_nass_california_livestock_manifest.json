@@ -1,0 +1,52 @@
+[
+  {
+    "dataset_id": "usda_nass_california_livestock_overview_structured",
+    "source_id": "california_usda_state_ag_overview_html",
+    "source_url": "https://www.nass.usda.gov/Quick_Stats/Ag_Overview/stateOverview.php?state=CALIFORNIA",
+    "output_file": "data\\raw\\external-region-data\\california\\livestock_supply\\usda_nass_california_livestock_overview_structured.csv",
+    "downloaded_at_utc": "2026-04-03T15:04:11+00:00",
+    "status": "generated",
+    "record_count": "10",
+    "notes": "Structured California livestock and milk summary parsed from USDA state overview HTML."
+  },
+  {
+    "dataset_id": "usda_nass_california_livestock_release_summary",
+    "source_id": "california_usda_cattle_inventory_pdf;california_usda_hogs_pdf;california_usda_sheep_goats_pdf",
+    "source_url": "https://www.nass.usda.gov/Statistics_by_State/California/Publications/Livestock_Releases/Cattle%20Inventory/2025/202501CATTLE.pdf; https://www.nass.usda.gov/Statistics_by_State/California/Publications/Livestock_Releases/Hogs/202412HOGS.pdf; https://www.nass.usda.gov/Statistics_by_State/California/Publications/Livestock_Releases/Sheep_Goats/2025/202501SHEPGTS.pdf",
+    "output_file": "data\\raw\\external-region-data\\california\\livestock_supply\\usda_nass_california_livestock_release_summary.csv",
+    "downloaded_at_utc": "2026-04-03T15:04:11+00:00",
+    "status": "generated",
+    "record_count": "8",
+    "notes": "Structured California livestock release summary parsed from official USDA Pacific Region PDFs."
+  },
+  {
+    "dataset_id": "usda_nass_california_cattle_inventory_text",
+    "source_id": "california_usda_cattle_inventory_pdf",
+    "source_url": "https://www.nass.usda.gov/Statistics_by_State/California/Publications/Livestock_Releases/Cattle%20Inventory/2025/202501CATTLE.pdf",
+    "output_file": "data\\raw\\external-region-data\\california\\livestock_supply\\usda_nass_pacific_region_cattle_inventory_2025.txt",
+    "downloaded_at_utc": "2026-04-03T15:04:11+00:00",
+    "status": "generated",
+    "record_count": "",
+    "notes": "Plain-text extraction of the official Pacific Region cattle inventory PDF."
+  },
+  {
+    "dataset_id": "usda_nass_california_hogs_text",
+    "source_id": "california_usda_hogs_pdf",
+    "source_url": "https://www.nass.usda.gov/Statistics_by_State/California/Publications/Livestock_Releases/Hogs/202412HOGS.pdf",
+    "output_file": "data\\raw\\external-region-data\\california\\livestock_supply\\usda_nass_pacific_region_hogs_2024.txt",
+    "downloaded_at_utc": "2026-04-03T15:04:11+00:00",
+    "status": "generated",
+    "record_count": "",
+    "notes": "Plain-text extraction of the official Pacific Region hogs and pigs PDF."
+  },
+  {
+    "dataset_id": "usda_nass_california_sheep_goats_text",
+    "source_id": "california_usda_sheep_goats_pdf",
+    "source_url": "https://www.nass.usda.gov/Statistics_by_State/California/Publications/Livestock_Releases/Sheep_Goats/2025/202501SHEPGTS.pdf",
+    "output_file": "data\\raw\\external-region-data\\california\\livestock_supply\\usda_nass_pacific_region_sheep_goats_2025.txt",
+    "downloaded_at_utc": "2026-04-03T15:04:11+00:00",
+    "status": "generated",
+    "record_count": "",
+    "notes": "Plain-text extraction of the official Pacific Region sheep and goats PDF."
+  }
+]

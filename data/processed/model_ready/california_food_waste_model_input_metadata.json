@@ -1,0 +1,15 @@
+{
+  "dataset_name": "california_food_waste_model_input",
+  "raw_inputs": [
+    "data/raw/external-region-data/california/wet_waste_supply/calrecycle_residential_streams_countywide.json",
+    "data/raw/external-region-data/california/wet_waste_supply/calrecycle_business_food_streams_countywide.json",
+    "data/raw/external-region-data/california/region_context/us_census_acs5_2023_california_county_population.json",
+    "data/processed/unified_features/wet_waste_biomass_opt_combined_standardized.csv"
+  ],
+  "notes": [
+    "Residential and business countywide stream estimates are based on public CalRecycle WasteCharacterization endpoints.",
+    "California food-waste generation is estimated by summing county-level residential food and commercial food generation references.",
+    "Composition fields are anchored to repository-derived food-waste samples from Wet-Waste-Biomass-Opt because California official county stream endpoints provide tonnage and fractions but not chemical composition."
+  ],
+  "row_count": 1
+}

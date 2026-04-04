@@ -1,0 +1,2 @@
+region_id,region_name,country,admin_level,analysis_year,time_resolution,notes,source_organization,source_url,download_or_publication_date
+us_ca,California,United States,state,2024,annual,"Waste2Energy Paper 1 region is locked to California and linked to official Census, CalRecycle, EIA, EPA, and USDA reference files.",U.S. Census Bureau,"https://api.census.gov/data/2023/acs/acs5?get=NAME,B01003_001E&for=county:*&in=state:06",2026-04-03T14:44:52+00:00

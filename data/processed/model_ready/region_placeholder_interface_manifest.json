@@ -1,0 +1,29 @@
+{
+  "dataset_name": "region_placeholder_interface",
+  "purpose": "Fix the external regional data interface for Waste2Energy Paper 1.",
+  "default_region_id": "us_ca",
+  "default_region_name": "California",
+  "raw_template_files": [
+    "region_metadata_template.csv",
+    "livestock_manure_statistics_template.csv",
+    "wet_waste_generation_template.csv",
+    "regional_energy_prices_template.csv",
+    "regional_facility_capacity_template.csv",
+    "regional_emission_factors_template.csv",
+    "regional_policy_reference_template.csv"
+  ],
+  "processed_interface_files": [
+    "region_input_interface.csv",
+    "region_input_status.csv",
+    "paper1_region_scenario_placeholder.csv"
+  ],
+  "notes": [
+    "California us_ca is now the default Paper 1 regional interface target.",
+    "Wet-waste supply is connected to official CalRecycle-derived California food-waste references.",
+    "Energy prices are connected to official California EIA electricity and natural gas references.",
+    "Baseline waste-treatment emission factors are connected to an EPA WARM structured food-waste reference.",
+    "Facility-capacity intake is configured through an official CalRecycle manual-export connector.",
+    "Livestock/manure supply is connected to official California USDA counts plus repository moisture and planning coefficients.",
+    "Policy reference is connected to official SB 1383 statute and CalRecycle implementation guidance."
+  ]
+}

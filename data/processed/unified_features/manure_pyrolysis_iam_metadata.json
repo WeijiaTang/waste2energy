@@ -1,0 +1,10 @@
+{
+  "source_repo": "ManurePyrolysisIAM",
+  "source_repository_url": "https://github.com/PEESEgroup/ManurePyrolysisIAM",
+  "processed_files": [
+    "manure_pyrolysis_energy_balance_long.csv",
+    "manure_pyrolysis_baseline_table_inventory.csv",
+    "manure_pyrolysis_reference_manifest.csv"
+  ],
+  "note": "Paper 1 uses the workbook and curated baseline supplementary tables as manure-side reference data."
+}

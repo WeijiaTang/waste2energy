@@ -1,0 +1,10 @@
+{
+  "dataset_name": "california_capacity_planning_status",
+  "status": "processed_summary_connected",
+  "source_organization": "California Department of Resources Recycling and Recovery",
+  "source_url": "https://www2.calrecycle.ca.gov/LGCentral/datatools/reports/capacityplanning",
+  "raw_export_file": "data\\raw\\external-region-data\\california\\wet_waste_supply\\calrecycle_capacity_planning_manual_export.xlsx",
+  "structured_output_file": "data\\processed\\scenario_inputs\\california_capacity_planning_structured.csv",
+  "summary_output_file": "data\\processed\\scenario_inputs\\california_capacity_planning_summary.csv",
+  "checked_at_utc": "2026-04-03T23:42:13+00:00"
+}

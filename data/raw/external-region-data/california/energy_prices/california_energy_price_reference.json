@@ -1,0 +1,34 @@
+[
+  {
+    "region_id": "us_ca",
+    "region_name": "California",
+    "country": "United States",
+    "energy_carrier": "electricity",
+    "market_segment": "all_retail",
+    "price_case": "baseline",
+    "analysis_year": 2024,
+    "price_value": 27.04,
+    "price_unit": "cents_per_kWh",
+    "source_organization": "U.S. Energy Information Administration",
+    "source_url": "https://www.eia.gov/electricity/state/california/",
+    "landing_page_url": "https://www.eia.gov/electricity/state/california/",
+    "raw_file_name": "eia_california_electricity_profile_2024.html",
+    "notes": "Parsed from the official California electricity profile summary page average retail price row."
+  },
+  {
+    "region_id": "us_ca",
+    "region_name": "California",
+    "country": "United States",
+    "energy_carrier": "natural_gas",
+    "market_segment": "industrial",
+    "price_case": "baseline",
+    "analysis_year": 2024,
+    "price_value": 11.48,
+    "price_unit": "USD_per_thousand_cubic_feet",
+    "source_organization": "U.S. Energy Information Administration",
+    "source_url": "https://www.eia.gov/dnav/ng/hist/n3035ca3A.htm",
+    "landing_page_url": "https://www.eia.gov/dnav/ng/hist/n3035ca3A.htm",
+    "raw_file_name": "eia_california_natural_gas_industrial_price_history.xls",
+    "notes": "Parsed from the official EIA annual California industrial natural gas price history table."
+  }
+]

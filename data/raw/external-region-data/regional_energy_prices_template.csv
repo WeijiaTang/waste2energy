@@ -1,0 +1,3 @@
+region_id,year,energy_carrier,price_value,price_unit,price_case,source_organization,source_url,download_or_publication_date,raw_file_name,notes
+us_ca,2024,electricity,0.2704,USD_per_kWh,baseline,U.S. Energy Information Administration,https://www.eia.gov/electricity/state/california/,2026-04-04T00:26:01.834068+00:00,eia_california_electricity_profile_2024.html,Parsed from the official California electricity profile summary page average retail price row.
+us_ca,2024,natural_gas,11.48,USD_per_Mcf,baseline,U.S. Energy Information Administration,https://www.eia.gov/dnav/ng/hist/n3035ca3A.htm,2026-04-04T00:26:01.834068+00:00,eia_california_natural_gas_industrial_price_history.xls,Parsed from the official EIA annual California industrial natural gas price history table.

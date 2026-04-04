@@ -1,0 +1,22 @@
+[
+  {
+    "dataset_id": "california_epa_warm_food_waste_text_extract",
+    "source_url": "https://www.epa.gov/system/files/documents/2023-12/warm_organic_materials_v16_dec.pdf",
+    "landing_page_url": "https://www.epa.gov/warm/versions-waste-reduction-model",
+    "output_file": "data\\raw\\external-region-data\\california\\emission_factors\\epa_warm_organic_materials_v16_dec_2023.txt",
+    "downloaded_at_utc": "2026-04-04T00:24:26+00:00",
+    "status": "generated",
+    "record_count": "",
+    "notes": "Plain-text extraction of the EPA WARM organic materials PDF for traceable factor parsing."
+  },
+  {
+    "dataset_id": "california_waste_treatment_emission_factor_reference",
+    "source_url": "https://www.epa.gov/system/files/documents/2023-12/warm_organic_materials_v16_dec.pdf",
+    "landing_page_url": "https://www.epa.gov/warm/versions-waste-reduction-model",
+    "output_file": "data\\raw\\external-region-data\\california\\emission_factors\\california_waste_treatment_emission_factor_reference.csv",
+    "downloaded_at_utc": "2026-04-04T00:24:26+00:00",
+    "status": "generated",
+    "record_count": 11,
+    "notes": "Structured EPA WARM food-waste treatment emission-factor reference for California Paper 1. The default baseline row is an explicitly documented analytical proxy."
+  }
+]

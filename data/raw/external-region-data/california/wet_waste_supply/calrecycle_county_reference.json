@@ -1,0 +1,350 @@
+[
+  {
+    "county_id": 1,
+    "county_name": "Alameda",
+    "countywide_local_government_id": 1001,
+    "countywide_local_government_name": "Alameda (Countywide)"
+  },
+  {
+    "county_id": 2,
+    "county_name": "Alpine",
+    "countywide_local_government_id": 1002,
+    "countywide_local_government_name": "Alpine (Countywide)"
+  },
+  {
+    "county_id": 3,
+    "county_name": "Amador",
+    "countywide_local_government_id": 1003,
+    "countywide_local_government_name": "Amador (Countywide)"
+  },
+  {
+    "county_id": 4,
+    "county_name": "Butte",
+    "countywide_local_government_id": 1004,
+    "countywide_local_government_name": "Butte (Countywide)"
+  },
+  {
+    "county_id": 5,
+    "county_name": "Calaveras",
+    "countywide_local_government_id": 1005,
+    "countywide_local_government_name": "Calaveras (Countywide)"
+  },
+  {
+    "county_id": 6,
+    "county_name": "Colusa",
+    "countywide_local_government_id": 1006,
+    "countywide_local_government_name": "Colusa (Countywide)"
+  },
+  {
+    "county_id": 7,
+    "county_name": "Contra Costa",
+    "countywide_local_government_id": 1007,
+    "countywide_local_government_name": "Contra Costa (Countywide)"
+  },
+  {
+    "county_id": 8,
+    "county_name": "Del Norte",
+    "countywide_local_government_id": 1008,
+    "countywide_local_government_name": "Del Norte (Countywide)"
+  },
+  {
+    "county_id": 9,
+    "county_name": "El Dorado",
+    "countywide_local_government_id": 1009,
+    "countywide_local_government_name": "El Dorado (Countywide)"
+  },
+  {
+    "county_id": 10,
+    "county_name": "Fresno",
+    "countywide_local_government_id": 1010,
+    "countywide_local_government_name": "Fresno (Countywide)"
+  },
+  {
+    "county_id": 11,
+    "county_name": "Glenn",
+    "countywide_local_government_id": 1011,
+    "countywide_local_government_name": "Glenn (Countywide)"
+  },
+  {
+    "county_id": 12,
+    "county_name": "Humboldt",
+    "countywide_local_government_id": 1012,
+    "countywide_local_government_name": "Humboldt (Countywide)"
+  },
+  {
+    "county_id": 13,
+    "county_name": "Imperial",
+    "countywide_local_government_id": 1013,
+    "countywide_local_government_name": "Imperial (Countywide)"
+  },
+  {
+    "county_id": 14,
+    "county_name": "Inyo",
+    "countywide_local_government_id": 1014,
+    "countywide_local_government_name": "Inyo (Countywide)"
+  },
+  {
+    "county_id": 15,
+    "county_name": "Kern",
+    "countywide_local_government_id": 1015,
+    "countywide_local_government_name": "Kern (Countywide)"
+  },
+  {
+    "county_id": 16,
+    "county_name": "Kings",
+    "countywide_local_government_id": 1016,
+    "countywide_local_government_name": "Kings (Countywide)"
+  },
+  {
+    "county_id": 17,
+    "county_name": "Lake",
+    "countywide_local_government_id": 1017,
+    "countywide_local_government_name": "Lake (Countywide)"
+  },
+  {
+    "county_id": 18,
+    "county_name": "Lassen",
+    "countywide_local_government_id": 1018,
+    "countywide_local_government_name": "Lassen (Countywide)"
+  },
+  {
+    "county_id": 19,
+    "county_name": "Los Angeles",
+    "countywide_local_government_id": 1019,
+    "countywide_local_government_name": "Los Angeles (Countywide)"
+  },
+  {
+    "county_id": 20,
+    "county_name": "Madera",
+    "countywide_local_government_id": 1020,
+    "countywide_local_government_name": "Madera (Countywide)"
+  },
+  {
+    "county_id": 21,
+    "county_name": "Marin",
+    "countywide_local_government_id": 1021,
+    "countywide_local_government_name": "Marin (Countywide)"
+  },
+  {
+    "county_id": 22,
+    "county_name": "Mariposa",
+    "countywide_local_government_id": 1022,
+    "countywide_local_government_name": "Mariposa (Countywide)"
+  },
+  {
+    "county_id": 23,
+    "county_name": "Mendocino",
+    "countywide_local_government_id": 1023,
+    "countywide_local_government_name": "Mendocino (Countywide)"
+  },
+  {
+    "county_id": 24,
+    "county_name": "Merced",
+    "countywide_local_government_id": 1024,
+    "countywide_local_government_name": "Merced (Countywide)"
+  },
+  {
+    "county_id": 25,
+    "county_name": "Modoc",
+    "countywide_local_government_id": 1025,
+    "countywide_local_government_name": "Modoc (Countywide)"
+  },
+  {
+    "county_id": 26,
+    "county_name": "Mono",
+    "countywide_local_government_id": 1026,
+    "countywide_local_government_name": "Mono (Countywide)"
+  },
+  {
+    "county_id": 27,
+    "county_name": "Monterey",
+    "countywide_local_government_id": 1027,
+    "countywide_local_government_name": "Monterey (Countywide)"
+  },
+  {
+    "county_id": 28,
+    "county_name": "Napa",
+    "countywide_local_government_id": 1028,
+    "countywide_local_government_name": "Napa (Countywide)"
+  },
+  {
+    "county_id": 29,
+    "county_name": "Nevada",
+    "countywide_local_government_id": 1029,
+    "countywide_local_government_name": "Nevada (Countywide)"
+  },
+  {
+    "county_id": 30,
+    "county_name": "Orange",
+    "countywide_local_government_id": 1030,
+    "countywide_local_government_name": "Orange (Countywide)"
+  },
+  {
+    "county_id": 31,
+    "county_name": "Placer",
+    "countywide_local_government_id": 1031,
+    "countywide_local_government_name": "Placer (Countywide)"
+  },
+  {
+    "county_id": 32,
+    "county_name": "Plumas",
+    "countywide_local_government_id": 1032,
+    "countywide_local_government_name": "Plumas (Countywide)"
+  },
+  {
+    "county_id": 33,
+    "county_name": "Riverside",
+    "countywide_local_government_id": 1033,
+    "countywide_local_government_name": "Riverside (Countywide)"
+  },
+  {
+    "county_id": 34,
+    "county_name": "Sacramento",
+    "countywide_local_government_id": 1034,
+    "countywide_local_government_name": "Sacramento (Countywide)"
+  },
+  {
+    "county_id": 35,
+    "county_name": "San Benito",
+    "countywide_local_government_id": 1035,
+    "countywide_local_government_name": "San Benito (Countywide)"
+  },
+  {
+    "county_id": 36,
+    "county_name": "San Bernardino",
+    "countywide_local_government_id": 1036,
+    "countywide_local_government_name": "San Bernardino (Countywide)"
+  },
+  {
+    "county_id": 37,
+    "county_name": "San Diego",
+    "countywide_local_government_id": 1037,
+    "countywide_local_government_name": "San Diego (Countywide)"
+  },
+  {
+    "county_id": 38,
+    "county_name": "San Francisco",
+    "countywide_local_government_id": 1038,
+    "countywide_local_government_name": "San Francisco (Countywide)"
+  },
+  {
+    "county_id": 39,
+    "county_name": "San Joaquin",
+    "countywide_local_government_id": 1039,
+    "countywide_local_government_name": "San Joaquin (Countywide)"
+  },
+  {
+    "county_id": 40,
+    "county_name": "San Luis Obispo",
+    "countywide_local_government_id": 1040,
+    "countywide_local_government_name": "San Luis Obispo (Countywide)"
+  },
+  {
+    "county_id": 41,
+    "county_name": "San Mateo",
+    "countywide_local_government_id": 1041,
+    "countywide_local_government_name": "San Mateo (Countywide)"
+  },
+  {
+    "county_id": 42,
+    "county_name": "Santa Barbara",
+    "countywide_local_government_id": 1042,
+    "countywide_local_government_name": "Santa Barbara (Countywide)"
+  },
+  {
+    "county_id": 43,
+    "county_name": "Santa Clara",
+    "countywide_local_government_id": 1043,
+    "countywide_local_government_name": "Santa Clara (Countywide)"
+  },
+  {
+    "county_id": 44,
+    "county_name": "Santa Cruz",
+    "countywide_local_government_id": 1044,
+    "countywide_local_government_name": "Santa Cruz (Countywide)"
+  },
+  {
+    "county_id": 45,
+    "county_name": "Shasta",
+    "countywide_local_government_id": 1045,
+    "countywide_local_government_name": "Shasta (Countywide)"
+  },
+  {
+    "county_id": 46,
+    "county_name": "Sierra",
+    "countywide_local_government_id": 1046,
+    "countywide_local_government_name": "Sierra (Countywide)"
+  },
+  {
+    "county_id": 47,
+    "county_name": "Siskiyou",
+    "countywide_local_government_id": 1047,
+    "countywide_local_government_name": "Siskiyou (Countywide)"
+  },
+  {
+    "county_id": 48,
+    "county_name": "Solano",
+    "countywide_local_government_id": 1048,
+    "countywide_local_government_name": "Solano (Countywide)"
+  },
+  {
+    "county_id": 49,
+    "county_name": "Sonoma",
+    "countywide_local_government_id": 1049,
+    "countywide_local_government_name": "Sonoma (Countywide)"
+  },
+  {
+    "county_id": 50,
+    "county_name": "Stanislaus",
+    "countywide_local_government_id": 1050,
+    "countywide_local_government_name": "Stanislaus (Countywide)"
+  },
+  {
+    "county_id": 51,
+    "county_name": "Sutter",
+    "countywide_local_government_id": 1051,
+    "countywide_local_government_name": "Sutter (Countywide)"
+  },
+  {
+    "county_id": 52,
+    "county_name": "Tehama",
+    "countywide_local_government_id": 1052,
+    "countywide_local_government_name": "Tehama (Countywide)"
+  },
+  {
+    "county_id": 53,
+    "county_name": "Trinity",
+    "countywide_local_government_id": 1053,
+    "countywide_local_government_name": "Trinity (Countywide)"
+  },
+  {
+    "county_id": 54,
+    "county_name": "Tulare",
+    "countywide_local_government_id": 1054,
+    "countywide_local_government_name": "Tulare (Countywide)"
+  },
+  {
+    "county_id": 55,
+    "county_name": "Tuolumne",
+    "countywide_local_government_id": 1055,
+    "countywide_local_government_name": "Tuolumne (Countywide)"
+  },
+  {
+    "county_id": 56,
+    "county_name": "Ventura",
+    "countywide_local_government_id": 1056,
+    "countywide_local_government_name": "Ventura (Countywide)"
+  },
+  {
+    "county_id": 57,
+    "county_name": "Yolo",
+    "countywide_local_government_id": 1057,
+    "countywide_local_government_name": "Yolo (Countywide)"
+  },
+  {
+    "county_id": 58,
+    "county_name": "Yuba",
+    "countywide_local_government_id": 1058,
+    "countywide_local_government_name": "Yuba (Countywide)"
+  }
+]

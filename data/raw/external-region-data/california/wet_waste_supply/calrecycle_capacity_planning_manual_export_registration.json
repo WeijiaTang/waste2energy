@@ -1,0 +1,14 @@
+[
+  {
+    "source_id": "california_calrecycle_capacity_planning_portal",
+    "source_organization": "California Department of Resources Recycling and Recovery",
+    "source_url": "https://www2.calrecycle.ca.gov/LGCentral/datatools/reports/capacityplanning",
+    "original_source_path": "D:\\EnergyStorage\\JOCP\\CapacityPlanningData.xlsx",
+    "registered_file": "data\\raw\\external-region-data\\california\\wet_waste_supply\\calrecycle_capacity_planning_manual_export.xlsx",
+    "registered_at_utc": "2026-04-03T23:35:43+00:00",
+    "operator_exported_at": "",
+    "sha256": "9b5f67e7933c974c3f74528eb1131bff4bb5a2e2eb57afc864bdaf973f942cd8",
+    "file_size_bytes": 10103,
+    "notes": ""
+  }
+]

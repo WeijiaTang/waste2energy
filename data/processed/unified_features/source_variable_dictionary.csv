@@ -1,0 +1,28 @@
+column_name,column_role,description,units,paper1_include
+sample_id,metadata,Unique sample identifier,,yes
+source_repo,metadata,Source repository name,,yes
+source_file,metadata,Source file name,,yes
+source_dataset_kind,metadata,Source dataset type,,yes
+feedstock_name,metadata,Original feedstock name when available,,yes
+feedstock_group,feature,Canonical feedstock grouping,,yes
+pathway,feature,Canonical conversion pathway label,,yes
+blending_case,metadata,Blend-design label for current sample,,yes
+blend_manure_ratio,feature,Manure fraction in blended feed,ratio,yes
+blend_wet_waste_ratio,feature,Wet-waste fraction in blended feed,ratio,yes
+feedstock_carbon_pct,feature,Feedstock carbon content,pct,yes
+feedstock_hydrogen_pct,feature,Feedstock hydrogen content,pct,yes
+feedstock_nitrogen_pct,feature,Feedstock nitrogen content,pct,yes
+feedstock_oxygen_pct,feature,Feedstock oxygen content,pct,yes
+feedstock_moisture_pct,feature,Feedstock moisture content,pct,yes
+feedstock_volatile_matter_pct,feature,Feedstock volatile matter,pct,yes
+feedstock_fixed_carbon_pct,feature,Feedstock fixed carbon,pct,yes
+feedstock_ash_pct,feature,Feedstock ash content,pct,yes
+feedstock_hhv_mj_per_kg,feature,Feedstock higher heating value,MJ/kg,yes
+process_temperature_c,feature,Processing temperature,C,yes
+residence_time_min,feature,Residence time,min,yes
+heating_rate_c_per_min,feature,Heating rate,C/min,yes
+product_char_yield_pct,target,Char yield,pct,yes
+product_char_hhv_mj_per_kg,target,Char higher heating value,MJ/kg,yes
+energy_recovery_pct,target,Energy recovery,pct,yes
+carbon_retention_pct,target,Carbon retention,pct,yes
+reference_label,metadata,Original reference label,,yes

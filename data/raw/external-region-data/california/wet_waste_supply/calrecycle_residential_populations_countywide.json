@@ -1,0 +1,582 @@
+[
+  {
+    "county_id": 1,
+    "county_name": "Alameda",
+    "countywide_local_government_id": 1001,
+    "countywide_local_government_name": "Alameda (Countywide)",
+    "RegionName": "Bay Area",
+    "PopulationHouseholds": "1,588,787",
+    "MultiFamilyUnits": "160,358",
+    "SingleFamilyUnits": "408,671"
+  },
+  {
+    "county_id": 2,
+    "county_name": "Alpine",
+    "countywide_local_government_id": 1002,
+    "countywide_local_government_name": "Alpine (Countywide)",
+    "RegionName": "Mountain",
+    "PopulationHouseholds": "1,142",
+    "MultiFamilyUnits": "184",
+    "SingleFamilyUnits": "309"
+  },
+  {
+    "county_id": 3,
+    "county_name": "Amador",
+    "countywide_local_government_id": 1003,
+    "countywide_local_government_name": "Amador (Countywide)",
+    "RegionName": "Mountain",
+    "PopulationHouseholds": "34,508",
+    "MultiFamilyUnits": "1,713",
+    "SingleFamilyUnits": "12,636"
+  },
+  {
+    "county_id": 4,
+    "county_name": "Butte",
+    "countywide_local_government_id": 1004,
+    "countywide_local_government_name": "Butte (Countywide)",
+    "RegionName": "Valley",
+    "PopulationHouseholds": "219,144",
+    "MultiFamilyUnits": "22,486",
+    "SingleFamilyUnits": "66,180"
+  },
+  {
+    "county_id": 5,
+    "county_name": "Calaveras",
+    "countywide_local_government_id": 1005,
+    "countywide_local_government_name": "Calaveras (Countywide)",
+    "RegionName": "Mountain",
+    "PopulationHouseholds": "44,708",
+    "MultiFamilyUnits": "1,795",
+    "SingleFamilyUnits": "17,111"
+  },
+  {
+    "county_id": 6,
+    "county_name": "Colusa",
+    "countywide_local_government_id": 1006,
+    "countywide_local_government_name": "Colusa (Countywide)",
+    "RegionName": "Valley",
+    "PopulationHouseholds": "21,688",
+    "MultiFamilyUnits": "1,122",
+    "SingleFamilyUnits": "6,141"
+  },
+  {
+    "county_id": 7,
+    "county_name": "Contra Costa",
+    "countywide_local_government_id": 1007,
+    "countywide_local_government_name": "Contra Costa (Countywide)",
+    "RegionName": "Bay Area",
+    "PopulationHouseholds": "1,112,809",
+    "MultiFamilyUnits": "73,199",
+    "SingleFamilyUnits": "319,649"
+  },
+  {
+    "county_id": 8,
+    "county_name": "Del Norte",
+    "countywide_local_government_id": 1008,
+    "countywide_local_government_name": "Del Norte (Countywide)",
+    "RegionName": "Coastal",
+    "PopulationHouseholds": "23,947",
+    "MultiFamilyUnits": "2,874",
+    "SingleFamilyUnits": "6,870"
+  },
+  {
+    "county_id": 9,
+    "county_name": "El Dorado",
+    "countywide_local_government_id": 1009,
+    "countywide_local_government_name": "El Dorado (Countywide)",
+    "RegionName": "Mountain",
+    "PopulationHouseholds": "182,073",
+    "MultiFamilyUnits": "7,344",
+    "SingleFamilyUnits": "62,293"
+  },
+  {
+    "county_id": 10,
+    "county_name": "Fresno",
+    "countywide_local_government_id": 1010,
+    "countywide_local_government_name": "Fresno (Countywide)",
+    "RegionName": "Valley",
+    "PopulationHouseholds": "967,164",
+    "MultiFamilyUnits": "60,630",
+    "SingleFamilyUnits": "242,306"
+  },
+  {
+    "county_id": 11,
+    "county_name": "Glenn",
+    "countywide_local_government_id": 1011,
+    "countywide_local_government_name": "Glenn (Countywide)",
+    "RegionName": "Valley",
+    "PopulationHouseholds": "28,364",
+    "MultiFamilyUnits": "1,956",
+    "SingleFamilyUnits": "8,063"
+  },
+  {
+    "county_id": 12,
+    "county_name": "Humboldt",
+    "countywide_local_government_id": 1012,
+    "countywide_local_government_name": "Humboldt (Countywide)",
+    "RegionName": "Coastal",
+    "PopulationHouseholds": "129,574",
+    "MultiFamilyUnits": "10,653",
+    "SingleFamilyUnits": "45,333"
+  },
+  {
+    "county_id": 13,
+    "county_name": "Imperial",
+    "countywide_local_government_id": 1013,
+    "countywide_local_government_name": "Imperial (Countywide)",
+    "RegionName": "Southern",
+    "PopulationHouseholds": "177,088",
+    "MultiFamilyUnits": "12,864",
+    "SingleFamilyUnits": "36,947"
+  },
+  {
+    "county_id": 14,
+    "county_name": "Inyo",
+    "countywide_local_government_id": 1014,
+    "countywide_local_government_name": "Inyo (Countywide)",
+    "RegionName": "Mountain",
+    "PopulationHouseholds": "18,224",
+    "MultiFamilyUnits": "2,586",
+    "SingleFamilyUnits": "5,424"
+  },
+  {
+    "county_id": 15,
+    "county_name": "Kern",
+    "countywide_local_government_id": 1015,
+    "countywide_local_government_name": "Kern (Countywide)",
+    "RegionName": "Valley",
+    "PopulationHouseholds": "854,430",
+    "MultiFamilyUnits": "43,376",
+    "SingleFamilyUnits": "221,577"
+  },
+  {
+    "county_id": 16,
+    "county_name": "Kings",
+    "countywide_local_government_id": 1016,
+    "countywide_local_government_name": "Kings (Countywide)",
+    "RegionName": "Valley",
+    "PopulationHouseholds": "134,361",
+    "MultiFamilyUnits": "5,944",
+    "SingleFamilyUnits": "36,402"
+  },
+  {
+    "county_id": 17,
+    "county_name": "Lake",
+    "countywide_local_government_id": 1017,
+    "countywide_local_government_name": "Lake (Countywide)",
+    "RegionName": "Coastal",
+    "PopulationHouseholds": "63,146",
+    "MultiFamilyUnits": "7,283",
+    "SingleFamilyUnits": "19,254"
+  },
+  {
+    "county_id": 18,
+    "county_name": "Lassen",
+    "countywide_local_government_id": 1018,
+    "countywide_local_government_name": "Lassen (Countywide)",
+    "RegionName": "Mountain",
+    "PopulationHouseholds": "23,153",
+    "MultiFamilyUnits": "2,327",
+    "SingleFamilyUnits": "7,435"
+  },
+  {
+    "county_id": 19,
+    "county_name": "Los Angeles",
+    "countywide_local_government_id": 1019,
+    "countywide_local_government_name": "Los Angeles (Countywide)",
+    "RegionName": "Southern",
+    "PopulationHouseholds": "10,060,831",
+    "MultiFamilyUnits": "1,191,867",
+    "SingleFamilyUnits": "2,116,155"
+  },
+  {
+    "county_id": 20,
+    "county_name": "Madera",
+    "countywide_local_government_id": 1020,
+    "countywide_local_government_name": "Madera (Countywide)",
+    "RegionName": "Valley",
+    "PopulationHouseholds": "147,862",
+    "MultiFamilyUnits": "5,368",
+    "SingleFamilyUnits": "38,954"
+  },
+  {
+    "county_id": 21,
+    "county_name": "Marin",
+    "countywide_local_government_id": 1021,
+    "countywide_local_government_name": "Marin (Countywide)",
+    "RegionName": "Bay Area",
+    "PopulationHouseholds": "254,342",
+    "MultiFamilyUnits": "22,105",
+    "SingleFamilyUnits": "81,022"
+  },
+  {
+    "county_id": 22,
+    "county_name": "Mariposa",
+    "countywide_local_government_id": 1022,
+    "countywide_local_government_name": "Mariposa (Countywide)",
+    "RegionName": "Mountain",
+    "PopulationHouseholds": "17,434",
+    "MultiFamilyUnits": "2,043",
+    "SingleFamilyUnits": "5,828"
+  },
+  {
+    "county_id": 23,
+    "county_name": "Mendocino",
+    "countywide_local_government_id": 1023,
+    "countywide_local_government_name": "Mendocino (Countywide)",
+    "RegionName": "Coastal",
+    "PopulationHouseholds": "86,403",
+    "MultiFamilyUnits": "7,039",
+    "SingleFamilyUnits": "27,187"
+  },
+  {
+    "county_id": 24,
+    "county_name": "Merced",
+    "countywide_local_government_id": 1024,
+    "countywide_local_government_name": "Merced (Countywide)",
+    "RegionName": "Valley",
+    "PopulationHouseholds": "265,835",
+    "MultiFamilyUnits": "12,313",
+    "SingleFamilyUnits": "67,217"
+  },
+  {
+    "county_id": 25,
+    "county_name": "Modoc",
+    "countywide_local_government_id": 1025,
+    "countywide_local_government_name": "Modoc (Countywide)",
+    "RegionName": "Mountain",
+    "PopulationHouseholds": "9,286",
+    "MultiFamilyUnits": "837",
+    "SingleFamilyUnits": "3,235"
+  },
+  {
+    "county_id": 26,
+    "county_name": "Mono",
+    "countywide_local_government_id": 1026,
+    "countywide_local_government_name": "Mono (Countywide)",
+    "RegionName": "Mountain",
+    "PopulationHouseholds": "13,396",
+    "MultiFamilyUnits": "2,190",
+    "SingleFamilyUnits": "3,689"
+  },
+  {
+    "county_id": 27,
+    "county_name": "Monterey",
+    "countywide_local_government_id": 1027,
+    "countywide_local_government_name": "Monterey (Countywide)",
+    "RegionName": "Coastal",
+    "PopulationHouseholds": "416,584",
+    "MultiFamilyUnits": "27,554",
+    "SingleFamilyUnits": "98,628"
+  },
+  {
+    "county_id": 28,
+    "county_name": "Napa",
+    "countywide_local_government_id": 1028,
+    "countywide_local_government_name": "Napa (Countywide)",
+    "RegionName": "Bay Area",
+    "PopulationHouseholds": "137,113",
+    "MultiFamilyUnits": "9,599",
+    "SingleFamilyUnits": "40,518"
+  },
+  {
+    "county_id": 29,
+    "county_name": "Nevada",
+    "countywide_local_government_id": 1029,
+    "countywide_local_government_name": "Nevada (Countywide)",
+    "RegionName": "Mountain",
+    "PopulationHouseholds": "96,881",
+    "MultiFamilyUnits": "4,866",
+    "SingleFamilyUnits": "35,301"
+  },
+  {
+    "county_id": 30,
+    "county_name": "Orange",
+    "countywide_local_government_id": 1030,
+    "countywide_local_government_name": "Orange (Countywide)",
+    "RegionName": "Southern",
+    "PopulationHouseholds": "3,133,187",
+    "MultiFamilyUnits": "294,678",
+    "SingleFamilyUnits": "730,126"
+  },
+  {
+    "county_id": 31,
+    "county_name": "Placer",
+    "countywide_local_government_id": 1031,
+    "countywide_local_government_name": "Placer (Countywide)",
+    "RegionName": "Valley",
+    "PopulationHouseholds": "370,029",
+    "MultiFamilyUnits": "20,190",
+    "SingleFamilyUnits": "119,045"
+  },
+  {
+    "county_id": 32,
+    "county_name": "Plumas",
+    "countywide_local_government_id": 1032,
+    "countywide_local_government_name": "Plumas (Countywide)",
+    "RegionName": "Mountain",
+    "PopulationHouseholds": "19,588",
+    "MultiFamilyUnits": "1,571",
+    "SingleFamilyUnits": "6,969"
+  },
+  {
+    "county_id": 33,
+    "county_name": "Riverside",
+    "countywide_local_government_id": 1033,
+    "countywide_local_government_name": "Riverside (Countywide)",
+    "RegionName": "Southern",
+    "PopulationHouseholds": "2,313,786",
+    "MultiFamilyUnits": "148,617",
+    "SingleFamilyUnits": "564,588"
+  },
+  {
+    "county_id": 34,
+    "county_name": "Sacramento",
+    "countywide_local_government_id": 1034,
+    "countywide_local_government_name": "Sacramento (Countywide)",
+    "RegionName": "Valley",
+    "PopulationHouseholds": "1,472,793",
+    "MultiFamilyUnits": "112,342",
+    "SingleFamilyUnits": "414,573"
+  },
+  {
+    "county_id": 35,
+    "county_name": "San Benito",
+    "countywide_local_government_id": 1035,
+    "countywide_local_government_name": "San Benito (Countywide)",
+    "RegionName": "Coastal",
+    "PopulationHouseholds": "56,253",
+    "MultiFamilyUnits": "1,908",
+    "SingleFamilyUnits": "15,553"
+  },
+  {
+    "county_id": 36,
+    "county_name": "San Bernardino",
+    "countywide_local_government_id": 1036,
+    "countywide_local_government_name": "San Bernardino (Countywide)",
+    "RegionName": "Southern",
+    "PopulationHouseholds": "2,102,247",
+    "MultiFamilyUnits": "121,880",
+    "SingleFamilyUnits": "509,132"
+  },
+  {
+    "county_id": 37,
+    "county_name": "San Diego",
+    "countywide_local_government_id": 1037,
+    "countywide_local_government_name": "San Diego (Countywide)",
+    "RegionName": "Southern",
+    "PopulationHouseholds": "3,181,142",
+    "MultiFamilyUnits": "366,334",
+    "SingleFamilyUnits": "759,695"
+  },
+  {
+    "county_id": 38,
+    "county_name": "San Francisco",
+    "countywide_local_government_id": 1038,
+    "countywide_local_government_name": "San Francisco (Countywide)",
+    "RegionName": "Bay Area",
+    "PopulationHouseholds": "841,538",
+    "MultiFamilyUnits": "167,840",
+    "SingleFamilyUnits": "191,576"
+  },
+  {
+    "county_id": 39,
+    "county_name": "San Joaquin",
+    "countywide_local_government_id": 1039,
+    "countywide_local_government_name": "San Joaquin (Countywide)",
+    "RegionName": "Valley",
+    "PopulationHouseholds": "718,251",
+    "MultiFamilyUnits": "35,793",
+    "SingleFamilyUnits": "190,786"
+  },
+  {
+    "county_id": 40,
+    "county_name": "San Luis Obispo",
+    "countywide_local_government_id": 1040,
+    "countywide_local_government_name": "San Luis Obispo (Countywide)",
+    "RegionName": "Coastal",
+    "PopulationHouseholds": "262,095",
+    "MultiFamilyUnits": "19,949",
+    "SingleFamilyUnits": "84,015"
+  },
+  {
+    "county_id": 41,
+    "county_name": "San Mateo",
+    "countywide_local_government_id": 1041,
+    "countywide_local_government_name": "San Mateo (Countywide)",
+    "RegionName": "Bay Area",
+    "PopulationHouseholds": "756,837",
+    "MultiFamilyUnits": "73,212",
+    "SingleFamilyUnits": "187,728"
+  },
+  {
+    "county_id": 42,
+    "county_name": "Santa Barbara",
+    "countywide_local_government_id": 1042,
+    "countywide_local_government_name": "Santa Barbara (Countywide)",
+    "RegionName": "Coastal",
+    "PopulationHouseholds": "427,849",
+    "MultiFamilyUnits": "36,832",
+    "SingleFamilyUnits": "108,925"
+  },
+  {
+    "county_id": 43,
+    "county_name": "Santa Clara",
+    "countywide_local_government_id": 1043,
+    "countywide_local_government_name": "Santa Clara (Countywide)",
+    "RegionName": "Bay Area",
+    "PopulationHouseholds": "1,897,431",
+    "MultiFamilyUnits": "187,158",
+    "SingleFamilyUnits": "440,929"
+  },
+  {
+    "county_id": 44,
+    "county_name": "Santa Cruz",
+    "countywide_local_government_id": 1044,
+    "countywide_local_government_name": "Santa Cruz (Countywide)",
+    "RegionName": "Coastal",
+    "PopulationHouseholds": "262,066",
+    "MultiFamilyUnits": "18,341",
+    "SingleFamilyUnits": "78,822"
+  },
+  {
+    "county_id": 45,
+    "county_name": "Shasta",
+    "countywide_local_government_id": 1045,
+    "countywide_local_government_name": "Shasta (Countywide)",
+    "RegionName": "Valley",
+    "PopulationHouseholds": "175,737",
+    "MultiFamilyUnits": "14,052",
+    "SingleFamilyUnits": "56,374"
+  },
+  {
+    "county_id": 46,
+    "county_name": "Sierra",
+    "countywide_local_government_id": 1046,
+    "countywide_local_government_name": "Sierra (Countywide)",
+    "RegionName": "Mountain",
+    "PopulationHouseholds": "3,170",
+    "MultiFamilyUnits": "103",
+    "SingleFamilyUnits": "1,329"
+  },
+  {
+    "county_id": 47,
+    "county_name": "Siskiyou",
+    "countywide_local_government_id": 1047,
+    "countywide_local_government_name": "Siskiyou (Countywide)",
+    "RegionName": "Mountain",
+    "PopulationHouseholds": "44,170",
+    "MultiFamilyUnits": "4,220",
+    "SingleFamilyUnits": "15,131"
+  },
+  {
+    "county_id": 48,
+    "county_name": "Solano",
+    "countywide_local_government_id": 1048,
+    "countywide_local_government_name": "Solano (Countywide)",
+    "RegionName": "Bay Area",
+    "PopulationHouseholds": "420,265",
+    "MultiFamilyUnits": "24,886",
+    "SingleFamilyUnits": "122,935"
+  },
+  {
+    "county_id": 49,
+    "county_name": "Sonoma",
+    "countywide_local_government_id": 1049,
+    "countywide_local_government_name": "Sonoma (Countywide)",
+    "RegionName": "Bay Area",
+    "PopulationHouseholds": "491,560",
+    "MultiFamilyUnits": "35,304",
+    "SingleFamilyUnits": "156,797"
+  },
+  {
+    "county_id": 50,
+    "county_name": "Stanislaus",
+    "countywide_local_government_id": 1050,
+    "countywide_local_government_name": "Stanislaus (Countywide)",
+    "RegionName": "Valley",
+    "PopulationHouseholds": "533,775",
+    "MultiFamilyUnits": "24,165",
+    "SingleFamilyUnits": "144,039"
+  },
+  {
+    "county_id": 51,
+    "county_name": "Sutter",
+    "countywide_local_government_id": 1051,
+    "countywide_local_government_name": "Sutter (Countywide)",
+    "RegionName": "Valley",
+    "PopulationHouseholds": "96,546",
+    "MultiFamilyUnits": "5,654",
+    "SingleFamilyUnits": "25,850"
+  },
+  {
+    "county_id": 52,
+    "county_name": "Tehama",
+    "countywide_local_government_id": 1052,
+    "countywide_local_government_name": "Tehama (Countywide)",
+    "RegionName": "Valley",
+    "PopulationHouseholds": "63,070",
+    "MultiFamilyUnits": "6,928",
+    "SingleFamilyUnits": "17,001"
+  },
+  {
+    "county_id": 53,
+    "county_name": "Trinity",
+    "countywide_local_government_id": 1053,
+    "countywide_local_government_name": "Trinity (Countywide)",
+    "RegionName": "Mountain",
+    "PopulationHouseholds": "13,280",
+    "MultiFamilyUnits": "1,636",
+    "SingleFamilyUnits": "4,160"
+  },
+  {
+    "county_id": 54,
+    "county_name": "Tulare",
+    "countywide_local_government_id": 1054,
+    "countywide_local_government_name": "Tulare (Countywide)",
+    "RegionName": "Valley",
+    "PopulationHouseholds": "461,529",
+    "MultiFamilyUnits": "17,962",
+    "SingleFamilyUnits": "116,602"
+  },
+  {
+    "county_id": 55,
+    "county_name": "Tuolumne",
+    "countywide_local_government_id": 1055,
+    "countywide_local_government_name": "Tuolumne (Countywide)",
+    "RegionName": "Mountain",
+    "PopulationHouseholds": "51,334",
+    "MultiFamilyUnits": "3,493",
+    "SingleFamilyUnits": "18,797"
+  },
+  {
+    "county_id": 56,
+    "county_name": "Ventura",
+    "countywide_local_government_id": 1056,
+    "countywide_local_government_name": "Ventura (Countywide)",
+    "RegionName": "Southern",
+    "PopulationHouseholds": "845,338",
+    "MultiFamilyUnits": "52,977",
+    "SingleFamilyUnits": "220,309"
+  },
+  {
+    "county_id": 57,
+    "county_name": "Yolo",
+    "countywide_local_government_id": 1057,
+    "countywide_local_government_name": "Yolo (Countywide)",
+    "RegionName": "Valley",
+    "PopulationHouseholds": "202,726",
+    "MultiFamilyUnits": "18,586",
+    "SingleFamilyUnits": "53,502"
+  },
+  {
+    "county_id": 58,
+    "county_name": "Yuba",
+    "countywide_local_government_id": 1058,
+    "countywide_local_government_name": "Yuba (Countywide)",
+    "RegionName": "Valley",
+    "PopulationHouseholds": "73,064",
+    "MultiFamilyUnits": "4,757",
+    "SingleFamilyUnits": "20,476"
+  }
+]

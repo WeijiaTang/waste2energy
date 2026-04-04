@@ -1,0 +1,47 @@
+[
+  {
+    "dataset_id": "california_sb1383_bill_text_snapshot",
+    "source_url": "https://leginfo.legislature.ca.gov/faces/billTextClient.xhtml?bill_id=201520160SB1383",
+    "output_file": "data\\raw\\external-region-data\\california\\policy_reference\\leginfo_sb1383_bill_text.html",
+    "downloaded_at_utc": "2026-04-03T23:52:43+00:00",
+    "status": "downloaded",
+    "record_count": "",
+    "notes": "Official California Legislature SB 1383 bill text HTML snapshot."
+  },
+  {
+    "dataset_id": "california_sb1383_food_recovery_faq_snapshot",
+    "source_url": "https://calrecycle.ca.gov/organics/slcp/faq/foodrecovery/",
+    "output_file": "data\\raw\\external-region-data\\california\\policy_reference\\calrecycle_sb1383_food_recovery_faq.html",
+    "downloaded_at_utc": "2026-04-03T23:52:43+00:00",
+    "status": "downloaded",
+    "record_count": "",
+    "notes": "Official CalRecycle food recovery FAQ HTML snapshot."
+  },
+  {
+    "dataset_id": "california_sb1383_procurement_snapshot",
+    "source_url": "https://calrecycle.ca.gov/organics/slcp/procurement/recoveredorganicwasteproducts/",
+    "output_file": "data\\raw\\external-region-data\\california\\policy_reference\\calrecycle_sb1383_procurement_recovered_organic_waste_products.html",
+    "downloaded_at_utc": "2026-04-03T23:52:43+00:00",
+    "status": "downloaded",
+    "record_count": "",
+    "notes": "Official CalRecycle procurement requirements HTML snapshot."
+  },
+  {
+    "dataset_id": "california_sb1383_enforcement_snapshot",
+    "source_url": "https://calrecycle.ca.gov/organics/slcp/enforcement/",
+    "output_file": "data\\raw\\external-region-data\\california\\policy_reference\\calrecycle_sb1383_enforcement.html",
+    "downloaded_at_utc": "2026-04-03T23:52:43+00:00",
+    "status": "downloaded",
+    "record_count": "",
+    "notes": "Official CalRecycle enforcement overview HTML snapshot."
+  },
+  {
+    "dataset_id": "california_sb1383_policy_reference",
+    "source_url": "https://calrecycle.ca.gov/organics/slcp/faq/foodrecovery/",
+    "output_file": "data\\raw\\external-region-data\\california\\policy_reference\\california_sb1383_policy_reference.csv",
+    "downloaded_at_utc": "2026-04-03T23:52:43+00:00",
+    "status": "generated",
+    "record_count": 5,
+    "notes": "Structured California SB 1383 policy reference table for Waste2Energy Paper 1."
+  }
+]

@@ -1,0 +1,82 @@
+[
+  {
+    "source_id": "california_usda_cattle_inventory_pdf",
+    "metric_name": "cattle_incl_calves_inventory",
+    "value": 5050000.0,
+    "unit": "head",
+    "reference_year": 2025,
+    "release_date": "January 31, 2025",
+    "raw_file_name": "usda_nass_pacific_region_cattle_inventory_2025.pdf",
+    "notes": "Parsed from Pacific Region cattle inventory release text."
+  },
+  {
+    "source_id": "california_usda_cattle_inventory_pdf",
+    "metric_name": "beef_cows_inventory",
+    "value": 630000.0,
+    "unit": "head",
+    "reference_year": 2025,
+    "release_date": "January 31, 2025",
+    "raw_file_name": "usda_nass_pacific_region_cattle_inventory_2025.pdf",
+    "notes": "Parsed from Pacific Region cattle inventory release text."
+  },
+  {
+    "source_id": "california_usda_cattle_inventory_pdf",
+    "metric_name": "milk_cows_inventory",
+    "value": 1710000.0,
+    "unit": "head",
+    "reference_year": 2025,
+    "release_date": "January 31, 2025",
+    "raw_file_name": "usda_nass_pacific_region_cattle_inventory_2025.pdf",
+    "notes": "Parsed from Pacific Region cattle inventory release text."
+  },
+  {
+    "source_id": "california_usda_cattle_inventory_pdf",
+    "metric_name": "cattle_on_feed_inventory",
+    "value": 500000.0,
+    "unit": "head",
+    "reference_year": 2025,
+    "release_date": "January 31, 2025",
+    "raw_file_name": "usda_nass_pacific_region_cattle_inventory_2025.pdf",
+    "notes": "Parsed from Pacific Region cattle inventory release text."
+  },
+  {
+    "source_id": "california_usda_hogs_pdf",
+    "metric_name": "hogs_inventory",
+    "value": 39000.0,
+    "unit": "head",
+    "reference_year": 2023,
+    "release_date": "December 23, 2024",
+    "raw_file_name": "usda_nass_pacific_region_hogs_2024.pdf",
+    "notes": "Parsed from Pacific Region hogs and pigs release text; California 2024 inventory is not available in the report text."
+  },
+  {
+    "source_id": "california_usda_sheep_goats_pdf",
+    "metric_name": "sheep_incl_lambs_inventory",
+    "value": 510000.0,
+    "unit": "head",
+    "reference_year": 2025,
+    "release_date": "January 31, 2025",
+    "raw_file_name": "usda_nass_pacific_region_sheep_goats_2025.pdf",
+    "notes": "Parsed from Pacific Region sheep and goats release text."
+  },
+  {
+    "source_id": "california_usda_sheep_goats_pdf",
+    "metric_name": "goats_meat_other_inventory",
+    "value": 75000.0,
+    "unit": "head",
+    "reference_year": 2026,
+    "release_date": "January 31, 2025",
+    "raw_file_name": "usda_nass_pacific_region_sheep_goats_2025.pdf",
+    "notes": "Value cross-checked against California USDA state overview."
+  },
+  {
+    "source_id": "california_usda_sheep_goats_pdf",
+    "metric_name": "goats_milk_inventory",
+    "value": 38000.0,
+    "unit": "head",
+    "reference_year": 2026,
+    "release_date": "January 31, 2025",
+    "raw_file_name": "usda_nass_pacific_region_sheep_goats_2025.pdf",
+    "notes": "Value cross-checked against California USDA state overview."
+  }
+]

@@ -1,0 +1,43 @@
+{
+  "dataset_name": "ml_training_dataset",
+  "source_file": "wet_waste_biomass_opt_combined_standardized.csv",
+  "row_count": 828,
+  "feature_columns": [
+    "pathway",
+    "feedstock_group",
+    "feedstock_carbon_pct",
+    "feedstock_hydrogen_pct",
+    "feedstock_nitrogen_pct",
+    "feedstock_oxygen_pct",
+    "feedstock_moisture_pct",
+    "feedstock_volatile_matter_pct",
+    "feedstock_fixed_carbon_pct",
+    "feedstock_ash_pct",
+    "feedstock_hhv_mj_per_kg",
+    "process_temperature_c",
+    "residence_time_min",
+    "heating_rate_c_per_min",
+    "blend_manure_ratio",
+    "blend_wet_waste_ratio"
+  ],
+  "target_columns": [
+    "product_char_yield_pct",
+    "product_char_hhv_mj_per_kg",
+    "energy_recovery_pct",
+    "carbon_retention_pct"
+  ],
+  "metadata_columns": [
+    "sample_id",
+    "source_repo",
+    "source_file",
+    "source_dataset_kind",
+    "feedstock_name",
+    "blending_case",
+    "reference_label"
+  ],
+  "notes": [
+    "This is the first model-ready text dataset for Waste2Energy Paper 1.",
+    "Rows are currently dominated by repository-derived wet-waste and pyrolysis literature samples.",
+    "Mixed-feed ratios remain empty until region-specific blending assumptions are introduced."
+  ]
+}

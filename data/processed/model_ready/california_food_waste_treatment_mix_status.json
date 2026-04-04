@@ -1,0 +1,13 @@
+{
+  "dataset_name": "california_food_waste_treatment_mix_reference",
+  "status": "official_reference_connected",
+  "checked_at_utc": "2026-04-04T00:25:23+00:00",
+  "reference_output_file": "data\\processed\\scenario_inputs\\california_food_waste_treatment_mix_reference.csv",
+  "baseline_factor_value": 329.9817049835864,
+  "baseline_factor_unit": "kgCO2e_per_short_ton",
+  "baseline_management_pathway": "california_weighted_food_waste_management_mix",
+  "notes": [
+    "This weighted baseline supersedes the previous pure-WARM landfill proxy when regional inputs are rebuilt.",
+    "Treatment shares are California-weighted proxies inferred from active SWIS food-waste facilities."
+  ]
+}

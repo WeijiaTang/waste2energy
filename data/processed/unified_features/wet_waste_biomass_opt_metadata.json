@@ -1,0 +1,10 @@
+{
+  "source_repo": "Wet-Waste-Biomass-Opt",
+  "source_repository_url": "https://github.com/PEESEgroup/Wet-Waste-Biomass-Opt",
+  "paper_doi": "https://doi.org/10.1016/j.jclepro.2023.138606",
+  "processed_files": [
+    "wet_waste_biomass_opt_htc_standardized.csv",
+    "wet_waste_biomass_opt_pyrolysis_standardized.csv",
+    "wet_waste_biomass_opt_combined_standardized.csv"
+  ]
+}
