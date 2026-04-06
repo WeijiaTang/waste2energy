@@ -31,12 +31,18 @@ REQUIRED_PLANNING_COLUMNS = [
     "scenario_grid_electricity_emission_factor_kgco2e_per_kwh",
     "energy_price_multiplier",
     "policy_multiplier",
+    "scenario_total_mixed_feed_ton_per_year_proxy",
+    "net_system_cost_usd_per_year",
+    "unit_net_system_cost_usd_per_ton",
+    "cost_model_basis",
+    "cost_model_source_trace",
 ]
 
 REAL_COST_CANDIDATE_COLUMNS = [
     "total_system_cost_usd_per_year",
     "unit_treatment_cost_usd_per_ton",
     "net_system_cost_usd_per_year",
+    "unit_net_system_cost_usd_per_ton",
 ]
 
 

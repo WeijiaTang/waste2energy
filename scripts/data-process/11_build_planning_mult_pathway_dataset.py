@@ -60,24 +60,61 @@ TARGET_COLUMNS = [
     "carbon_retention_pct",
 ]
 
-HTC_COST_PROXY_BASE = 0.95
-PYROLYSIS_COST_PROXY_BASE = 1.05
-AD_COST_PROXY_BASE = 0.75
-BASELINE_COST_PROXY_BASE = 0.35
-
 AD_WET_ELECTRICITY_KWH_PER_TON = 201.4
 AD_WET_AVAILABLE_HEAT_MMBTU_PER_TON = 1.26
 AD_WET_REACTOR_HEAT_MMBTU_PER_TON = 0.14
 MMBTU_TO_MJ = 1055.056
 KWH_TO_MJ = 3.6
+MMBTU_PER_MCF = 1.037
+MWH_TO_KWH = 1000.0
+MWH_TO_MMBTU = 3.412141633
+METRIC_TON_TO_SHORT_TON = 1.10231
+ANNUAL_DISCOUNT_RATE = 0.08
+PLANT_LIFE_YEARS = 20
+GBP_TO_USD_2024 = 1.27
+EUR_TO_USD_2024 = 1.09
 LANDFILL_AVOIDED_UTILITY_EMISSIONS_KGCO2E_PER_SHORT_TON = 60.0
+CALIFORNIA_BASELINE_TIPPING_FEE_USD_PER_TON = 45.0
+
+AD_CAPEX_USD_PER_SHORT_TON_ANNUAL_CAPACITY = 525.0
+AD_OPEX_USD_PER_SHORT_TON_FEED = 62.5
+AD_FIXED_OPEX_SHARE = 0.45
+AD_VARIABLE_OPEX_SHARE = 0.55
+
+HTC_DESIGN_FEED_TON_PER_YEAR = 20000.0
+HTC_TOTAL_CAPITAL_INVESTMENT_EUR = 1773811.0
+HTC_ELECTRICITY_COST_EUR_PER_YEAR = 90431.0
+HTC_METHANE_COST_EUR_PER_YEAR = 243346.0
+HTC_LABOR_COST_EUR_PER_YEAR = 160000.0
+HTC_MAINTENANCE_COST_EUR_PER_YEAR = 121003.0
+HTC_PROPERTY_TAX_AND_INSURANCE_EUR_PER_YEAR = 15125.0
+HTC_GENERAL_EXPENSES_EUR_PER_YEAR = 76176.0
+HTC_WASTEWATER_TREATMENT_EUR_PER_YEAR = 126903.0
+HTC_GRID_ELECTRICITY_MWH_PER_TON_BIOCHAR = 0.51
+HTC_NATURAL_GAS_MWH_PER_TON_BIOCHAR = 1.48
+
+PYROLYSIS_CAPEX_SHARE_OF_NON_FEED_COST = 0.35
+PYROLYSIS_FIXED_OPEX_SHARE_OF_NON_FEED_COST = 0.35
+PYROLYSIS_VARIABLE_OPEX_SHARE_OF_NON_FEED_COST = 0.15
+PYROLYSIS_UTILITY_SHARE_OF_NON_FEED_COST = 0.15
+PYROLYSIS_FALLBACK_TOTAL_COST_USD_PER_TON_BIOCHAR = 237.0
+PYROLYSIS_FALLBACK_BIOCHAR_PRICE_USD_PER_TON = 200.0
+
+
+def _annualization_factor(discount_rate: float, years: int) -> float:
+    numerator = discount_rate * (1.0 + discount_rate) ** years
+    denominator = (1.0 + discount_rate) ** years - 1.0
+    return numerator / denominator
+
+
+ANNUALIZATION_FACTOR = _annualization_factor(ANNUAL_DISCOUNT_RATE, PLANT_LIFE_YEARS)
 
 PATHWAY_READINESS_RULES = {
     "baseline": {
         "process_basis": "regional_weighted_management_mix_proxy",
         "performance_basis": "california_weighted_energy_proxy_from_landfill_lfg_and_ad_share",
         "environment_basis": "zero_improvement_anchor_vs_current_california_weighted_mix",
-        "cost_basis": "relative_pathway_proxy_index_only",
+        "cost_basis": "official_california_landfill_tipping_fee_direct_cost_anchor",
         "claim_boundary": (
             "Baseline rows are planning anchors for comparison and optimization accounting, not "
             "generalizable process-performance evidence."
@@ -87,7 +124,7 @@ PATHWAY_READINESS_RULES = {
         "process_basis": "food_waste_ad_summary_proxy_with_canonical_operating_placeholders",
         "performance_basis": "explicit_energy_proxy_from_warm_wet_digestion_exhibit",
         "environment_basis": "explicit_food_waste_ad_emission_factor_from_epa_warm",
-        "cost_basis": "relative_pathway_proxy_index_only",
+        "cost_basis": "literature_parameterized_ad_cost_model_with_california_energy_repricing",
         "claim_boundary": (
             "AD rows support regional planning comparison but should be written as pathway proxies rather "
             "than as calibrated facility-specific AD optimization."
@@ -97,7 +134,7 @@ PATHWAY_READINESS_RULES = {
         "process_basis": "representative_conditions_from_observed_pyrolysis_rows",
         "performance_basis": "synthetic_mixed_feed_rows_with_observed_pyrolysis_condition_anchor",
         "environment_basis": "carbon_retention_based_avoidance_proxy",
-        "cost_basis": "relative_pathway_proxy_index_only_with_future_pyrolysis_cost_reference_columns",
+        "cost_basis": "pathway_specific_pyrolysis_cost_and_price_references_with_explicit_non_feed_split",
         "claim_boundary": (
             "Pyrolysis rows are optimization-ready mixed-feed candidates, but blended mixed-feed behavior is "
             "still partly proxy-built rather than directly observed."
@@ -107,7 +144,7 @@ PATHWAY_READINESS_RULES = {
         "process_basis": "representative_conditions_from_observed_htc_rows",
         "performance_basis": "synthetic_mixed_feed_rows_weighted_from_observed_htc_food_and_manure_profiles",
         "environment_basis": "carbon_retention_based_avoidance_proxy",
-        "cost_basis": "relative_pathway_proxy_index_only",
+        "cost_basis": "literature_parameterized_htc_cost_model_with_california_utility_repricing",
         "claim_boundary": (
             "HTC rows are the strongest current mixed-feed planning candidates in the repository, but they "
             "still do not justify strong cross-study generalization claims."
@@ -233,6 +270,26 @@ def load_pyrolysis_cost_reference() -> dict[str, dict[str, float]]:
         }
 
     return lookup
+
+
+def load_pyrolysis_biochar_price_reference() -> float:
+    frame = pd.read_csv(RAW_MANURE_DIR / "biochar_price.csv")
+    usa = frame[
+        frame["GCAM"].astype(str).eq("USA") & frame["Version"].astype(str).eq("Median")
+    ].copy()
+    price = _pick_numeric(usa, "2040")
+    if pd.isna(price):
+        return PYROLYSIS_FALLBACK_BIOCHAR_PRICE_USD_PER_TON
+    return float(price)
+
+
+def _coerce_float(value: object, default: float = 0.0) -> float:
+    try:
+        if pd.isna(value):
+            return default
+        return float(value)
+    except Exception:
+        return default
 
 
 def _pick_numeric(frame: pd.DataFrame, column: str) -> float:
@@ -369,7 +426,13 @@ def build_htc_candidates(
                     "pathway_environment_basis": PATHWAY_READINESS_RULES["htc"]["environment_basis"],
                     "pathway_cost_basis": PATHWAY_READINESS_RULES["htc"]["cost_basis"],
                     "pathway_claim_boundary": PATHWAY_READINESS_RULES["htc"]["claim_boundary"],
-                    "pathway_cost_proxy_base_factor": HTC_COST_PROXY_BASE,
+                    "cost_model_basis": "literature_parameterized_with_california_utility_repricing",
+                    "cost_model_assumption_level": "literature_structure_plus_explicit_engineering_assumptions",
+                    "cost_model_source_trace": (
+                        "Fiori et al. 2017 Energies 10(2):211; "
+                        "Gamaralalage et al. 2025 Biochar 7:50; "
+                        "California energy-price reference"
+                    ),
                     "process_temperature_c": float(condition["process_temperature_c"]),
                     "residence_time_min": float(condition["residence_time_min"]),
                     "heating_rate_c_per_min": pd.NA,
@@ -397,6 +460,7 @@ def build_pyrolysis_candidates(
     pyrolysis_targets: pd.Series,
     pyrolysis_conditions: pd.DataFrame,
     pyrolysis_cost_lookup: dict[str, dict[str, float]],
+    pyrolysis_biochar_price_usd_per_ton: float,
 ) -> list[dict[str, object]]:
     rows: list[dict[str, object]] = []
     row_id = 1
@@ -425,7 +489,13 @@ def build_pyrolysis_candidates(
                     "pathway_environment_basis": PATHWAY_READINESS_RULES["pyrolysis"]["environment_basis"],
                     "pathway_cost_basis": PATHWAY_READINESS_RULES["pyrolysis"]["cost_basis"],
                     "pathway_claim_boundary": PATHWAY_READINESS_RULES["pyrolysis"]["claim_boundary"],
-                    "pathway_cost_proxy_base_factor": PYROLYSIS_COST_PROXY_BASE,
+                    "cost_model_basis": "direct_literature_parameterized_plus_subtype_scaling",
+                    "cost_model_assumption_level": "literature_parameterized_with_subtype_scaling",
+                    "cost_model_source_trace": (
+                        "Struhs et al. 2020 Applied Energy 279:115782; "
+                        "ManurePyrolysisIAM baseline supplementary tables; "
+                        "California energy-price reference"
+                    ),
                     "process_temperature_c": float(condition["process_temperature_c"]),
                     "residence_time_min": float(condition["residence_time_min"]),
                     "heating_rate_c_per_min": float(condition["heating_rate_c_per_min"])
@@ -440,6 +510,7 @@ def build_pyrolysis_candidates(
                     "feedstock_cost_usd_per_ton_manure_reference_2040": cost_reference.get(
                         "feedstock_cost_usd_per_ton_manure_reference_2040", float("nan")
                     ),
+                    "biochar_market_price_usd_per_ton_reference_2040": pyrolysis_biochar_price_usd_per_ton,
                 }
             )
             for column in TARGET_COLUMNS:
@@ -486,7 +557,13 @@ def build_ad_candidates(
                 "pathway_environment_basis": PATHWAY_READINESS_RULES["ad"]["environment_basis"],
                 "pathway_cost_basis": PATHWAY_READINESS_RULES["ad"]["cost_basis"],
                 "pathway_claim_boundary": PATHWAY_READINESS_RULES["ad"]["claim_boundary"],
-                "pathway_cost_proxy_base_factor": AD_COST_PROXY_BASE,
+                "cost_model_basis": "literature_parameterized_with_california_energy_repricing",
+                "cost_model_assumption_level": "literature_structure_plus_explicit_engineering_assumptions",
+                "cost_model_source_trace": (
+                    "Ro et al. 2020 Scientific Reports 10:15751; "
+                    "California energy-price reference; "
+                    "CalRecycle landfill tipping-fee anchor"
+                ),
                 "pathway_emission_factor_kgco2e_per_short_ton_reference": ad_emission_factor,
                 "pathway_energy_intensity_mj_per_ton": ad_energy_mj,
                 "process_temperature_c": 37.0,
@@ -530,7 +607,9 @@ def build_baseline_candidates(
                 "pathway_environment_basis": PATHWAY_READINESS_RULES["baseline"]["environment_basis"],
                 "pathway_cost_basis": PATHWAY_READINESS_RULES["baseline"]["cost_basis"],
                 "pathway_claim_boundary": PATHWAY_READINESS_RULES["baseline"]["claim_boundary"],
-                "pathway_cost_proxy_base_factor": BASELINE_COST_PROXY_BASE,
+                "cost_model_basis": "official_regional_direct_cost_anchor",
+                "cost_model_assumption_level": "official_direct_cost_anchor",
+                "cost_model_source_trace": "CalRecycle 2015 Landfill Tipping Fees in California",
                 "pathway_emission_factor_kgco2e_per_short_ton_reference": baseline_factor,
                 "pathway_energy_intensity_mj_per_ton": baseline_energy_intensity_mj_per_ton,
                 "process_temperature_c": 0.0,
@@ -655,6 +734,7 @@ def build_prototypes() -> tuple[pd.DataFrame, dict[str, object]]:
     baseline_energy_intensity_mj_per_ton = landfill_share * landfill_energy_kwh_per_ton * KWH_TO_MJ + ad_share * ad_energy_mj
 
     pyrolysis_cost_lookup = load_pyrolysis_cost_reference()
+    pyrolysis_biochar_price = load_pyrolysis_biochar_price_reference()
 
     rows: list[dict[str, object]] = []
     rows.extend(
@@ -677,6 +757,7 @@ def build_prototypes() -> tuple[pd.DataFrame, dict[str, object]]:
             pyrolysis_targets=pyrolysis_targets,
             pyrolysis_conditions=pyrolysis_conditions,
             pyrolysis_cost_lookup=pyrolysis_cost_lookup,
+            pyrolysis_biochar_price_usd_per_ton=pyrolysis_biochar_price,
         )
     )
     rows.extend(
@@ -765,7 +846,233 @@ def build_optimization_rows(
         optimization_df["pathway"] == "baseline",
         "pathway_environment_benefit_kgco2e_per_ton",
     ] = 0.0
-    return optimization_df
+    return build_real_cost_columns(optimization_df)
+
+
+def build_real_cost_columns(optimization_df: pd.DataFrame) -> pd.DataFrame:
+    frame = optimization_df.copy()
+
+    allocated_wet_ton = pd.to_numeric(
+        frame["scenario_wet_waste_feed_allocation_ton_per_year_proxy"], errors="coerce"
+    ).fillna(0.0)
+    wet_ratio = pd.to_numeric(frame["blend_wet_waste_ratio"], errors="coerce").replace(0.0, pd.NA)
+    total_mixed_feed_ton = (allocated_wet_ton / wet_ratio).replace([pd.NA, float("inf"), -float("inf")], pd.NA)
+    total_mixed_feed_ton = total_mixed_feed_ton.fillna(allocated_wet_ton).clip(lower=0.0)
+    manure_feed_ton = total_mixed_feed_ton * pd.to_numeric(frame["blend_manure_ratio"], errors="coerce").fillna(0.0)
+    char_output_ton = (
+        total_mixed_feed_ton
+        * pd.to_numeric(frame["product_char_yield_pct"], errors="coerce").fillna(0.0)
+        / 100.0
+    )
+    electricity_price = pd.to_numeric(frame["scenario_electricity_price_usd_per_kwh"], errors="coerce").fillna(0.0)
+    natural_gas_price = pd.to_numeric(frame["scenario_natural_gas_price_usd_per_mcf"], errors="coerce").fillna(0.0)
+
+    frame["scenario_total_mixed_feed_ton_per_year_proxy"] = total_mixed_feed_ton
+    frame["scenario_manure_feed_ton_per_year_proxy"] = manure_feed_ton
+    frame["scenario_wet_feed_ton_per_year_proxy"] = allocated_wet_ton
+    frame["scenario_biochar_output_ton_per_year_proxy"] = char_output_ton
+
+    annual_cost_columns = [
+        "annualized_capex_usd_per_year",
+        "fixed_opex_usd_per_year",
+        "variable_opex_usd_per_year",
+        "feedstock_cost_usd_per_year",
+        "utility_cost_usd_per_year",
+        "transport_or_handling_cost_usd_per_year",
+        "product_revenue_usd_per_year",
+        "avoided_disposal_revenue_usd_per_year",
+        "explicit_policy_credit_usd_per_year",
+    ]
+    for column in annual_cost_columns:
+        frame[column] = 0.0
+
+    pathway_mask = {
+        pathway: frame["pathway"].astype(str).eq(pathway)
+        for pathway in ["baseline", "ad", "pyrolysis", "htc"]
+    }
+
+    _apply_baseline_cost_model(
+        frame=frame,
+        mask=pathway_mask["baseline"],
+        total_mixed_feed_ton=total_mixed_feed_ton,
+    )
+    _apply_ad_cost_model(
+        frame=frame,
+        mask=pathway_mask["ad"],
+        total_mixed_feed_ton=total_mixed_feed_ton,
+        electricity_price=electricity_price,
+        natural_gas_price=natural_gas_price,
+    )
+    _apply_pyrolysis_cost_model(
+        frame=frame,
+        mask=pathway_mask["pyrolysis"],
+        total_mixed_feed_ton=total_mixed_feed_ton,
+        manure_feed_ton=manure_feed_ton,
+        char_output_ton=char_output_ton,
+    )
+    _apply_htc_cost_model(
+        frame=frame,
+        mask=pathway_mask["htc"],
+        total_mixed_feed_ton=total_mixed_feed_ton,
+        char_output_ton=char_output_ton,
+        electricity_price=electricity_price,
+        natural_gas_price=natural_gas_price,
+    )
+
+    frame["total_system_cost_usd_per_year"] = frame[
+        [
+            "annualized_capex_usd_per_year",
+            "fixed_opex_usd_per_year",
+            "variable_opex_usd_per_year",
+            "feedstock_cost_usd_per_year",
+            "utility_cost_usd_per_year",
+            "transport_or_handling_cost_usd_per_year",
+        ]
+    ].sum(axis=1)
+    frame["net_system_cost_usd_per_year"] = (
+        frame["total_system_cost_usd_per_year"]
+        - frame["product_revenue_usd_per_year"]
+        - frame["avoided_disposal_revenue_usd_per_year"]
+        - frame["explicit_policy_credit_usd_per_year"]
+    )
+
+    allocated_wet_safe = allocated_wet_ton.replace(0.0, pd.NA)
+    total_feed_safe = total_mixed_feed_ton.replace(0.0, pd.NA)
+    frame["unit_gross_system_cost_usd_per_wet_ton"] = (
+        frame["total_system_cost_usd_per_year"] / allocated_wet_safe
+    ).replace([float("inf"), -float("inf")], pd.NA)
+    frame["unit_net_system_cost_usd_per_ton"] = (
+        frame["net_system_cost_usd_per_year"] / allocated_wet_safe
+    ).replace([float("inf"), -float("inf")], pd.NA)
+    frame["unit_net_system_cost_usd_per_total_mixed_ton"] = (
+        frame["net_system_cost_usd_per_year"] / total_feed_safe
+    ).replace([float("inf"), -float("inf")], pd.NA)
+    frame["unit_treatment_cost_usd_per_ton"] = frame["unit_net_system_cost_usd_per_ton"]
+    return frame
+
+
+def _apply_baseline_cost_model(
+    *,
+    frame: pd.DataFrame,
+    mask: pd.Series,
+    total_mixed_feed_ton: pd.Series,
+) -> None:
+    if not mask.any():
+        return
+    frame.loc[mask, "variable_opex_usd_per_year"] = (
+        total_mixed_feed_ton.loc[mask] * CALIFORNIA_BASELINE_TIPPING_FEE_USD_PER_TON
+    )
+
+
+def _apply_ad_cost_model(
+    *,
+    frame: pd.DataFrame,
+    mask: pd.Series,
+    total_mixed_feed_ton: pd.Series,
+    electricity_price: pd.Series,
+    natural_gas_price: pd.Series,
+) -> None:
+    if not mask.any():
+        return
+
+    annualized_capex = (
+        total_mixed_feed_ton.loc[mask]
+        * METRIC_TON_TO_SHORT_TON
+        * AD_CAPEX_USD_PER_SHORT_TON_ANNUAL_CAPACITY
+        * ANNUALIZATION_FACTOR
+    )
+    gross_opex = total_mixed_feed_ton.loc[mask] * METRIC_TON_TO_SHORT_TON * AD_OPEX_USD_PER_SHORT_TON_FEED
+    product_revenue = (
+        total_mixed_feed_ton.loc[mask] * AD_WET_ELECTRICITY_KWH_PER_TON * electricity_price.loc[mask]
+        + total_mixed_feed_ton.loc[mask]
+        * max(AD_WET_AVAILABLE_HEAT_MMBTU_PER_TON - AD_WET_REACTOR_HEAT_MMBTU_PER_TON, 0.0)
+        / MMBTU_PER_MCF
+        * natural_gas_price.loc[mask]
+    )
+    avoided_disposal = total_mixed_feed_ton.loc[mask] * CALIFORNIA_BASELINE_TIPPING_FEE_USD_PER_TON
+
+    frame.loc[mask, "annualized_capex_usd_per_year"] = annualized_capex
+    frame.loc[mask, "fixed_opex_usd_per_year"] = gross_opex * AD_FIXED_OPEX_SHARE
+    frame.loc[mask, "variable_opex_usd_per_year"] = gross_opex * AD_VARIABLE_OPEX_SHARE
+    frame.loc[mask, "product_revenue_usd_per_year"] = product_revenue
+    frame.loc[mask, "avoided_disposal_revenue_usd_per_year"] = avoided_disposal
+
+
+def _apply_pyrolysis_cost_model(
+    *,
+    frame: pd.DataFrame,
+    mask: pd.Series,
+    total_mixed_feed_ton: pd.Series,
+    manure_feed_ton: pd.Series,
+    char_output_ton: pd.Series,
+) -> None:
+    if not mask.any():
+        return
+
+    total_cost_per_ton_biochar = pd.to_numeric(
+        frame.loc[mask, "total_cost_usd_per_ton_biochar_reference_2040"], errors="coerce"
+    ).fillna(PYROLYSIS_FALLBACK_TOTAL_COST_USD_PER_TON_BIOCHAR)
+    feedstock_cost_per_ton_manure = pd.to_numeric(
+        frame.loc[mask, "feedstock_cost_usd_per_ton_manure_reference_2040"], errors="coerce"
+    ).fillna(0.0)
+    biochar_price_per_ton = pd.to_numeric(
+        frame.loc[mask, "biochar_market_price_usd_per_ton_reference_2040"], errors="coerce"
+    ).fillna(PYROLYSIS_FALLBACK_BIOCHAR_PRICE_USD_PER_TON)
+
+    gross_cost = total_cost_per_ton_biochar * char_output_ton.loc[mask]
+    feedstock_cost = feedstock_cost_per_ton_manure * manure_feed_ton.loc[mask]
+    non_feed_cost = (gross_cost - feedstock_cost).clip(lower=0.0)
+
+    frame.loc[mask, "annualized_capex_usd_per_year"] = non_feed_cost * PYROLYSIS_CAPEX_SHARE_OF_NON_FEED_COST
+    frame.loc[mask, "fixed_opex_usd_per_year"] = non_feed_cost * PYROLYSIS_FIXED_OPEX_SHARE_OF_NON_FEED_COST
+    frame.loc[mask, "variable_opex_usd_per_year"] = non_feed_cost * PYROLYSIS_VARIABLE_OPEX_SHARE_OF_NON_FEED_COST
+    frame.loc[mask, "utility_cost_usd_per_year"] = non_feed_cost * PYROLYSIS_UTILITY_SHARE_OF_NON_FEED_COST
+    frame.loc[mask, "feedstock_cost_usd_per_year"] = feedstock_cost
+    frame.loc[mask, "product_revenue_usd_per_year"] = biochar_price_per_ton * char_output_ton.loc[mask]
+    frame.loc[mask, "avoided_disposal_revenue_usd_per_year"] = (
+        total_mixed_feed_ton.loc[mask] * CALIFORNIA_BASELINE_TIPPING_FEE_USD_PER_TON
+    )
+
+
+def _apply_htc_cost_model(
+    *,
+    frame: pd.DataFrame,
+    mask: pd.Series,
+    total_mixed_feed_ton: pd.Series,
+    char_output_ton: pd.Series,
+    electricity_price: pd.Series,
+    natural_gas_price: pd.Series,
+) -> None:
+    if not mask.any():
+        return
+
+    annualized_capex_per_ton_feed = (
+        HTC_TOTAL_CAPITAL_INVESTMENT_EUR * ANNUALIZATION_FACTOR / HTC_DESIGN_FEED_TON_PER_YEAR
+    ) * EUR_TO_USD_2024
+    fixed_opex_per_ton_feed = (
+        (
+            HTC_LABOR_COST_EUR_PER_YEAR
+            + HTC_MAINTENANCE_COST_EUR_PER_YEAR
+            + HTC_PROPERTY_TAX_AND_INSURANCE_EUR_PER_YEAR
+            + HTC_GENERAL_EXPENSES_EUR_PER_YEAR
+        )
+        / HTC_DESIGN_FEED_TON_PER_YEAR
+    ) * EUR_TO_USD_2024
+    variable_opex_per_ton_feed = (
+        HTC_WASTEWATER_TREATMENT_EUR_PER_YEAR / HTC_DESIGN_FEED_TON_PER_YEAR
+    ) * EUR_TO_USD_2024
+    utility_cost = char_output_ton.loc[mask] * (
+        HTC_GRID_ELECTRICITY_MWH_PER_TON_BIOCHAR * MWH_TO_KWH * electricity_price.loc[mask]
+        + HTC_NATURAL_GAS_MWH_PER_TON_BIOCHAR * MWH_TO_MMBTU / MMBTU_PER_MCF * natural_gas_price.loc[mask]
+    )
+
+    frame.loc[mask, "annualized_capex_usd_per_year"] = total_mixed_feed_ton.loc[mask] * annualized_capex_per_ton_feed
+    frame.loc[mask, "fixed_opex_usd_per_year"] = total_mixed_feed_ton.loc[mask] * fixed_opex_per_ton_feed
+    frame.loc[mask, "variable_opex_usd_per_year"] = total_mixed_feed_ton.loc[mask] * variable_opex_per_ton_feed
+    frame.loc[mask, "utility_cost_usd_per_year"] = utility_cost
+    frame.loc[mask, "avoided_disposal_revenue_usd_per_year"] = (
+        total_mixed_feed_ton.loc[mask] * CALIFORNIA_BASELINE_TIPPING_FEE_USD_PER_TON
+    )
 
 
 def build_pathway_readiness_summary(
@@ -838,8 +1145,9 @@ def build_assumptions_payload(
             "Pyrolysis and HTC rows are synthetic mixed-feed candidates anchored to repository observations and manure subtype balance references.",
             "Energy objective values now prefer explicit pathway energy intensities when they are available, and thermochemical rows still remain consistent with char-yield-based recoverable energy.",
             "Environmental objective values now prefer pathway-level emission-factor differentials for baseline and AD, while pyrolysis and HTC keep carbon-retention-based avoidance proxies.",
-            "Cost remains a relative proxy index across all pathways in the current planning layer; no pathway should be written as having a publication-ready real total-system-cost estimate yet.",
-            "Pyrolysis economic reference columns from ManurePyrolysisIAM are carried into the planning candidates for future calibration, but they are not yet used as the cross-pathway cost objective.",
+            "Cost now uses a net annual system cost structure across all pathways: annualized CAPEX + OPEX + feedstock/utility/handling costs - product revenue - avoided disposal revenue - explicit policy credit.",
+            "Baseline costs use a California official tipping-fee anchor, AD and HTC use literature-parameterized engineering cost structures with California energy repricing, and pyrolysis uses pathway-specific literature and repository economic reference tables.",
+            "Pyrolysis 2040 reference tables are retained as pathway-specific economic anchors and subtype scalers rather than being presented as direct present-day California prices.",
             "Scenario-specific environmental factors still come from the California region placeholder chain, so high-level emission multipliers affect both baseline and alternative pathway benefit calculations.",
         ],
     }

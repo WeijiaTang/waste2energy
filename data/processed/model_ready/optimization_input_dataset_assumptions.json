@@ -23,7 +23,7 @@
       "process_basis": "food_waste_ad_summary_proxy_with_canonical_operating_placeholders",
       "performance_basis": "explicit_energy_proxy_from_warm_wet_digestion_exhibit",
       "environment_basis": "explicit_food_waste_ad_emission_factor_from_epa_warm",
-      "cost_basis": "relative_pathway_proxy_index_only",
+      "cost_basis": "literature_parameterized_ad_cost_model_with_california_energy_repricing",
       "claim_boundary": "AD rows support regional planning comparison but should be written as pathway proxies rather than as calibrated facility-specific AD optimization."
     },
     {
@@ -36,7 +36,7 @@
       "process_basis": "regional_weighted_management_mix_proxy",
       "performance_basis": "california_weighted_energy_proxy_from_landfill_lfg_and_ad_share",
       "environment_basis": "zero_improvement_anchor_vs_current_california_weighted_mix",
-      "cost_basis": "relative_pathway_proxy_index_only",
+      "cost_basis": "official_california_landfill_tipping_fee_direct_cost_anchor",
       "claim_boundary": "Baseline rows are planning anchors for comparison and optimization accounting, not generalizable process-performance evidence."
     },
     {
@@ -49,7 +49,7 @@
       "process_basis": "representative_conditions_from_observed_htc_rows",
       "performance_basis": "synthetic_mixed_feed_rows_weighted_from_observed_htc_food_and_manure_profiles",
       "environment_basis": "carbon_retention_based_avoidance_proxy",
-      "cost_basis": "relative_pathway_proxy_index_only",
+      "cost_basis": "literature_parameterized_htc_cost_model_with_california_utility_repricing",
       "claim_boundary": "HTC rows are the strongest current mixed-feed planning candidates in the repository, but they still do not justify strong cross-study generalization claims."
     },
     {
@@ -62,7 +62,7 @@
       "process_basis": "representative_conditions_from_observed_pyrolysis_rows",
       "performance_basis": "synthetic_mixed_feed_rows_with_observed_pyrolysis_condition_anchor",
       "environment_basis": "carbon_retention_based_avoidance_proxy",
-      "cost_basis": "relative_pathway_proxy_index_only_with_future_pyrolysis_cost_reference_columns",
+      "cost_basis": "pathway_specific_pyrolysis_cost_and_price_references_with_explicit_non_feed_split",
       "claim_boundary": "Pyrolysis rows are optimization-ready mixed-feed candidates, but blended mixed-feed behavior is still partly proxy-built rather than directly observed."
     }
   ],
@@ -77,8 +77,9 @@
     "Pyrolysis and HTC rows are synthetic mixed-feed candidates anchored to repository observations and manure subtype balance references.",
     "Energy objective values now prefer explicit pathway energy intensities when they are available, and thermochemical rows still remain consistent with char-yield-based recoverable energy.",
     "Environmental objective values now prefer pathway-level emission-factor differentials for baseline and AD, while pyrolysis and HTC keep carbon-retention-based avoidance proxies.",
-    "Cost remains a relative proxy index across all pathways in the current planning layer; no pathway should be written as having a publication-ready real total-system-cost estimate yet.",
-    "Pyrolysis economic reference columns from ManurePyrolysisIAM are carried into the planning candidates for future calibration, but they are not yet used as the cross-pathway cost objective.",
+    "Cost now uses a net annual system cost structure across all pathways: annualized CAPEX + OPEX + feedstock/utility/handling costs - product revenue - avoided disposal revenue - explicit policy credit.",
+    "Baseline costs use a California official tipping-fee anchor, AD and HTC use literature-parameterized engineering cost structures with California energy repricing, and pyrolysis uses pathway-specific literature and repository economic reference tables.",
+    "Pyrolysis 2040 reference tables are retained as pathway-specific economic anchors and subtype scalers rather than being presented as direct present-day California prices.",
     "Scenario-specific environmental factors still come from the California region placeholder chain, so high-level emission multipliers affect both baseline and alternative pathway benefit calculations."
   ]
 }

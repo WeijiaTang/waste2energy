@@ -162,7 +162,7 @@ def plot_score_competition(plt, frame: pd.DataFrame):
 
     add_panel_label(axes[0], "A")
     fig.suptitle(
-        "HTC remains the leading planning pathway across baseline scenarios",
+        "Pyrolysis becomes the leading planning pathway after real cost activation",
         y=0.995,
         fontsize=9.8,
         fontweight="bold",
@@ -218,7 +218,7 @@ def plot_tradeoff_map(plt, frame: pd.DataFrame):
 
     add_panel_label(axes[0], "B")
     fig.suptitle(
-        "Best-case energy-environment map shows HTC dominance and AD's environment-sensitive role",
+        "HTC remains energy-rich, but pyrolysis is selected after economic scoring",
         y=0.995,
         fontsize=9.8,
         fontweight="bold",
@@ -290,7 +290,7 @@ def plot_robustness_matrix(plt, frame: pd.DataFrame):
 
     add_panel_label(axes[0], "C")
     fig.suptitle(
-        "Portfolio dominance stays with HTC, while AD appears only under environment-priority stress",
+        "Portfolio dominance stays with pyrolysis across the tested stress set",
         y=0.995,
         fontsize=9.8,
         fontweight="bold",
