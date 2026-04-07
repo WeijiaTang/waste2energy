@@ -5,6 +5,8 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
+from .surrogate_evaluator import SUPPORTED_SURROGATE_PATHWAYS
+
 
 SURROGATE_TARGET_COLUMNS = (
     "product_char_yield_pct",
@@ -30,7 +32,12 @@ def assemble_objective_frame(
     surrogate_predictions: pd.DataFrame,
     robustness_factor: float,
     real_cost_columns: tuple[str, ...],
+    config=None,
 ) -> tuple[pd.DataFrame, dict[str, str], pd.DataFrame, pd.DataFrame]:
+    if config is None:
+        from .solve import PlanningConfig
+
+        config = PlanningConfig()
     frame = base_frame.copy()
     merged = frame.merge(
         surrogate_predictions,
@@ -45,6 +52,10 @@ def assemble_objective_frame(
     merged["planning_environment_intensity_source"] = "missing"
     merged["planning_cost_intensity_source"] = "missing"
     merged["planning_carbon_load_source"] = "missing"
+    merged["scenario_total_mixed_feed_source"] = "missing"
+    merged["combined_uncertainty_ratio_source"] = "missing"
+    merged["policy_multiplier_source"] = "missing"
+    merged["scenario_external_evidence_source"] = "missing"
 
     for column, note in CRITICAL_COLUMNS.items():
         series = _required_numeric_column(merged, column)
@@ -76,12 +87,41 @@ def assemble_objective_frame(
         column="combined_uncertainty_ratio",
         default_value=NONCRITICAL_IMPUTATION_COLUMNS["combined_uncertainty_ratio"],
         flag_reason="default_uncertainty_zero",
+        source_column="combined_uncertainty_ratio_source",
+        explicit_source_label="explicit_uncertainty_column",
+        default_source_label="default_uncertainty_zero",
     )
     merged["policy_multiplier"], merged = _impute_with_flag(
         frame=merged,
         column="policy_multiplier",
         default_value=NONCRITICAL_IMPUTATION_COLUMNS["policy_multiplier"],
         flag_reason="default_policy_multiplier_one",
+        source_column="policy_multiplier_source",
+        explicit_source_label="explicit_policy_multiplier_column",
+        default_source_label="default_policy_multiplier_one",
+    )
+    merged["feedstock_scale_factor"], merged = _impute_with_flag(
+        frame=merged,
+        column="feedstock_scale_factor",
+        default_value=1.0,
+        flag_reason="default_feedstock_scale_factor_one",
+        source_column="scenario_external_evidence_source",
+        explicit_source_label="scenario_external_evidence_table",
+        default_source_label="default_feedstock_scale_factor_one",
+    )
+    merged["feedstock_cost_elasticity"], merged = _impute_with_flag(
+        frame=merged,
+        column="feedstock_cost_elasticity",
+        default_value=0.0,
+        flag_reason="default_feedstock_cost_elasticity_zero",
+        source_column=None,
+    )
+    merged["carbon_tax_usd_per_ton_co2e"], merged = _impute_with_flag(
+        frame=merged,
+        column="carbon_tax_usd_per_ton_co2e",
+        default_value=0.0,
+        flag_reason="default_carbon_tax_zero",
+        source_column=None,
     )
 
     allocation_ton = merged["scenario_wet_waste_feed_allocation_ton_per_year_proxy"]
@@ -92,6 +132,9 @@ def assemble_objective_frame(
         preferred=_optional_numeric_column(merged, "scenario_total_mixed_feed_ton_per_year_proxy"),
         fallback=allocation_ton,
         fallback_reason="fallback_to_scenario_wet_waste_feed_allocation",
+        source_column="scenario_total_mixed_feed_source",
+        preferred_source_label="explicit_total_mixed_feed_column",
+        fallback_source_label="fallback_to_wet_waste_feed_allocation",
     )
     total_mixed_feed_ton_safe = total_mixed_feed_ton.replace(0.0, np.nan)
     baseline_emission = merged["scenario_baseline_waste_treatment_emission_factor_kgco2e_per_metric_ton"]
@@ -99,6 +142,7 @@ def assemble_objective_frame(
 
     explicit_energy_intensity = _optional_numeric_column(merged, "pathway_energy_intensity_mj_per_ton")
     explicit_environment_benefit = _optional_numeric_column(merged, "pathway_environment_benefit_kgco2e_per_ton")
+    merged = _attach_surrogate_support_columns(merged, config)
 
     feedstock_hhv = _optional_numeric_column(merged, "feedstock_hhv_mj_per_kg")
     char_yield = _optional_numeric_column(merged, "product_char_yield_pct") / 100.0
@@ -165,8 +209,11 @@ def assemble_objective_frame(
         )
 
     uncertainty_ratio = merged["combined_uncertainty_ratio"].clip(lower=0.0)
-    robust_multiplier = (1.0 - robustness_factor * uncertainty_ratio).clip(lower=0.50, upper=1.00)
-    robust_cost_multiplier = (1.0 + robustness_factor * uncertainty_ratio).clip(lower=1.00, upper=1.50)
+    effective_uncertainty_ratio = (
+        uncertainty_ratio * pd.to_numeric(merged["evidence_uncertainty_multiplier"], errors="coerce").fillna(1.0)
+    ).clip(lower=0.0)
+    robust_multiplier = (1.0 - robustness_factor * effective_uncertainty_ratio).clip(lower=0.40, upper=1.00)
+    robust_cost_multiplier = (1.0 + robustness_factor * effective_uncertainty_ratio).clip(lower=1.00, upper=1.90)
 
     merged["recoverable_energy_proxy_mj_per_year"] = total_mixed_feed_ton * energy_intensity
     merged["stored_carbon_proxy_ton_per_year"] = (
@@ -174,15 +221,18 @@ def assemble_objective_frame(
     )
     merged["avoided_baseline_emissions_proxy_kgco2e_per_year"] = total_mixed_feed_ton * environment_intensity
 
+    merged["planning_energy_intensity_mj_per_ton"] = energy_intensity * robust_multiplier
+    merged["planning_environment_intensity_kgco2e_per_ton"] = environment_intensity * robust_multiplier
+    merged["planning_carbon_load_kgco2e_per_ton"] = _build_carbon_load(merged, baseline_emission)
+
     cost_intensity, annual_cost, cost_status, merged = _build_cost_terms(
         frame=merged,
         real_cost_columns=real_cost_columns,
         allocation_ton=allocation_ton,
         total_mixed_feed_ton=total_mixed_feed_ton,
+        carbon_load=merged["planning_carbon_load_kgco2e_per_ton"],
     )
 
-    merged["planning_energy_intensity_mj_per_ton"] = energy_intensity * robust_multiplier
-    merged["planning_environment_intensity_kgco2e_per_ton"] = environment_intensity * robust_multiplier
     merged["planning_cost_intensity_proxy_or_real_per_ton"] = cost_intensity * robust_cost_multiplier
 
     merged["planning_energy_objective"] = total_mixed_feed_ton * merged["planning_energy_intensity_mj_per_ton"]
@@ -195,10 +245,10 @@ def assemble_objective_frame(
     ).replace([np.inf, -np.inf], np.nan).fillna(merged["total_cost_proxy_or_real"])
 
     merged["robustness_penalty"] = (
-        robustness_factor * uncertainty_ratio * np.maximum(merged["planning_energy_objective"], 0.0)
+        robustness_factor * effective_uncertainty_ratio * np.maximum(merged["planning_energy_objective"], 0.0)
     )
     merged["combined_uncertainty_ratio"] = uncertainty_ratio
-    merged["planning_carbon_load_kgco2e_per_ton"] = _build_carbon_load(merged, baseline_emission)
+    merged["effective_uncertainty_ratio"] = effective_uncertainty_ratio
     merged["planning_energy_balance_mj_per_year"] = (
         total_mixed_feed_ton * merged["planning_energy_intensity_mj_per_ton"]
     )
@@ -223,7 +273,7 @@ def assemble_objective_frame(
         "energy_objective_status": "surrogate_or_direct_energy_intensity_with_explicit_missing_data_guardrails",
         "environment_objective_status": "surrogate_or_direct_environment_benefit_with_explicit_missing_data_guardrails",
         "cost_objective_status": cost_status,
-        "robustness_status": "prediction_interval_penalty_applied_to_energy_environment_and_cost",
+        "robustness_status": "prediction_interval_penalty_applied_with_evidence_weighted_uncertainty",
         "data_quality_status": "critical-missing candidates excluded; noncritical imputations flagged in outputs",
     }
 
@@ -241,6 +291,7 @@ def _build_cost_terms(
     real_cost_columns: tuple[str, ...],
     allocation_ton: pd.Series,
     total_mixed_feed_ton: pd.Series,
+    carbon_load: pd.Series,
 ) -> tuple[pd.Series, pd.Series, str, pd.DataFrame]:
     annual_cost = _optional_numeric_column(frame, "net_system_cost_usd_per_year")
     unit_net_cost = _optional_numeric_column(frame, "unit_net_system_cost_usd_per_ton")
@@ -290,14 +341,41 @@ def _build_cost_terms(
             "planning_cost_intensity_proxy_or_real_per_ton:no_valid_real_cost_source_available",
         )
 
-    return intensity, annual, "rowwise_real_cost_source_hierarchy", frame
+    feedstock_scale_factor = _optional_numeric_column(frame, "feedstock_scale_factor").clip(lower=1e-6).fillna(1.0)
+    feedstock_cost_elasticity = _optional_numeric_column(frame, "feedstock_cost_elasticity").clip(lower=0.0).fillna(0.0)
+    scenario_scale_multiplier = np.power(feedstock_scale_factor, -feedstock_cost_elasticity).clip(0.70, 1.05)
+    carbon_tax = _optional_numeric_column(frame, "carbon_tax_usd_per_ton_co2e").clip(lower=0.0).fillna(0.0)
+    carbon_tax_cost = carbon_tax * carbon_load.clip(lower=0.0).fillna(0.0) / 1000.0
+    information_premium = _optional_numeric_column(frame, "information_deficit_premium_usd_per_ton").clip(lower=0.0).fillna(0.0)
+
+    frame["scenario_scale_cost_multiplier"] = scenario_scale_multiplier
+    frame["carbon_tax_cost_intensity_usd_per_ton"] = carbon_tax_cost
+    frame["information_deficit_premium_usd_per_ton"] = information_premium
+
+    adjusted_intensity = intensity * scenario_scale_multiplier + carbon_tax_cost + information_premium
+    adjusted_annual = (
+        adjusted_intensity * allocation_ton_safe
+    ).replace([np.inf, -np.inf], np.nan).fillna(annual * scenario_scale_multiplier)
+
+    return adjusted_intensity, adjusted_annual, "rowwise_real_cost_source_with_external_evidence_and_information_premium", frame
 
 
 def _build_carbon_load(frame: pd.DataFrame, baseline_emission: pd.Series) -> pd.Series:
     explicit = _optional_numeric_column(frame, "pathway_emission_factor_kgco2e_per_metric_ton_scenario_proxy")
     fallback = baseline_emission - frame["planning_environment_intensity_kgco2e_per_ton"]
+    is_surrogate_supported = (
+        pd.to_numeric(frame.get("is_surrogate_supported", pd.Series([0.0] * len(frame), index=frame.index)), errors="coerce")
+        .fillna(0.0)
+        .astype(bool)
+    )
     frame.loc[explicit.notna(), "planning_carbon_load_source"] = "explicit_pathway_emission_factor"
-    frame.loc[explicit.isna() & fallback.notna(), "planning_carbon_load_source"] = "baseline_minus_environment_benefit"
+    fallback_mask = explicit.isna() & fallback.notna()
+    supported_mask = fallback_mask & is_surrogate_supported
+    limited_mask = fallback_mask & ~is_surrogate_supported
+    if supported_mask.any():
+        frame.loc[supported_mask, "planning_carbon_load_source"] = "baseline_minus_environment_benefit_surrogate_supported"
+    if limited_mask.any():
+        frame.loc[limited_mask, "planning_carbon_load_source"] = "baseline_minus_environment_benefit_evidence_limited"
     carbon_load = explicit.where(explicit.notna(), fallback)
     # Carbon load is defined as gross residual emissions only. Any carbon credit
     # or offset should be represented in a separate incentive or benefit term.
@@ -359,8 +437,18 @@ def _coalesce_with_flag(
     preferred: pd.Series,
     fallback: pd.Series,
     fallback_reason: str,
+    source_column: str | None = None,
+    preferred_source_label: str | None = None,
+    fallback_source_label: str | None = None,
 ) -> tuple[pd.Series, pd.DataFrame]:
     result = preferred.where(preferred.notna(), fallback)
+    if source_column:
+        preferred_mask = preferred.notna()
+        fallback_mask = preferred.isna() & fallback.notna()
+        if preferred_source_label and preferred_mask.any():
+            frame.loc[preferred_mask, source_column] = preferred_source_label
+        if fallback_source_label and fallback_mask.any():
+            frame.loc[fallback_mask, source_column] = fallback_source_label
     imputed_mask = preferred.isna() & fallback.notna()
     if imputed_mask.any():
         frame.loc[imputed_mask, "planning_imputation_notes"] = _append_message(
@@ -376,9 +464,18 @@ def _impute_with_flag(
     column: str,
     default_value: float,
     flag_reason: str,
+    source_column: str | None = None,
+    explicit_source_label: str | None = None,
+    default_source_label: str | None = None,
 ) -> tuple[pd.Series, pd.DataFrame]:
     values = _optional_numeric_column(frame, column)
     missing_mask = values.isna()
+    if source_column:
+        explicit_mask = values.notna()
+        if explicit_source_label and explicit_mask.any():
+            frame.loc[explicit_mask, source_column] = explicit_source_label
+        if default_source_label and missing_mask.any():
+            frame.loc[missing_mask, source_column] = default_source_label
     if missing_mask.any():
         frame.loc[missing_mask, "planning_imputation_notes"] = _append_message(
             frame.loc[missing_mask, "planning_imputation_notes"],
@@ -400,3 +497,47 @@ def _adopt_series(
         frame.loc[adopt_mask, source_column] = source_label
     updated = target.where(target.notna(), candidate)
     return updated, frame
+
+
+def _attach_surrogate_support_columns(frame: pd.DataFrame, config) -> pd.DataFrame:
+    pathway = frame["pathway"].astype(str).str.strip().str.lower()
+    surrogate_mode = frame.get("surrogate_mode", pd.Series([""] * len(frame), index=frame.index)).astype(str)
+    support_level = np.select(
+        [
+            ~pathway.isin(tuple(SUPPORTED_SURROGATE_PATHWAYS)),
+            surrogate_mode.eq("trained_surrogate"),
+            surrogate_mode.eq("trained_surrogate_with_documented_fallback"),
+            surrogate_mode.eq("documented_static_fallback"),
+        ],
+        [
+            "unsupported_pathway",
+            "surrogate_supported",
+            "trained_surrogate_with_documented_fallback",
+            "documented_static_fallback",
+        ],
+        default="documented_static_fallback",
+    )
+    weight_map = {
+        "surrogate_supported": 1.0,
+        "trained_surrogate_with_documented_fallback": float(config.partial_surrogate_weight),
+        "documented_static_fallback": float(config.static_fallback_weight),
+        "unsupported_pathway": float(config.unsupported_pathway_weight),
+    }
+    uncertainty_multiplier_map = {
+        "surrogate_supported": 1.0,
+        "trained_surrogate_with_documented_fallback": float(config.partial_surrogate_uncertainty_multiplier),
+        "documented_static_fallback": float(config.static_fallback_uncertainty_multiplier),
+        "unsupported_pathway": float(config.unsupported_pathway_uncertainty_multiplier),
+    }
+    premium_map = {
+        "surrogate_supported": 0.0,
+        "trained_surrogate_with_documented_fallback": float(config.partial_surrogate_information_premium_usd_per_ton),
+        "documented_static_fallback": float(config.static_fallback_information_premium_usd_per_ton),
+        "unsupported_pathway": float(config.unsupported_pathway_information_premium_usd_per_ton),
+    }
+    frame["surrogate_support_level"] = support_level
+    frame["is_surrogate_supported"] = frame["surrogate_support_level"].eq("surrogate_supported")
+    frame["evidence_based_weight"] = frame["surrogate_support_level"].map(weight_map).astype(float)
+    frame["evidence_uncertainty_multiplier"] = frame["surrogate_support_level"].map(uncertainty_multiplier_map).astype(float)
+    frame["information_deficit_premium_usd_per_ton"] = frame["surrogate_support_level"].map(premium_map).astype(float)
+    return frame

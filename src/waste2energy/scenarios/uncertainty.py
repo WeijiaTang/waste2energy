@@ -45,7 +45,7 @@ def build_uncertainty_summary(
     if decision_stability.empty:
         objective_summary["stable_candidate_count"] = 0
         objective_summary["dominant_sample_id"] = ""
-        objective_summary["dominant_selection_rate"] = 0.0
+        objective_summary["dominant_selection_rate"] = pd.NA
         return objective_summary.sort_values("scenario_name").reset_index(drop=True)
 
     stable_counts = (
@@ -71,7 +71,7 @@ def build_uncertainty_summary(
     return (
         objective_summary.merge(stable_counts, on="scenario_name", how="left")
         .merge(dominant, on="scenario_name", how="left")
-        .fillna({"stable_candidate_count": 0, "dominant_sample_id": "", "dominant_selection_rate": 0.0})
+        .fillna({"stable_candidate_count": 0, "dominant_sample_id": ""})
         .sort_values("scenario_name")
         .reset_index(drop=True)
     )
@@ -79,4 +79,4 @@ def build_uncertainty_summary(
 
 def _safe_ratio_series(numerator: pd.Series, denominator: pd.Series) -> pd.Series:
     safe_denominator = denominator.replace(0.0, pd.NA)
-    return (numerator / safe_denominator).fillna(0.0)
+    return numerator / safe_denominator

@@ -123,6 +123,8 @@ def build_seed_aggregate_summary(evaluation_episode_summary: pd.DataFrame) -> pd
             mean_realized_environment=("total_realized_environment", "mean"),
             mean_realized_cost=("total_realized_cost", "mean"),
             mean_max_violation_penalty=("max_violation_penalty", "mean"),
+            mean_violation_rate=("violation_rate", "mean"),
+            mean_resilience_index=("resilience_index", "mean"),
         )
         .reset_index()
     )
@@ -137,6 +139,8 @@ def build_seed_aggregate_summary(evaluation_episode_summary: pd.DataFrame) -> pd
             environment_mean=("mean_realized_environment", "mean"),
             cost_mean=("mean_realized_cost", "mean"),
             max_violation_mean=("mean_max_violation_penalty", "mean"),
+            violation_rate_mean=("mean_violation_rate", "mean"),
+            resilience_index_mean=("mean_resilience_index", "mean"),
         )
         .reset_index()
         .fillna({"reward_std": 0.0})

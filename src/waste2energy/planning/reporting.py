@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 
 from ..common import build_run_manifest, write_json
@@ -28,7 +29,7 @@ def build_main_results_table(
     pathway_summary["score_gap_to_scenario_best_pct"] = (
         (pathway_summary["scenario_best_score"] - pathway_summary["best_case_score"])
         / pathway_summary["scenario_best_score"].replace(0.0, pd.NA)
-    ).fillna(0.0)
+    )
 
     best_case_details = scored_cases[
         [
@@ -82,18 +83,32 @@ def build_main_results_table(
     )
 
     pathway_summary["stress_test_tags"] = pathway_summary["stress_test_tags"].fillna("none")
-    pathway_summary["selected_in_baseline_portfolio"] = (
-        pd.to_numeric(pathway_summary["portfolio_selected_count"], errors="coerce").fillna(0.0) > 0
+    pathway_summary = _require_numeric_columns(
+        pathway_summary,
+        columns=(
+            "best_case_score",
+            "portfolio_selected_count",
+            "portfolio_allocated_feed_share",
+            "best_case_energy_objective",
+            "best_case_environment_objective",
+        ),
+        context="Planning main results table",
     )
-    pathway_summary["baseline_portfolio_share_pct"] = pathway_summary[
-        "portfolio_allocated_feed_share"
-    ].fillna(0.0) * 100.0
-    pathway_summary["best_case_energy_pj_per_year"] = pathway_summary[
-        "best_case_energy_objective"
-    ].fillna(0.0) / 1e9
-    pathway_summary["best_case_environment_ktco2e_per_year"] = pathway_summary[
-        "best_case_environment_objective"
-    ].fillna(0.0) / 1e6
+    selected_count = pd.to_numeric(pathway_summary["portfolio_selected_count"], errors="coerce")
+    pathway_summary["selected_in_baseline_portfolio"] = pd.Series(
+        np.where(selected_count.isna(), pd.NA, selected_count > 0.0),
+        index=pathway_summary.index,
+        dtype="boolean",
+    )
+    pathway_summary["baseline_portfolio_share_pct"] = (
+        pd.to_numeric(pathway_summary["portfolio_allocated_feed_share"], errors="coerce") * 100.0
+    )
+    pathway_summary["best_case_energy_pj_per_year"] = (
+        pd.to_numeric(pathway_summary["best_case_energy_objective"], errors="coerce") / 1e9
+    )
+    pathway_summary["best_case_environment_ktco2e_per_year"] = (
+        pd.to_numeric(pathway_summary["best_case_environment_objective"], errors="coerce") / 1e6
+    )
     pathway_summary["best_case_operating_window"] = pathway_summary.apply(
         _format_operating_window,
         axis=1,
@@ -143,9 +158,11 @@ def build_main_results_table(
         }
     )
     final_table["score_gap_to_scenario_best_pct"] = (
-        final_table["score_gap_to_scenario_best_pct"].fillna(0.0) * 100.0
+        pd.to_numeric(final_table["score_gap_to_scenario_best_pct"], errors="coerce") * 100.0
     )
-    final_table["max_stress_selection_rate"] = final_table["max_stress_selection_rate"].fillna(0.0) * 100.0
+    final_table["max_stress_selection_rate"] = (
+        pd.to_numeric(final_table["max_stress_selection_rate"], errors="coerce") * 100.0
+    )
     final_table["best_case_score_index"] = final_table["best_case_score_index"].round(3)
     final_table["score_gap_to_scenario_best_pct"] = final_table["score_gap_to_scenario_best_pct"].round(1)
     final_table["best_case_energy_pj_per_year"] = final_table["best_case_energy_pj_per_year"].round(2)
@@ -266,7 +283,8 @@ def build_main_results_visualization_bundle(table: pd.DataFrame) -> dict[str, ob
         metric_frame["metric_label"] = metric_label
         metric_frame["metric_family"] = metric_family
         metric_frame["unit"] = unit
-        metric_frame["value"] = pd.to_numeric(metric_frame[metric_key], errors="coerce").fillna(0.0)
+        metric_frame["value"] = pd.to_numeric(metric_frame[metric_key], errors="coerce")
+        metric_frame["value_available"] = metric_frame["value"].notna()
         metric_frame["value_label"] = metric_frame["value"].map(lambda value: _format_metric_label(value, unit))
         metric_frame = metric_frame.drop(columns=[metric_key])
         metric_frames.append(metric_frame)
@@ -371,7 +389,7 @@ def _aggregate_pathway_stress(frame: pd.DataFrame) -> pd.DataFrame:
                 "scenario_name": scenario_name,
                 "pathway": pathway,
                 "max_stress_selection_rate": float(
-                    pd.to_numeric(subset["selection_rate"], errors="coerce").fillna(0.0).max()
+                    pd.to_numeric(subset["selection_rate"], errors="coerce").max()
                 ),
                 "stable_case_count": int(subset["stable_under_majority_rule"].fillna(False).astype(bool).sum()),
                 "consensus_case_count": int(subset["stable_under_consensus_rule"].fillna(False).astype(bool).sum()),
@@ -394,31 +412,38 @@ def _format_operating_window(row: pd.Series) -> str:
 
 
 def _format_blend_label(row: pd.Series) -> str:
-    manure = pd.to_numeric(pd.Series([row.get("best_case_blend_manure_ratio")]), errors="coerce").fillna(0.0).iloc[0]
-    wet = pd.to_numeric(pd.Series([row.get("best_case_blend_wet_waste_ratio")]), errors="coerce").fillna(0.0).iloc[0]
+    manure = _optional_float(row.get("best_case_blend_manure_ratio"))
+    wet = _optional_float(row.get("best_case_blend_wet_waste_ratio"))
+    if pd.isna(manure) or pd.isna(wet):
+        return "blend not available"
     return f"{manure:.1f} manure / {wet:.1f} wet waste"
 
 
 def _classify_results_row(row: pd.Series) -> str:
-    selected = bool(row.get("portfolio_selected_count", 0) > 0)
-    portfolio_share = float(pd.to_numeric(pd.Series([row.get("portfolio_allocated_feed_share")]), errors="coerce").fillna(0.0).iloc[0])
-    stress_rate = float(pd.to_numeric(pd.Series([row.get("max_stress_selection_rate")]), errors="coerce").fillna(0.0).iloc[0])
-    score_gap = float(pd.to_numeric(pd.Series([row.get("score_gap_to_scenario_best_pct")]), errors="coerce").fillna(0.0).iloc[0])
+    selected_count = _optional_float(row.get("portfolio_selected_count"))
+    if pd.isna(selected_count):
+        return "not_evaluated"
+    selected = bool(selected_count > 0.0)
+    portfolio_share = _optional_float(row.get("portfolio_allocated_feed_share"))
+    stress_rate = _optional_float(row.get("max_stress_selection_rate"))
+    score_gap = _optional_float(row.get("score_gap_to_scenario_best_pct"))
     pathway = str(row.get("pathway", ""))
     tags = _split_stress_test_tags(row.get("stress_test_tags", ""))
 
-    if selected and portfolio_share >= 0.99:
+    if selected and pd.notna(portfolio_share) and portfolio_share >= 0.99:
         return "dominant_baseline_portfolio"
     if selected:
         return "supporting_baseline_portfolio"
     if pathway == "baseline":
         return "baseline_comparison_anchor"
-    if stress_rate > 0 and "environment_priority" in tags:
+    if pd.notna(stress_rate) and stress_rate > 0 and "environment_priority" in tags:
         return "environment_sensitive_alternative"
-    if stress_rate > 0:
+    if pd.notna(stress_rate) and stress_rate > 0:
         return "stress_sensitive_alternative"
-    if score_gap <= 0.15:
+    if pd.notna(score_gap) and score_gap <= 0.15:
         return "competitive_unselected_alternative"
+    if pd.isna(stress_rate) and pd.isna(score_gap):
+        return "not_evaluated"
     return "comparison_only_pathway"
 
 
@@ -426,13 +451,15 @@ def _build_results_sentence(row: pd.Series) -> str:
     scenario = str(row.get("scenario_name", "scenario"))
     pathway = str(row.get("pathway", "pathway"))
     label = str(row.get("writing_label", ""))
-    share = float(pd.to_numeric(pd.Series([row.get("portfolio_allocated_feed_share")]), errors="coerce").fillna(0.0).iloc[0]) * 100.0
+    share = _optional_float(row.get("portfolio_allocated_feed_share"))
     stress_tags = str(row.get("stress_test_tags", "none"))
 
     if label == "dominant_baseline_portfolio":
         return f"In {scenario}, {pathway} is the dominant baseline portfolio pathway with full allocated-share coverage."
     if label == "supporting_baseline_portfolio":
-        return f"In {scenario}, {pathway} enters the baseline portfolio with {share:.1f}% allocated share."
+        if pd.isna(share):
+            return f"In {scenario}, {pathway} enters the baseline portfolio, but the allocated-share value is not available in the current outputs."
+        return f"In {scenario}, {pathway} enters the baseline portfolio with {share * 100.0:.1f}% allocated share."
     if label == "environment_sensitive_alternative":
         return f"In {scenario}, {pathway} is not selected in the baseline portfolio but enters under environment-priority stress."
     if label == "stress_sensitive_alternative":
@@ -441,6 +468,8 @@ def _build_results_sentence(row: pd.Series) -> str:
         return f"In {scenario}, {pathway} remains competitive in score but is not selected in the baseline portfolio."
     if label == "baseline_comparison_anchor":
         return f"In {scenario}, baseline is retained as the comparison anchor rather than as a selected optimization pathway."
+    if label == "not_evaluated":
+        return f"In {scenario}, {pathway} remains available for comparison, but the current outputs do not fully quantify its manuscript-facing planning status."
     return f"In {scenario}, {pathway} acts as a comparison-only pathway under the current planning evidence."
 
 
@@ -453,6 +482,7 @@ def _format_writing_label(label: object) -> str:
         "competitive_unselected_alternative": "competitive but unselected",
         "baseline_comparison_anchor": "comparison anchor",
         "comparison_only_pathway": "comparison only",
+        "not_evaluated": "not fully evaluated",
     }
     return mapping.get(str(label), str(label))
 
@@ -508,6 +538,8 @@ def _classify_claim_color_group(claim_boundary: object) -> str:
 
 
 def _format_metric_label(value: float, unit: str) -> str:
+    if pd.isna(value):
+        return "not available"
     if unit == "index":
         return f"{value:.3f}"
     if unit == "pct":
@@ -525,3 +557,30 @@ def _split_stress_test_tags(raw_value: object) -> set[str]:
         for part in str(raw_value or "").split("|")
         if part.strip() and part.strip().lower() != "none"
     }
+
+
+def _optional_float(value: object) -> float | object:
+    numeric = pd.to_numeric(pd.Series([value]), errors="coerce").iloc[0]
+    if pd.isna(numeric):
+        return pd.NA
+    return float(numeric)
+
+
+def _require_numeric_columns(
+    frame: pd.DataFrame,
+    *,
+    columns: tuple[str, ...],
+    context: str,
+) -> pd.DataFrame:
+    validated = frame.copy()
+    for column in columns:
+        if column not in validated.columns:
+            raise ValueError(f"{context} requires column '{column}', but it is missing.")
+        values = pd.to_numeric(validated[column], errors="coerce").replace([np.inf, -np.inf], np.nan)
+        if values.isna().any():
+            row_preview = ", ".join(validated.loc[values.isna(), "pathway"].astype(str).head(5).tolist())
+            raise ValueError(
+                f"{context} encountered missing/non-finite values in '{column}' for pathway row(s): {row_preview}."
+            )
+        validated[column] = values
+    return validated

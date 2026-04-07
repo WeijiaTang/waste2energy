@@ -97,6 +97,31 @@ def build_operation_environment_specs(
         max_share = _value_from_mapping(decision_row, "max_allocated_feed_share", baseline_share)
         coverage_range_ratio = _value(summary, "coverage_range_ratio")
         candidate_share_cap = _safe_ratio(candidate_capacity_cap, effective_budget)
+        avg_share_source = (
+            "decision_stability" if "avg_allocated_feed_share" in decision_row else "baseline_allocation_share_fallback"
+        )
+        max_share_source = (
+            "decision_stability" if "max_allocated_feed_share" in decision_row else "baseline_allocation_share_fallback"
+        )
+        cross_scenario_selection_rate, cross_scenario_selection_rate_source = _value_from_mapping_with_source(
+            cross_row,
+            "cross_scenario_selection_rate",
+            0.0,
+            fallback_source="cross_scenario_default_zero",
+        )
+        selected_in_all_scenarios, selected_in_all_scenarios_source = _value_from_mapping_with_source(
+            cross_row,
+            "selected_in_all_scenarios",
+            False,
+            fallback_source="cross_scenario_default_false",
+        )
+        energy_range_ratio = _value(summary, "energy_range_ratio")
+        environment_range_ratio = _value(summary, "environment_range_ratio")
+        cost_range_ratio = _value(summary, "cost_range_ratio")
+        energy_disturbance_amplitude = _clip(energy_range_ratio, 0.05, 0.35)
+        environment_disturbance_amplitude = _clip(environment_range_ratio, 0.05, 0.35)
+        cost_disturbance_amplitude = _clip(cost_range_ratio, 0.05, 0.35)
+        coverage_disturbance_amplitude = _clip(coverage_range_ratio, 0.05, 0.35)
 
         lower_share = max(0.05, avg_share * max(0.50, 1.0 - coverage_range_ratio))
         upper_share = min(
@@ -119,6 +144,8 @@ def build_operation_environment_specs(
                 "scenario_feed_budget_ton_per_year": _value(allocation, "scenario_feed_budget_ton_per_year"),
                 "effective_processing_budget_ton_per_year": effective_budget,
                 "candidate_capacity_cap_ton_per_year": candidate_capacity_cap,
+                "avg_share_source": avg_share_source,
+                "max_share_source": max_share_source,
                 "scenario_candidate_share_lower_bound": lower_share,
                 "scenario_candidate_share_target": target_share,
                 "scenario_candidate_share_upper_bound": upper_share,
@@ -141,25 +168,25 @@ def build_operation_environment_specs(
                 "global_net_environment_reference_kgco2e_per_year": global_refs["net_environment"],
                 "global_cost_reference_proxy_or_real_per_year": global_refs["cost"],
                 "global_carbon_load_reference_kgco2e_per_year": global_refs["carbon_load"],
-                "energy_disturbance_amplitude": _clip(_value(summary, "energy_range_ratio"), 0.05, 0.35),
-                "environment_disturbance_amplitude": _clip(
-                    _value(summary, "environment_range_ratio"), 0.05, 0.35
-                ),
-                "cost_disturbance_amplitude": _clip(_value(summary, "cost_range_ratio"), 0.05, 0.35),
-                "coverage_disturbance_amplitude": _clip(coverage_range_ratio, 0.05, 0.35),
-                "market_noise_amplitude": _clip(max(_value(summary, "cost_range_ratio"), _value(summary, "energy_range_ratio")) * 0.08, 0.02, 0.15),
+                "energy_disturbance_amplitude": energy_disturbance_amplitude,
+                "environment_disturbance_amplitude": environment_disturbance_amplitude,
+                "cost_disturbance_amplitude": cost_disturbance_amplitude,
+                "coverage_disturbance_amplitude": coverage_disturbance_amplitude,
+                "energy_disturbance_source": _clip_source(energy_range_ratio, 0.05, 0.35),
+                "environment_disturbance_source": _clip_source(environment_range_ratio, 0.05, 0.35),
+                "cost_disturbance_source": _clip_source(cost_range_ratio, 0.05, 0.35),
+                "coverage_disturbance_source": _clip_source(coverage_range_ratio, 0.05, 0.35),
+                "market_noise_amplitude": _clip(max(cost_range_ratio, energy_range_ratio) * 0.08, 0.02, 0.15),
                 "feed_quality_noise_amplitude": _clip(coverage_range_ratio * 0.30, 0.02, 0.18),
-                "carbon_noise_amplitude": _clip(_value(summary, "environment_range_ratio") * 0.08, 0.02, 0.15),
+                "carbon_noise_amplitude": _clip(environment_range_ratio * 0.08, 0.02, 0.15),
                 "noise_seed_base": _stable_seed(f"{scenario_name}|{dominant_sample_id}"),
                 "max_unmet_feed_ton_per_year": _value(summary, "unmet_feed_max"),
                 "dominant_selection_rate": _value(summary, "dominant_selection_rate"),
                 "stable_candidate_count": int(_value(summary, "stable_candidate_count")),
-                "cross_scenario_selection_rate": _value_from_mapping(
-                    cross_row, "cross_scenario_selection_rate", 0.0
-                ),
-                "selected_in_all_scenarios": bool(
-                    _value_from_mapping(cross_row, "selected_in_all_scenarios", False)
-                ),
+                "cross_scenario_selection_rate": cross_scenario_selection_rate,
+                "cross_scenario_selection_rate_source": cross_scenario_selection_rate_source,
+                "selected_in_all_scenarios": bool(selected_in_all_scenarios),
+                "selected_in_all_scenarios_source": selected_in_all_scenarios_source,
                 "capacity_binding_reason": str(constraint_row.get("capacity_binding_reason", "")),
                 "anchor_selection_score": float(record["anchor_score"]),
                 "objective_weight_preset": weight_system.preset_name,
@@ -270,23 +297,34 @@ def _build_global_physical_references(allocations: pd.DataFrame) -> dict[str, fl
             "cost": 1.0,
             "carbon_load": 1.0,
         }
-    allocated_feed = pd.to_numeric(allocations["allocated_feed_ton_per_year"], errors="coerce").fillna(0.0)
+    _require_numeric_columns(
+        allocations,
+        columns=(
+            "allocated_feed_ton_per_year",
+            "planning_energy_intensity_mj_per_ton",
+            "planning_environment_intensity_kgco2e_per_ton",
+            "planning_carbon_load_kgco2e_per_ton",
+            "planning_cost_intensity_proxy_or_real_per_ton",
+        ),
+        context="operation global physical reference construction",
+    )
+    allocated_feed = pd.to_numeric(allocations["allocated_feed_ton_per_year"], errors="coerce")
     energy = (
         allocated_feed
-        * pd.to_numeric(allocations["planning_energy_intensity_mj_per_ton"], errors="coerce").fillna(0.0)
+        * pd.to_numeric(allocations["planning_energy_intensity_mj_per_ton"], errors="coerce")
     ).abs()
     environment = (
         allocated_feed
-        * pd.to_numeric(allocations["planning_environment_intensity_kgco2e_per_ton"], errors="coerce").fillna(0.0)
+        * pd.to_numeric(allocations["planning_environment_intensity_kgco2e_per_ton"], errors="coerce")
     )
     carbon_load = (
         allocated_feed
-        * pd.to_numeric(allocations["planning_carbon_load_kgco2e_per_ton"], errors="coerce").fillna(0.0)
+        * pd.to_numeric(allocations["planning_carbon_load_kgco2e_per_ton"], errors="coerce")
     )
     net_environment = (environment - carbon_load).abs()
     cost = (
         allocated_feed
-        * pd.to_numeric(allocations["planning_cost_intensity_proxy_or_real_per_ton"], errors="coerce").fillna(0.0)
+        * pd.to_numeric(allocations["planning_cost_intensity_proxy_or_real_per_ton"], errors="coerce")
     ).abs()
     return {
         "energy": max(float(energy.max()), 1.0),
@@ -304,6 +342,14 @@ def _clip(value: float, minimum: float, maximum: float) -> float:
     return max(minimum, min(maximum, value))
 
 
+def _clip_source(value: float, minimum: float, maximum: float) -> str:
+    if value < minimum:
+        return "lower_clip"
+    if value > maximum:
+        return "upper_clip"
+    return "direct"
+
+
 def _safe_ratio(numerator: float, denominator: float) -> float:
     if denominator <= 0.0:
         return 0.0
@@ -312,15 +358,37 @@ def _safe_ratio(numerator: float, denominator: float) -> float:
 
 def _value(row: pd.Series, column: str) -> float:
     if column not in row.index:
-        return 0.0
-    return float(pd.to_numeric(pd.Series([row[column]]), errors="coerce").fillna(0.0).iloc[0])
+        raise ValueError(f"Operation input is missing required column '{column}'.")
+    value = pd.to_numeric(pd.Series([row[column]]), errors="coerce").iloc[0]
+    if pd.isna(value):
+        scenario_name = str(row.get("scenario_name", "unknown_scenario"))
+        case_id = str(row.get("optimization_case_id", row.get("dominant_case_id", "unknown_case")))
+        raise ValueError(
+            f"Operation input for scenario '{scenario_name}' case '{case_id}' contains missing/non-numeric value in '{column}'."
+        )
+    return float(value)
 
 
 def _value_from_mapping(mapping: dict[str, object], key: str, default: float | bool) -> float | bool:
     value = mapping.get(key, default)
     if isinstance(default, bool):
         return bool(value)
-    return float(pd.to_numeric(pd.Series([value]), errors="coerce").fillna(default).iloc[0])
+    numeric = pd.to_numeric(pd.Series([value]), errors="coerce").iloc[0]
+    if pd.isna(numeric):
+        raise ValueError(f"Operation mapping contains missing/non-numeric value in '{key}'.")
+    return float(numeric)
+
+
+def _value_from_mapping_with_source(
+    mapping: dict[str, object],
+    key: str,
+    default: float | bool,
+    *,
+    fallback_source: str,
+) -> tuple[float | bool, str]:
+    if key in mapping:
+        return _value_from_mapping(mapping, key, default), "mapped_value"
+    return default, fallback_source
 
 
 def _coerce_float(value: object, default: float | None = 0.0) -> float | None:
@@ -344,3 +412,21 @@ def _validate_operation_input_freshness(bundle: OperationInputBundle) -> None:
             "Scenario outputs are older than the planning outputs used by the operation layer. "
             "Re-run 'waste2energy-scenario' after regenerating planning outputs."
         )
+
+
+def _require_numeric_columns(
+    frame: pd.DataFrame,
+    *,
+    columns: tuple[str, ...],
+    context: str,
+) -> None:
+    for column in columns:
+        if column not in frame.columns:
+            raise ValueError(f"{context} requires column '{column}', but it is missing.")
+        values = pd.to_numeric(frame[column], errors="coerce")
+        if values.isna().any():
+            invalid_rows = frame.loc[values.isna(), "optimization_case_id"] if "optimization_case_id" in frame.columns else frame.index[values.isna()]
+            preview = ", ".join(str(value) for value in list(invalid_rows[:5]))
+            raise ValueError(
+                f"{context} encountered missing/non-numeric values in '{column}' for row(s): {preview}."
+            )

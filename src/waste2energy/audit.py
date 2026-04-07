@@ -3,13 +3,19 @@
 from __future__ import annotations
 
 import json
+import warnings
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 
 from .config import OUTPUTS_ROOT, resolve_surrogate_outputs_dir
 from .data import DATASET_KEYS, TARGET_COLUMNS
 from .models import MODEL_KEYS
+
+
+class InconsistencyWarning(UserWarning):
+    pass
 
 
 def _default_split_summary_paths() -> dict[str, Path]:
@@ -61,6 +67,7 @@ def build_confirmatory_audit(
     pathway_reliability = build_pathway_reliability_summary(ml_flags)
     planning_flags = build_planning_claim_flag_table(active_planning_dir, active_scenario_dir)
     planning_ml_consistency = build_planning_ml_consistency_summary(active_planning_dir, pathway_reliability)
+    _emit_surrogate_led_inconsistency_warnings(planning_ml_consistency)
     planning_data_quality = _read_csv_if_exists(active_planning_dir / "planning_data_quality_summary.csv")
     operation_table = build_operation_comparison_summary(active_operation_dir)
     operation_flags = build_operation_claim_flag_table(active_operation_dir)
@@ -212,6 +219,8 @@ def build_operation_comparison_summary(operation_dir: Path) -> pd.DataFrame:
         "reward_mean",
         "reward_std",
         "max_violation_mean",
+        "violation_rate_mean",
+        "resilience_index_mean",
         "reward_improvement_vs_hold_plan_abs",
         "reward_improvement_vs_hold_plan_pct",
         "violation_aware_score",
@@ -243,25 +252,46 @@ def build_operation_claim_flag_table(operation_dir: Path) -> pd.DataFrame:
 
         claim_status = "supportive"
         notes = []
-        hold_plan_reward = float(row.get("hold_plan_reward_mean", 0.0))
-        reward_delta = float(row.get("reward_improvement_vs_hold_plan_abs", 0.0))
-        reward_scale = abs(hold_plan_reward)
-        relative_reward_change = reward_delta / reward_scale if reward_scale > 0.0 else 0.0
-        reward_ratio = 1.0 + relative_reward_change
+        hold_plan_reward = _optional_float(row.get("hold_plan_reward_mean"))
+        reward_delta = _optional_float(row.get("reward_improvement_vs_hold_plan_abs"))
+        if pd.isna(hold_plan_reward) or pd.isna(reward_delta):
+            relative_reward_change = pd.NA
+            reward_ratio = pd.NA
+            notes.append("missing_hold_plan_reference")
+            if row["method_type"] == "rl_agent":
+                claim_status = "not_evaluated"
+        else:
+            reward_scale = abs(float(hold_plan_reward))
+            relative_reward_change = (
+                float(reward_delta) / reward_scale if reward_scale > 0.0 else pd.NA
+            )
+            reward_ratio = 1.0 + float(relative_reward_change) if pd.notna(relative_reward_change) else pd.NA
         if row["method_type"] == "rl_agent":
-            if reward_ratio < 0.90:
+            if pd.notna(reward_ratio) and float(reward_ratio) < 0.90:
                 claim_status = "unsupported"
                 notes.append("reward_below_90pct_of_hold_plan")
-            elif reward_ratio < 0.98:
+            elif pd.notna(reward_ratio) and float(reward_ratio) < 0.98:
                 claim_status = "weak"
                 notes.append("reward_below_98pct_of_hold_plan")
-        if row["method_type"] == "rl_agent" and abs(float(row["reward_improvement_vs_hold_plan_abs"])) < 1e-9:
+        if (
+            row["method_type"] == "rl_agent"
+            and pd.notna(reward_delta)
+            and abs(float(reward_delta)) < 1e-9
+        ):
             claim_status = "conservative_match"
             notes.append("matches_hold_plan_reward")
         if float(row["max_violation_mean"]) > 0.0:
             notes.append("nonzero_violation")
             if claim_status == "supportive":
                 claim_status = "violation_prone"
+        if _optional_float(row.get("violation_rate_mean")) not in {pd.NA} and pd.notna(_optional_float(row.get("violation_rate_mean"))) and float(_optional_float(row.get("violation_rate_mean"))) > 0.05:
+            notes.append("elevated_violation_rate")
+            if claim_status == "supportive":
+                claim_status = "violation_prone"
+        if _optional_float(row.get("resilience_index_mean")) not in {pd.NA} and pd.notna(_optional_float(row.get("resilience_index_mean"))) and float(_optional_float(row.get("resilience_index_mean"))) < 0.85:
+            notes.append("low_resilience_index")
+            if claim_status == "supportive":
+                claim_status = "unstable"
         if float(row["reward_std"]) > 1.0:
             notes.append("high_seed_variation")
             if claim_status == "supportive":
@@ -275,6 +305,8 @@ def build_operation_claim_flag_table(operation_dir: Path) -> pd.DataFrame:
                 "reward_mean": row["reward_mean"],
                 "reward_std": row["reward_std"],
                 "max_violation_mean": row["max_violation_mean"],
+                "violation_rate_mean": row.get("violation_rate_mean", pd.NA),
+                "resilience_index_mean": row.get("resilience_index_mean", pd.NA),
                 "reward_improvement_vs_hold_plan_pct": relative_reward_change,
                 "reward_ratio_vs_hold_plan": reward_ratio,
                 "violation_aware_rank_within_scenario": row["violation_aware_rank_within_scenario"],
@@ -333,43 +365,129 @@ def build_planning_ml_consistency_summary(
     pathway_reliability: pd.DataFrame,
 ) -> pd.DataFrame:
     pathway_summary = _read_csv_if_exists(planning_dir / "pathway_summary.csv")
+    portfolio_allocations = _read_csv_if_exists(planning_dir / "portfolio_allocations.csv")
     if pathway_summary.empty or pathway_reliability.empty:
         return pd.DataFrame()
-    evidence_map = pathway_reliability.set_index("pathway")["reliability_score"].to_dict()
+    reliability_columns = [
+        column
+        for column in ["pathway", "reliability_score", "reliability_tier"]
+        if column in pathway_reliability.columns
+    ]
+    reliability_lookup = pathway_reliability[reliability_columns].drop_duplicates(subset=["pathway"])
     rows: list[dict[str, object]] = []
     for scenario_name, frame in pathway_summary.groupby("scenario_name", dropna=False):
-        working = frame.copy()
-        working["evidence_score"] = working["pathway"].map(evidence_map).fillna(0.0)
-        working["portfolio_allocated_feed_share"] = pd.to_numeric(
-            working["portfolio_allocated_feed_share"], errors="coerce"
-        ).fillna(0.0)
-        if len(working) >= 2 and working["evidence_score"].nunique() > 1:
+        working = frame.copy().merge(reliability_lookup, on="pathway", how="left")
+        share = pd.to_numeric(working["portfolio_allocated_feed_share"], errors="coerce")
+        if share.isna().any():
+            missing_pathways = ", ".join(
+                working.loc[share.isna(), "pathway"].astype(str).drop_duplicates().tolist()
+            )
+            raise ValueError(
+                "Planning/ML consistency summary encountered missing "
+                f"'portfolio_allocated_feed_share' for scenario '{scenario_name}' and pathway(s): {missing_pathways}."
+            )
+        working["portfolio_allocated_feed_share"] = share
+        working["reliability_score"] = pd.to_numeric(working.get("reliability_score"), errors="coerce")
+        working["evidence_mapping_status"] = np.where(
+            ~working["pathway"].isin(reliability_lookup["pathway"]),
+            "missing",
+            np.where(working["reliability_score"].isna(), "not_evaluated", "evaluated"),
+        )
+        working["evidence_support_status"] = np.select(
+            [
+                working["evidence_mapping_status"] == "missing",
+                working["evidence_mapping_status"] == "not_evaluated",
+                working["reliability_score"] < 0.34,
+                working["reliability_score"] < 0.60,
+            ],
+            ["missing", "not_evaluated", "unsupported", "weak"],
+            default="supportive",
+        )
+        evaluated = working.loc[working["evidence_mapping_status"] == "evaluated"].copy()
+        if (
+            len(evaluated) >= 2
+            and evaluated["reliability_score"].nunique() > 1
+            and evaluated["portfolio_allocated_feed_share"].nunique() > 1
+        ):
             consistency_correlation = float(
-                working["portfolio_allocated_feed_share"].corr(working["evidence_score"])
+                evaluated["portfolio_allocated_feed_share"].corr(evaluated["reliability_score"])
             )
         else:
-            consistency_correlation = 0.0
+            consistency_correlation = pd.NA
         weighted_evidence_support = float(
-            (working["portfolio_allocated_feed_share"] * working["evidence_score"]).sum()
+            (
+                evaluated["portfolio_allocated_feed_share"] * evaluated["reliability_score"]
+            ).sum()
         )
         unsupported_mass = float(
-            working.loc[working["evidence_score"] < 0.34, "portfolio_allocated_feed_share"].sum()
+            working.loc[working["evidence_support_status"] == "unsupported", "portfolio_allocated_feed_share"].sum()
         )
-        if unsupported_mass > 0.25:
+        missing_mass = float(
+            working.loc[working["evidence_support_status"] == "missing", "portfolio_allocated_feed_share"].sum()
+        )
+        not_evaluated_mass = float(
+            working.loc[
+                working["evidence_support_status"] == "not_evaluated",
+                "portfolio_allocated_feed_share",
+            ].sum()
+        )
+        weak_mass = float(
+            working.loc[working["evidence_support_status"] == "weak", "portfolio_allocated_feed_share"].sum()
+        )
+        evaluated_mass = float(
+            working.loc[working["evidence_mapping_status"] == "evaluated", "portfolio_allocated_feed_share"].sum()
+        )
+        if missing_mass > 0.25:
+            risk_tier = "high_risk"
+            risk_note = "High allocation mass is assigned to pathways without any pathway-level reliability mapping."
+        elif not_evaluated_mass > 0.25:
+            risk_tier = "high_risk"
+            risk_note = "High allocation mass is assigned to pathways lacking usable cross-study reliability scores."
+        elif unsupported_mass > 0.25:
             risk_tier = "high_risk"
             risk_note = "High allocation mass is assigned to pathways with weak or unsupported cross-study evidence."
-        elif consistency_correlation < 0.0:
+        elif pd.notna(consistency_correlation) and float(consistency_correlation) < 0.0:
             risk_tier = "medium_risk"
             risk_note = "Planning allocation is inversely aligned with pathway-level ML reliability."
+        elif evaluated_mass <= 0.0:
+            risk_tier = "data_gap"
+            risk_note = "No pathway-level reliability scores were available to evaluate planning alignment."
         else:
             risk_tier = "managed_risk"
             risk_note = "Planning allocation remains broadly aligned with available pathway-level ML evidence."
+        surrogate_supported_share = pd.NA
+        surrogate_led_consistency = "not_evaluated"
+        if not portfolio_allocations.empty and "scenario_name" in portfolio_allocations.columns:
+            scenario_allocations = portfolio_allocations[
+                portfolio_allocations["scenario_name"].astype(str) == str(scenario_name)
+            ].copy()
+            if not scenario_allocations.empty:
+                allocated_feed = pd.to_numeric(
+                    scenario_allocations.get("allocated_feed_ton_per_year"),
+                    errors="coerce",
+                ).fillna(0.0)
+                total_feed = float(allocated_feed.sum())
+                if total_feed > 0.0:
+                    support_mask = scenario_allocations.get(
+                        "surrogate_support_level",
+                        pd.Series([""] * len(scenario_allocations), index=scenario_allocations.index),
+                    ).astype(str).eq("surrogate_supported")
+                    surrogate_supported_share = float(allocated_feed.loc[support_mask].sum() / total_feed)
+                    surrogate_led_consistency = (
+                        "consistent" if surrogate_supported_share >= 0.80 else "inconsistent"
+                    )
         rows.append(
             {
                 "scenario_name": scenario_name,
                 "planning_ml_consistency_correlation": consistency_correlation,
                 "weighted_evidence_support": weighted_evidence_support,
+                "evaluated_allocation_share": evaluated_mass,
+                "missing_reliability_allocation_share": missing_mass,
+                "not_evaluated_allocation_share": not_evaluated_mass,
                 "unsupported_allocation_share": unsupported_mass,
+                "weak_allocation_share": weak_mass,
+                "surrogate_supported_allocation_share": surrogate_supported_share,
+                "surrogate_led_consistency": surrogate_led_consistency,
                 "risk_tier": risk_tier,
                 "risk_note": risk_note,
             }
@@ -380,6 +498,9 @@ def build_planning_ml_consistency_summary(
 def build_planning_claim_flag_table(planning_dir: Path, scenario_dir: Path) -> pd.DataFrame:
     main_results = _read_csv_if_exists(planning_dir / "main_results_table.csv")
     pathway_summary = _read_csv_if_exists(planning_dir / "pathway_summary.csv")
+    portfolio_allocations = _read_csv_if_exists(planning_dir / "portfolio_allocations.csv")
+    scored_cases = _read_csv_if_exists(planning_dir / "scored_cases.csv")
+    scenario_external_evidence = _read_csv_if_exists(planning_dir / "scenario_external_evidence.csv")
     stress_summary = _read_csv_if_exists(scenario_dir / "stress_test_summary.csv")
     if main_results.empty:
         return pd.DataFrame()
@@ -399,6 +520,30 @@ def build_planning_claim_flag_table(planning_dir: Path, scenario_dir: Path) -> p
             on=["scenario_name", "pathway"],
             how="left",
         )
+    support_sources: list[pd.DataFrame] = []
+    for support_frame in [scored_cases, portfolio_allocations]:
+        normalized_support = _normalize_surrogate_support_levels(support_frame)
+        if not normalized_support.empty:
+            support_sources.append(
+                normalized_support[["scenario_name", "pathway", "surrogate_support_level"]]
+            )
+    if support_sources:
+        support_summary = (
+            pd.concat(support_sources, ignore_index=True)
+            .groupby(["scenario_name", "pathway"], dropna=False)
+            .agg(
+                Surrogate_Support_Level=(
+                    "surrogate_support_level",
+                    lambda series: _mode_or_default(series, "unknown"),
+                )
+            )
+            .reset_index()
+        )
+        planning_flags = planning_flags.merge(
+            support_summary,
+            on=["scenario_name", "pathway"],
+            how="left",
+        )
     if not stress_summary.empty:
         top_case_counts = (
             stress_summary.groupby(["scenario_name", "top_portfolio_case_id"], dropna=False)
@@ -415,12 +560,23 @@ def build_planning_claim_flag_table(planning_dir: Path, scenario_dir: Path) -> p
 
     planning_flags["claim_status"] = planning_flags.apply(_classify_planning_claim_status, axis=1)
     planning_flags["claim_rule"] = planning_flags.apply(_describe_planning_claim_rule, axis=1)
+    manual_calibration_flag = planning_flags["scenario_name"].isin(
+        scenario_external_evidence.get("scenario_name", pd.Series(dtype="object")).astype(str)
+    ) & planning_flags["Surrogate_Support_Level"].fillna("unknown").astype(str).isin(
+        ["documented_static_fallback", "unsupported_pathway", "unknown"]
+    )
+    planning_flags["evidence_gap_flag"] = pd.Series(
+        np.where(manual_calibration_flag, "Evidence Gap: Manual Calibration Involved", ""),
+        index=planning_flags.index,
+    )
     selected_columns = [
         "scenario_name",
         "pathway",
         "writing_label",
         "claim_status",
         "claim_rule",
+        "Surrogate_Support_Level",
+        "evidence_gap_flag",
         "selected_in_baseline_portfolio",
         "baseline_portfolio_share_pct",
         "max_stress_selection_rate",
@@ -590,15 +746,22 @@ def _pathway_from_dataset_key(dataset_key: object) -> str:
 def _read_csv_if_exists(path: Path) -> pd.DataFrame:
     if not path.exists():
         return pd.DataFrame()
-    return pd.read_csv(path)
+    try:
+        return pd.read_csv(path)
+    except pd.errors.EmptyDataError:
+        return pd.DataFrame()
 
 
 def _classify_planning_claim_status(row: pd.Series) -> str:
     selected = bool(row.get("selected_in_baseline_portfolio", False))
-    stress_rate = float(pd.to_numeric(pd.Series([row.get("max_stress_selection_rate")]), errors="coerce").fillna(0.0).iloc[0])
+    stress_rate = _optional_float(row.get("max_stress_selection_rate"))
     writing_label = str(row.get("writing_label", ""))
     if selected:
         return "supportive"
+    if pd.isna(stress_rate):
+        if "comparison anchor" in writing_label:
+            return "anchor_only"
+        return "not_evaluated"
     if stress_rate > 0.0 and "environment-sensitive" in writing_label:
         return "conditional_support"
     if stress_rate > 0.0:
@@ -610,14 +773,80 @@ def _classify_planning_claim_status(row: pd.Series) -> str:
 
 def _describe_planning_claim_rule(row: pd.Series) -> str:
     selected = bool(row.get("selected_in_baseline_portfolio", False))
-    stress_rate = float(pd.to_numeric(pd.Series([row.get("max_stress_selection_rate")]), errors="coerce").fillna(0.0).iloc[0])
-    if selected:
-        return "Selected in the baseline optimized portfolio under the current planning configuration."
-    if stress_rate > 0.0:
-        return "Not selected in the baseline portfolio but supported in at least one planning stress test."
+    stress_rate = _optional_float(row.get("max_stress_selection_rate"))
     if str(row.get("writing_label", "")) == "comparison anchor":
         return "Retained as the manuscript comparison anchor rather than as a selected pathway."
+    if selected:
+        return "Selected in the baseline optimized portfolio under the current planning configuration."
+    if pd.isna(stress_rate):
+        return "Pathway robustness support is not available in the current scenario audit outputs, so manuscript claims should remain descriptive only."
+    if stress_rate > 0.0:
+        return "Not selected in the baseline portfolio but supported in at least one planning stress test."
     return "Available for pathway comparison but not currently supported as a selected planning recommendation."
+
+
+def _optional_float(value: object) -> float | object:
+    numeric = pd.to_numeric(pd.Series([value]), errors="coerce").iloc[0]
+    if pd.isna(numeric):
+        return pd.NA
+    return float(numeric)
+
+
+def _mode_or_default(series: pd.Series, default: str) -> str:
+    values = series.astype(str).replace("nan", "").replace("", pd.NA).dropna()
+    if values.empty:
+        return default
+    mode = values.mode(dropna=True)
+    if mode.empty:
+        return default
+    return str(mode.iloc[0])
+
+
+def _normalize_surrogate_support_levels(frame: pd.DataFrame) -> pd.DataFrame:
+    if frame.empty or not {"scenario_name", "pathway"}.issubset(frame.columns):
+        return pd.DataFrame()
+    normalized = frame.copy()
+    if "surrogate_support_level" in normalized.columns:
+        return normalized
+    support_level_series = normalized.get(
+        "surrogate_mode",
+        pd.Series(["unknown"] * len(normalized), index=normalized.index),
+    ).astype(str)
+    pathway_series = normalized.get(
+        "pathway",
+        pd.Series([""] * len(normalized), index=normalized.index),
+    ).astype(str).str.lower()
+    normalized["surrogate_support_level"] = np.where(
+        pathway_series.isin(["pyrolysis", "htc"]) & support_level_series.eq("trained_surrogate"),
+        "surrogate_supported",
+        np.where(
+            pathway_series.isin(["pyrolysis", "htc"])
+            & support_level_series.eq("trained_surrogate_with_documented_fallback"),
+            "trained_surrogate_with_documented_fallback",
+            np.where(
+                pathway_series.isin(["pyrolysis", "htc"]),
+                "documented_static_fallback",
+                "unsupported_pathway",
+            ),
+        ),
+    )
+    return normalized
+
+
+def _emit_surrogate_led_inconsistency_warnings(consistency: pd.DataFrame) -> None:
+    if consistency.empty or "surrogate_led_consistency" not in consistency.columns:
+        return
+    inconsistent = consistency[consistency["surrogate_led_consistency"].astype(str) == "inconsistent"]
+    for _, row in inconsistent.iterrows():
+        share = _optional_float(row.get("surrogate_supported_allocation_share"))
+        share_pct = "unknown" if pd.isna(share) else f"{float(share) * 100.0:.1f}%"
+        warnings.warn(
+            (
+                f"Scenario '{row.get('scenario_name', 'unknown_scenario')}' is inconsistent with a surrogate-led claim: "
+                f"surrogate-supported allocated share is {share_pct}, below the 80.0% threshold."
+            ),
+            InconsistencyWarning,
+        )
 
 
 if __name__ == "__main__":

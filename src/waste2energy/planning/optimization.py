@@ -36,7 +36,14 @@ def build_candidate_score_frame(
     scenario_frame: pd.DataFrame,
     config: "PlanningConfig",
 ) -> pd.DataFrame:
-    scored = _apply_scenario_metric_adjustments(scenario_frame.copy(), config)
+    scored = _apply_scenario_external_evidence(scenario_frame.copy(), config)
+    if "effective_uncertainty_ratio" not in scored.columns:
+        scored["effective_uncertainty_ratio"] = pd.to_numeric(
+            scored.get("combined_uncertainty_ratio", pd.Series([0.0] * len(scored), index=scored.index)),
+            errors="coerce",
+        ).fillna(0.0)
+    if "evidence_based_weight" not in scored.columns:
+        scored["evidence_based_weight"] = 1.0
     _require_numeric_columns(
         scored,
         columns=(
@@ -45,20 +52,24 @@ def build_candidate_score_frame(
             "planning_cost_intensity_proxy_or_real_per_ton",
             "planning_carbon_load_kgco2e_per_ton",
             "combined_uncertainty_ratio",
+            "effective_uncertainty_ratio",
+            "evidence_based_weight",
         ),
         context="candidate score construction",
     )
     scored["energy_utility"] = _normalize(scored["planning_energy_intensity_mj_per_ton"])
     scored["environment_utility"] = _normalize(scored["planning_environment_intensity_kgco2e_per_ton"])
     scored["cost_utility"] = 1.0 - _normalize(scored["planning_cost_intensity_proxy_or_real_per_ton"])
-    scored["robustness_utility"] = 1.0 - _normalize(scored["combined_uncertainty_ratio"])
+    scored["robustness_utility"] = 1.0 - _normalize(scored["effective_uncertainty_ratio"])
+    scored["evidence_utility"] = _normalize(scored["evidence_based_weight"])
     scored["weighted_score_per_ton"] = (
         config.energy_weight * scored["energy_utility"]
         + config.environment_weight * scored["environment_utility"]
         + config.cost_weight * scored["cost_utility"]
         + config.robustness_factor * scored["robustness_utility"]
+        + 0.15 * scored["evidence_utility"]
     )
-    scored["planning_score"] = scored["weighted_score_per_ton"]
+    scored["planning_score"] = scored["weighted_score_per_ton"] * scored["evidence_based_weight"]
     scored["planning_score_scope"] = "scenario_local_optimizer"
     return scored.sort_values(
         ["planning_score", "planning_energy_intensity_mj_per_ton"],
@@ -489,7 +500,10 @@ def _build_allocation_frame(
     allocation: pd.Series,
     scenario_constraint: dict[str, object],
 ) -> pd.DataFrame:
-    total_budget = float(scenario_constraint.get("effective_processing_budget_ton_per_year", 0.0) or 0.0)
+    total_budget = _required_constraint_value(
+        scenario_constraint,
+        "effective_processing_budget_ton_per_year",
+    )
     result = scored.copy()
     result["allocated_feed_ton_per_year"] = allocation.reindex(result.index).fillna(0.0)
     result = result[result["allocated_feed_ton_per_year"] > 1e-6].copy()
@@ -497,14 +511,17 @@ def _build_allocation_frame(
         return result
 
     result["allocated_feed_share"] = result["allocated_feed_ton_per_year"] / max(total_budget, 1.0)
-    result["candidate_capacity_cap_ton_per_year"] = float(
-        scenario_constraint.get("candidate_share_cap_ton_per_year", 0.0) or 0.0
+    result["candidate_capacity_cap_ton_per_year"] = _required_constraint_value(
+        scenario_constraint,
+        "candidate_share_cap_ton_per_year",
     )
-    result["subtype_capacity_cap_ton_per_year"] = float(
-        scenario_constraint.get("subtype_share_cap_ton_per_year", 0.0) or 0.0
+    result["subtype_capacity_cap_ton_per_year"] = _required_constraint_value(
+        scenario_constraint,
+        "subtype_share_cap_ton_per_year",
     )
-    result["scenario_feed_budget_ton_per_year"] = float(
-        scenario_constraint.get("scenario_feed_budget_ton_per_year", 0.0) or 0.0
+    result["scenario_feed_budget_ton_per_year"] = _required_constraint_value(
+        scenario_constraint,
+        "scenario_feed_budget_ton_per_year",
     )
     result["effective_processing_budget_ton_per_year"] = total_budget
     result["allocated_energy_objective"] = (
@@ -588,46 +605,54 @@ def _normalize(series: pd.Series) -> pd.Series:
     return (values - minimum) / (maximum - minimum)
 
 
-def _apply_scenario_metric_adjustments(
+def _apply_scenario_external_evidence(
     frame: pd.DataFrame,
     config: "PlanningConfig",
 ) -> pd.DataFrame:
-    if frame.empty or not config.scenario_metric_adjustments:
+    if frame.empty or not config.scenario_external_evidence:
         return frame
-    if "scenario_name" not in frame.columns or "pathway" not in frame.columns:
+    if "scenario_name" not in frame.columns:
         return frame
     adjusted = frame.copy()
-    adjusted["scenario_metric_adjustment_source"] = "unadjusted"
-    adjusted["scenario_metric_adjustment_reference"] = ""
-    adjusted["scenario_metric_adjustment_rationale"] = ""
-    adjusted["scenario_metric_adjustment_table_path"] = config.scenario_metric_adjustment_table_path or ""
+    adjusted["scenario_external_evidence_source"] = adjusted.get(
+        "evidence_source",
+        pd.Series(["unadjusted"] * len(adjusted), index=adjusted.index),
+    ).astype(str)
+    adjusted["scenario_external_evidence_reference"] = adjusted.get(
+        "evidence_reference",
+        pd.Series([""] * len(adjusted), index=adjusted.index),
+    ).astype(str)
+    adjusted["scenario_external_evidence_rationale"] = adjusted.get(
+        "evidence_rationale",
+        pd.Series([""] * len(adjusted), index=adjusted.index),
+    ).astype(str)
+    adjusted["scenario_external_evidence_table_path"] = config.scenario_external_evidence_table_path or ""
     variance_scale = float(config.scenario_metric_variance_scale)
-    for adjustment in config.scenario_metric_adjustments:
-        mask = (
-            adjusted["scenario_name"].astype(str).eq(adjustment.scenario_name)
-            & adjusted["pathway"].astype(str).eq(adjustment.pathway)
-        )
+    for evidence in config.scenario_external_evidence:
+        mask = adjusted["scenario_name"].astype(str).eq(evidence.scenario_name)
         if not mask.any():
             continue
-        adjusted.loc[mask, "planning_energy_intensity_mj_per_ton"] = _scale_numeric_series(
-            adjusted.loc[mask, "planning_energy_intensity_mj_per_ton"],
-            _scaled_multiplier(adjustment.energy_multiplier, variance_scale),
+        scale_factor = _scaled_multiplier(evidence.feedstock_scale_factor, variance_scale)
+        cost_scale_multiplier = float(
+            np.clip(np.power(max(scale_factor, 1e-6), -float(evidence.feedstock_cost_elasticity)), 0.70, 1.05)
         )
-        adjusted.loc[mask, "planning_environment_intensity_kgco2e_per_ton"] = _scale_numeric_series(
-            adjusted.loc[mask, "planning_environment_intensity_kgco2e_per_ton"],
-            _scaled_multiplier(adjustment.environment_multiplier, variance_scale),
+        carbon_tax = float(evidence.carbon_tax_usd_per_ton_co2e) * max(1.0, variance_scale)
+        carbon_tax_cost = (
+            pd.to_numeric(adjusted.loc[mask, "planning_carbon_load_kgco2e_per_ton"], errors="coerce")
+            .clip(lower=0.0)
+            * carbon_tax
+            / 1000.0
         )
-        adjusted.loc[mask, "planning_cost_intensity_proxy_or_real_per_ton"] = _scale_numeric_series(
-            adjusted.loc[mask, "planning_cost_intensity_proxy_or_real_per_ton"],
-            _scaled_multiplier(adjustment.cost_multiplier, variance_scale),
+        adjusted.loc[mask, "planning_cost_intensity_proxy_or_real_per_ton"] = (
+            pd.to_numeric(adjusted.loc[mask, "planning_cost_intensity_proxy_or_real_per_ton"], errors="coerce")
+            * cost_scale_multiplier
+            + carbon_tax_cost
         )
-        adjusted.loc[mask, "planning_carbon_load_kgco2e_per_ton"] = _scale_numeric_series(
-            adjusted.loc[mask, "planning_carbon_load_kgco2e_per_ton"],
-            _scaled_multiplier(adjustment.carbon_load_multiplier, variance_scale),
-        )
-        adjusted.loc[mask, "scenario_metric_adjustment_source"] = adjustment.adjustment_source
-        adjusted.loc[mask, "scenario_metric_adjustment_reference"] = adjustment.adjustment_reference
-        adjusted.loc[mask, "scenario_metric_adjustment_rationale"] = adjustment.adjustment_rationale
+        adjusted.loc[mask, "scenario_scale_cost_multiplier"] = cost_scale_multiplier
+        adjusted.loc[mask, "carbon_tax_cost_intensity_usd_per_ton"] = carbon_tax_cost
+        adjusted.loc[mask, "scenario_external_evidence_source"] = evidence.evidence_source
+        adjusted.loc[mask, "scenario_external_evidence_reference"] = evidence.evidence_reference
+        adjusted.loc[mask, "scenario_external_evidence_rationale"] = evidence.evidence_rationale
     return adjusted
 
 
@@ -646,9 +671,18 @@ def _constraint_diagnostics(
     config: "PlanningConfig",
     allocations: pd.DataFrame,
 ) -> dict[str, object]:
-    effective_budget = float(scenario_constraint.get("effective_processing_budget_ton_per_year", 0.0) or 0.0)
-    candidate_cap = float(scenario_constraint.get("candidate_share_cap_ton_per_year", 0.0) or 0.0)
-    subtype_cap = float(scenario_constraint.get("subtype_share_cap_ton_per_year", 0.0) or 0.0)
+    effective_budget = _required_constraint_value(
+        scenario_constraint,
+        "effective_processing_budget_ton_per_year",
+    )
+    candidate_cap = _required_constraint_value(
+        scenario_constraint,
+        "candidate_share_cap_ton_per_year",
+    )
+    subtype_cap = _required_constraint_value(
+        scenario_constraint,
+        "subtype_share_cap_ton_per_year",
+    )
     carbon_budget = _carbon_budget(scored, scenario_constraint, config)
     allocation_frame = allocations.copy() if isinstance(allocations, pd.DataFrame) else pd.DataFrame()
     if allocation_frame.empty:
@@ -659,12 +693,17 @@ def _constraint_diagnostics(
         carbon_used = 0.0
         distinct_selected = 0
     else:
+        _require_numeric_columns(
+            allocation_frame,
+            columns=("allocated_feed_ton_per_year", "allocated_carbon_load_kgco2e"),
+            context="constraint diagnostics allocation frame",
+        )
         total_allocated = float(
-            pd.to_numeric(allocation_frame["allocated_feed_ton_per_year"], errors="coerce").fillna(0.0).sum()
+            pd.to_numeric(allocation_frame["allocated_feed_ton_per_year"], errors="coerce").sum()
         )
         selected_count = int(len(allocation_frame))
         candidate_load_max = float(
-            pd.to_numeric(allocation_frame["allocated_feed_ton_per_year"], errors="coerce").fillna(0.0).max()
+            pd.to_numeric(allocation_frame["allocated_feed_ton_per_year"], errors="coerce").max()
         )
         subtype_load_max = (
             float(
@@ -672,21 +711,26 @@ def _constraint_diagnostics(
                     allocation_frame.groupby("manure_subtype", dropna=False)["allocated_feed_ton_per_year"].sum(),
                     errors="coerce",
                 )
-                .fillna(0.0)
                 .max()
             )
             if "manure_subtype" in allocation_frame.columns
             else 0.0
         )
         carbon_used = float(
-            pd.to_numeric(allocation_frame.get("allocated_carbon_load_kgco2e"), errors="coerce").fillna(0.0).sum()
+            pd.to_numeric(allocation_frame.get("allocated_carbon_load_kgco2e"), errors="coerce").sum()
         )
         distinct_selected = (
             int(allocation_frame["manure_subtype"].astype(str).nunique())
             if "manure_subtype" in allocation_frame.columns
             else 0
         )
-    min_distinct_required = int(scenario_constraint.get("min_distinct_subtypes", config.min_distinct_subtypes) or 0)
+    min_distinct_value = pd.to_numeric(
+        pd.Series([scenario_constraint.get("min_distinct_subtypes", config.min_distinct_subtypes)]),
+        errors="coerce",
+    ).iloc[0]
+    if pd.isna(min_distinct_value):
+        raise ValueError("Scenario optimization constraint contains missing/non-numeric value in 'min_distinct_subtypes'.")
+    min_distinct_required = int(min_distinct_value)
     return {
         "constraint_relaxation_ratio": float(config.constraint_relaxation_ratio),
         "subtype_relaxation_ratio": float(config.subtype_relaxation_ratio),

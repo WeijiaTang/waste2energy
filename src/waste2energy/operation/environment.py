@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
-from math import cos, pi, sin
+from math import pi
 from typing import Any
+
+import numpy as np
 
 from ..config import get_objective_weight_system
 
@@ -22,6 +24,8 @@ class OperationEnvironmentSpec:
     scenario_feed_budget_ton_per_year: float
     effective_processing_budget_ton_per_year: float
     candidate_capacity_cap_ton_per_year: float
+    avg_share_source: str
+    max_share_source: str
     scenario_candidate_share_lower_bound: float
     scenario_candidate_share_target: float
     scenario_candidate_share_upper_bound: float
@@ -40,6 +44,10 @@ class OperationEnvironmentSpec:
     environment_disturbance_amplitude: float
     cost_disturbance_amplitude: float
     coverage_disturbance_amplitude: float
+    energy_disturbance_source: str
+    environment_disturbance_source: str
+    cost_disturbance_source: str
+    coverage_disturbance_source: str
     market_noise_amplitude: float
     feed_quality_noise_amplitude: float
     carbon_noise_amplitude: float
@@ -48,7 +56,9 @@ class OperationEnvironmentSpec:
     dominant_selection_rate: float
     stable_candidate_count: int
     cross_scenario_selection_rate: float
+    cross_scenario_selection_rate_source: str
     selected_in_all_scenarios: bool
+    selected_in_all_scenarios_source: str
     capacity_binding_reason: str
     anchor_selection_score: float
     objective_weight_preset: str = "balanced_cleaner_production"
@@ -74,6 +84,7 @@ class OperationEnvironment:
         self.max_abs_severity_offset = max(1, int(max_abs_severity_offset))
         self._state: dict[str, float] = {}
         self._time_index = 0
+        self._disturbance_cache = self._build_disturbance_cache()
         self._weights = get_objective_weight_system(
             preset_name=spec.objective_weight_preset,
             energy=spec.reward_energy_weight,
@@ -141,18 +152,10 @@ class OperationEnvironment:
         return self._state.copy(), reward, done, info
 
     def _build_state_view(self) -> dict[str, float]:
-        phase = 2.0 * pi * min(self._time_index, self.horizon_steps) / self.horizon_steps
         throughput_ton = self._state["throughput_ton_per_year"]
         candidate_share = _safe_ratio(throughput_ton, self.spec.effective_processing_budget_ton_per_year)
         target_gap = candidate_share - self.spec.scenario_candidate_share_target
-        market_noise = self.spec.market_noise_amplitude * sin(phase + (self.spec.noise_seed_base % 11) * 0.17)
-        feed_noise = self.spec.feed_quality_noise_amplitude * cos(phase + (self.spec.noise_seed_base % 13) * 0.11)
-        carbon_noise = self.spec.carbon_noise_amplitude * sin(phase + (self.spec.noise_seed_base % 7) * 0.23)
-
-        energy_multiplier = 1.0 + self.spec.energy_disturbance_amplitude * sin(phase)
-        environment_multiplier = 1.0 + self.spec.environment_disturbance_amplitude * cos(phase)
-        cost_multiplier = 1.0 + self.spec.cost_disturbance_amplitude * sin(phase + 0.7)
-        load_multiplier = 1.0 + self.spec.coverage_disturbance_amplitude * cos(phase + 0.3)
+        disturbance = self._disturbance_cache[min(self._time_index, self.horizon_steps - 1)]
 
         return {
             "time_fraction": _safe_ratio(self._time_index, self.horizon_steps),
@@ -162,13 +165,13 @@ class OperationEnvironment:
             "candidate_share_of_effective_budget": candidate_share,
             "candidate_share_target_gap": target_gap,
             "severity_offset": self._state["severity_offset"],
-            "energy_disturbance_multiplier": energy_multiplier,
-            "environment_disturbance_multiplier": environment_multiplier,
-            "cost_disturbance_multiplier": cost_multiplier,
-            "load_disturbance_multiplier": load_multiplier,
-            "market_noise_multiplier": 1.0 + market_noise,
-            "feed_quality_multiplier": 1.0 + feed_noise,
-            "carbon_noise_multiplier": 1.0 + carbon_noise,
+            "energy_disturbance_multiplier": disturbance["energy_disturbance_multiplier"],
+            "environment_disturbance_multiplier": disturbance["environment_disturbance_multiplier"],
+            "cost_disturbance_multiplier": disturbance["cost_disturbance_multiplier"],
+            "load_disturbance_multiplier": disturbance["load_disturbance_multiplier"],
+            "market_noise_multiplier": disturbance["market_noise_multiplier"],
+            "feed_quality_multiplier": disturbance["feed_quality_multiplier"],
+            "carbon_noise_multiplier": disturbance["carbon_noise_multiplier"],
             "capacity_pressure": max(0.0, candidate_share - self.spec.scenario_candidate_share_upper_bound),
             "coverage_pressure": max(0.0, self.spec.scenario_candidate_share_lower_bound - candidate_share),
         }
@@ -234,6 +237,8 @@ class OperationEnvironment:
         upper_violation = max(0.0, candidate_share - self.spec.scenario_candidate_share_upper_bound)
         violation_penalty = 6.0 * (lower_violation + upper_violation)
         switching_penalty = 0.03 * (abs(throughput_signal) + abs(severity_signal))
+        violation_indicator = 1.0 if violation_penalty > 0.0 else 0.0
+        resilience_index = max(0.0, 1.0 - violation_indicator - 0.10 * abs(severity_offset))
 
         reward = (
             self._weights.energy * energy_term
@@ -257,9 +262,42 @@ class OperationEnvironment:
             "reward_environment_weight": self._weights.environment,
             "reward_cost_weight": self._weights.cost,
             "violation_penalty": violation_penalty,
+            "violation_indicator": violation_indicator,
+            "resilience_index": resilience_index,
             "switching_penalty": switching_penalty,
             "reward": reward,
         }
+
+    def _build_disturbance_cache(self) -> list[dict[str, float]]:
+        rng = np.random.default_rng(int(self.spec.noise_seed_base))
+        indices = np.arange(self.horizon_steps, dtype=float)
+        seasonal = np.sin(2.0 * pi * indices / max(self.horizon_steps, 1))
+        weekly = np.sin(2.0 * pi * indices / 168.0)
+        market_shock = rng.weibull(2.0, self.horizon_steps)
+        feed_quality = rng.weibull(2.6, self.horizon_steps)
+        carbon_signal = rng.weibull(2.3, self.horizon_steps)
+
+        market_noise = 1.0 + self.spec.market_noise_amplitude * ((market_shock / np.maximum(market_shock.mean(), 1e-9)) - 1.0)
+        feed_noise = 1.0 + self.spec.feed_quality_noise_amplitude * ((feed_quality / np.maximum(feed_quality.mean(), 1e-9)) - 1.0)
+        carbon_noise = 1.0 + self.spec.carbon_noise_amplitude * ((carbon_signal / np.maximum(carbon_signal.mean(), 1e-9)) - 1.0)
+
+        energy = 1.0 + self.spec.energy_disturbance_amplitude * (0.6 * seasonal + 0.4 * weekly)
+        environment = 1.0 + self.spec.environment_disturbance_amplitude * (0.5 * np.cos(2.0 * pi * indices / max(self.horizon_steps, 1)) + 0.5 * weekly)
+        cost = 1.0 + self.spec.cost_disturbance_amplitude * (0.5 * seasonal + 0.5 * (market_noise - 1.0))
+        load = 1.0 + self.spec.coverage_disturbance_amplitude * (0.7 * weekly + 0.3 * (feed_noise - 1.0))
+
+        return [
+            {
+                "energy_disturbance_multiplier": float(np.clip(energy[i], 0.70, 1.35)),
+                "environment_disturbance_multiplier": float(np.clip(environment[i], 0.70, 1.35)),
+                "cost_disturbance_multiplier": float(np.clip(cost[i], 0.75, 1.45)),
+                "load_disturbance_multiplier": float(np.clip(load[i], 0.75, 1.40)),
+                "market_noise_multiplier": float(np.clip(market_noise[i], 0.80, 1.35)),
+                "feed_quality_multiplier": float(np.clip(feed_noise[i], 0.80, 1.30)),
+                "carbon_noise_multiplier": float(np.clip(carbon_noise[i], 0.80, 1.30)),
+            }
+            for i in range(self.horizon_steps)
+        ]
 
 
 def spec_from_row(row: dict[str, Any]) -> OperationEnvironmentSpec:

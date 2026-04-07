@@ -386,16 +386,18 @@ class SurrogateEvaluator:
             values = pd.to_numeric(frame[target_column], errors="coerce")
         else:
             values = pd.Series(np.nan, index=frame.index, dtype=float)
-        std = np.maximum(
-            np.abs(values.fillna(0.0).to_numpy()) * self.fallback_uncertainty_ratio,
-            self.fallback_uncertainty_ratio,
-        )
-        lower = values.to_numpy() - 1.96 * std
-        upper = values.to_numpy() + 1.96 * std
-        ratio = np.where(
-            np.isnan(values.to_numpy()),
+        value_array = values.to_numpy(dtype=float, na_value=np.nan)
+        std = np.where(
+            np.isnan(value_array),
             np.nan,
-            np.abs(upper - lower) / np.maximum(np.abs(values.to_numpy()), 1.0),
+            np.maximum(np.abs(value_array) * self.fallback_uncertainty_ratio, self.fallback_uncertainty_ratio),
+        )
+        lower = value_array - 1.96 * std
+        upper = value_array + 1.96 * std
+        ratio = np.where(
+            np.isnan(value_array),
+            np.nan,
+            np.abs(upper - lower) / np.maximum(np.abs(value_array), 1.0),
         )
         status = np.where(
             values.isna(),

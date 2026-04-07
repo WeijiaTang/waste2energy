@@ -18,6 +18,8 @@ def build_baseline_policy_summary(baseline_rollout_summary: pd.DataFrame) -> pd.
             "max_violation_penalty": "max_violation_mean",
             "dominant_case_id": "dominant_case_id",
             "dominant_sample_id": "dominant_sample_id",
+            "violation_rate": "violation_rate_mean",
+            "resilience_index": "resilience_index_mean",
         }
     ).copy()
     renamed["method_type"] = "baseline_policy"
@@ -35,6 +37,8 @@ def build_baseline_policy_summary(baseline_rollout_summary: pd.DataFrame) -> pd.
         "environment_mean",
         "cost_mean",
         "max_violation_mean",
+        "violation_rate_mean",
+        "resilience_index_mean",
         "dominant_case_id",
         "dominant_sample_id",
     ]
@@ -59,6 +63,8 @@ def build_rl_policy_summary(seed_aggregate_summary: pd.DataFrame) -> pd.DataFram
         "environment_mean",
         "cost_mean",
         "max_violation_mean",
+        "violation_rate_mean",
+        "resilience_index_mean",
         "dominant_case_id",
         "dominant_sample_id",
     ]
@@ -105,8 +111,10 @@ def build_rl_policy_behavior_summary(evaluation_rollouts: pd.DataFrame) -> pd.Da
         per_seed.groupby(["scenario_name", "method_name", "method_type"], dropna=False)
         .agg(seed_count=("seed", "nunique"), **{key: value for key, value in aggregate_map.items() if key != "seed"})
         .reset_index()
-        .fillna(0.0)
     )
+    std_columns = [column for column in aggregated.columns if column.endswith("_std")]
+    if std_columns:
+        aggregated[std_columns] = aggregated[std_columns].fillna(0.0)
     aggregated["behavior_metric_std"] = aggregated["throughput_nonzero_rate_std"] + aggregated[
         "severity_nonzero_rate_std"
     ]
@@ -142,7 +150,12 @@ def build_comparison_table(
 
     comparison = pd.concat(frames, ignore_index=True)
     comparison = _attach_hold_plan_improvement(comparison)
-    comparison["violation_aware_score"] = comparison["reward_mean"] - comparison["max_violation_mean"]
+    comparison["violation_aware_score"] = (
+        comparison["reward_mean"]
+        - comparison["max_violation_mean"]
+        - 5.0 * pd.to_numeric(comparison["violation_rate_mean"], errors="coerce").fillna(0.0)
+        + pd.to_numeric(comparison["resilience_index_mean"], errors="coerce").fillna(0.0)
+    )
     comparison["reward_rank_within_scenario"] = comparison.groupby("scenario_name")["reward_mean"].rank(
         method="dense", ascending=False
     )
@@ -163,12 +176,21 @@ def build_comparison_table(
 
 def _attach_hold_plan_improvement(comparison: pd.DataFrame) -> pd.DataFrame:
     hold_plan = comparison[comparison["method_name"] == "hold_plan"][
-        ["scenario_name", "reward_mean", "average_reward_mean", "max_violation_mean"]
+        [
+            "scenario_name",
+            "reward_mean",
+            "average_reward_mean",
+            "max_violation_mean",
+            "violation_rate_mean",
+            "resilience_index_mean",
+        ]
     ].rename(
         columns={
             "reward_mean": "hold_plan_reward_mean",
             "average_reward_mean": "hold_plan_average_reward_mean",
             "max_violation_mean": "hold_plan_max_violation_mean",
+            "violation_rate_mean": "hold_plan_violation_rate_mean",
+            "resilience_index_mean": "hold_plan_resilience_index_mean",
         }
     )
     merged = comparison.merge(hold_plan, on="scenario_name", how="left")
@@ -180,12 +202,20 @@ def _attach_hold_plan_improvement(comparison: pd.DataFrame) -> pd.DataFrame:
     merged["reward_improvement_vs_hold_plan_pct"] = (
         merged["reward_improvement_vs_hold_plan_abs"]
         / merged["hold_plan_reward_mean"].abs().replace(0.0, pd.NA)
-    ).fillna(0.0)
+    )
     merged["average_reward_improvement_vs_hold_plan_abs"] = (
         merged["average_reward_mean"] - merged["hold_plan_average_reward_mean"]
     )
     merged["violation_delta_vs_hold_plan"] = (
         merged["max_violation_mean"] - merged["hold_plan_max_violation_mean"]
+    )
+    merged["violation_rate_delta_vs_hold_plan"] = (
+        pd.to_numeric(merged["violation_rate_mean"], errors="coerce").fillna(0.0)
+        - pd.to_numeric(merged.get("hold_plan_violation_rate_mean"), errors="coerce").fillna(0.0)
+    )
+    merged["resilience_index_delta_vs_hold_plan"] = (
+        pd.to_numeric(merged["resilience_index_mean"], errors="coerce").fillna(0.0)
+        - pd.to_numeric(merged.get("hold_plan_resilience_index_mean"), errors="coerce").fillna(0.0)
     )
     return merged
 

@@ -13,7 +13,7 @@ from ..config import (
 )
 from .artifacts import write_planning_outputs
 from .constraints import build_scenario_constraints
-from .inputs import load_planning_input_bundle, load_scenario_metric_adjustment_table
+from .inputs import load_planning_input_bundle, load_scenario_external_evidence_table
 from .optimization import (
     build_candidate_score_frame,
     generate_pareto_front,
@@ -24,16 +24,14 @@ from .surrogate_evaluator import build_surrogate_predictions
 
 
 @dataclass(frozen=True)
-class ScenarioMetricAdjustment:
+class ScenarioExternalEvidence:
     scenario_name: str
-    pathway: str
-    energy_multiplier: float = 1.0
-    environment_multiplier: float = 1.0
-    cost_multiplier: float = 1.0
-    carbon_load_multiplier: float = 1.0
-    adjustment_source: str = ""
-    adjustment_reference: str = ""
-    adjustment_rationale: str = ""
+    feedstock_scale_factor: float = 1.0
+    feedstock_cost_elasticity: float = 0.0
+    carbon_tax_usd_per_ton_co2e: float = 0.0
+    evidence_source: str = ""
+    evidence_reference: str = ""
+    evidence_rationale: str = ""
 
 
 @dataclass(frozen=True)
@@ -57,13 +55,22 @@ class PlanningConfig:
     enforce_max_selected: bool = True
     enforce_min_distinct_subtypes: bool = True
     scenario_metric_variance_scale: float = 1.00
-    scenario_metric_adjustment_table_path: str | None = None
-    scenario_metric_adjustments: tuple[ScenarioMetricAdjustment, ...] = field(default_factory=tuple)
+    scenario_external_evidence_table_path: str | None = None
+    scenario_external_evidence: tuple[ScenarioExternalEvidence, ...] = field(default_factory=tuple)
     optimization_method: str = "auto"
     pyomo_solver_preference: str = "auto"
     pareto_point_count: int = 12
     enable_pareto_export: bool = True
     allow_surrogate_fallback: bool = True
+    partial_surrogate_weight: float = 0.70
+    static_fallback_weight: float = 0.35
+    unsupported_pathway_weight: float = 0.15
+    partial_surrogate_uncertainty_multiplier: float = 1.35
+    static_fallback_uncertainty_multiplier: float = 2.10
+    unsupported_pathway_uncertainty_multiplier: float = 3.25
+    partial_surrogate_information_premium_usd_per_ton: float = 8.0
+    static_fallback_information_premium_usd_per_ton: float = 22.0
+    unsupported_pathway_information_premium_usd_per_ton: float = 45.0
 
     @property
     def energy_weight(self) -> float:
@@ -118,7 +125,7 @@ def run_planning_baseline(
         optimization_diagnostics=execution["optimization_diagnostics"],
         planning_data_quality_summary=execution["planning_data_quality_summary"],
         planning_candidate_exclusions=execution["planning_candidate_exclusions"],
-        scenario_metric_adjustments=execution["scenario_metric_adjustments"],
+        scenario_external_evidence=execution["scenario_external_evidence"],
         output_dir=output_dir,
         config=active_config,
         bundle=bundle,
@@ -141,12 +148,14 @@ def run_planning_baseline(
 
 def execute_planning_pipeline(bundle, config: PlanningConfig) -> dict[str, object]:
     active_config = _resolve_planning_config(config, bundle.frame)
-    surrogate_predictions = build_surrogate_predictions(bundle.frame)
+    planning_frame = _attach_scenario_external_evidence(bundle.frame, active_config)
+    surrogate_predictions = build_surrogate_predictions(planning_frame)
     objective_frame, readiness, data_quality_summary, candidate_exclusions = assemble_objective_frame(
-        base_frame=bundle.frame,
+        base_frame=planning_frame,
         surrogate_predictions=surrogate_predictions,
         robustness_factor=active_config.robustness_factor,
         real_cost_columns=bundle.real_cost_columns,
+        config=active_config,
     )
     scenario_constraints = build_scenario_constraints(objective_frame, active_config)
     scored = score_cases(objective_frame, active_config)
@@ -179,7 +188,7 @@ def execute_planning_pipeline(bundle, config: PlanningConfig) -> dict[str, objec
         "optimization_diagnostics": diagnostics,
         "planning_data_quality_summary": data_quality_summary,
         "planning_candidate_exclusions": candidate_exclusions,
-        "scenario_metric_adjustments": _scenario_metric_adjustments_to_frame(active_config),
+        "scenario_external_evidence": _scenario_external_evidence_to_frame(active_config),
     }
 
 
@@ -353,12 +362,15 @@ def build_pathway_summary(
     portfolio_allocations: pd.DataFrame,
 ) -> pd.DataFrame:
     rows: list[dict[str, object]] = []
-    allocation_map = {
-        (scenario_name, pathway): frame.copy()
-        for (scenario_name, pathway), frame in portfolio_allocations.groupby(
-            ["scenario_name", "pathway"], dropna=False
-        )
-    }
+    if portfolio_allocations.empty or not {"scenario_name", "pathway"}.issubset(portfolio_allocations.columns):
+        allocation_map: dict[tuple[object, object], pd.DataFrame] = {}
+    else:
+        allocation_map = {
+            (scenario_name, pathway): frame.copy()
+            for (scenario_name, pathway), frame in portfolio_allocations.groupby(
+                ["scenario_name", "pathway"], dropna=False
+            )
+        }
 
     for (scenario_name, pathway), scenario_pathway_frame in scored.groupby(
         ["scenario_name", "pathway"], dropna=False
@@ -378,7 +390,10 @@ def build_pathway_summary(
                 "best_case_energy_objective": float(best_case["planning_energy_objective"]),
                 "best_case_environment_objective": float(best_case["planning_environment_objective"]),
                 "best_case_cost_objective": float(best_case["planning_cost_objective"]),
-                "best_case_uncertainty_ratio": float(best_case.get("combined_uncertainty_ratio", 0.0)),
+                "best_case_uncertainty_ratio": _optional_numeric_from_row(
+                    best_case,
+                    "combined_uncertainty_ratio",
+                ),
                 "best_case_manure_subtype": best_case.get("manure_subtype"),
                 "best_case_blend_manure_ratio": best_case.get("blend_manure_ratio"),
                 "best_case_blend_wet_waste_ratio": best_case.get("blend_wet_waste_ratio"),
@@ -407,7 +422,13 @@ def build_pathway_summary(
 def _sum_column(frame: pd.DataFrame, column: str) -> float:
     if frame.empty or column not in frame.columns:
         return 0.0
-    return float(pd.to_numeric(frame[column], errors="coerce").fillna(0.0).sum())
+    values = pd.to_numeric(frame[column], errors="coerce")
+    if values.isna().any():
+        preview = ", ".join(frame.loc[values.isna(), "optimization_case_id"].astype(str).head(5).tolist())
+        raise ValueError(
+            f"Planning summary aggregation encountered missing/non-numeric values in '{column}' for allocation row(s): {preview}."
+        )
+    return float(values.sum())
 
 
 def _first_value(frame: pd.DataFrame, column: str) -> object:
@@ -420,6 +441,15 @@ def _safe_ratio(numerator: float, denominator: float) -> float:
     if denominator <= 0.0:
         return 0.0
     return numerator / denominator
+
+
+def _optional_numeric_from_row(row: pd.Series, column: str) -> float | object:
+    if column not in row.index:
+        return pd.NA
+    value = pd.to_numeric(pd.Series([row[column]]), errors="coerce").iloc[0]
+    if pd.isna(value):
+        return pd.NA
+    return float(value)
 
 
 def _validate_config(config: PlanningConfig) -> None:
@@ -461,65 +491,73 @@ def _validate_config(config: PlanningConfig) -> None:
 
 
 def _resolve_planning_config(config: PlanningConfig, frame: pd.DataFrame) -> PlanningConfig:
-    adjustments = config.scenario_metric_adjustments
-    table_path = config.scenario_metric_adjustment_table_path
-    if not adjustments:
-        adjustment_frame, resolved_path = load_scenario_metric_adjustment_table(table_path)
-        _validate_adjustment_coverage(adjustment_frame, frame)
-        adjustments = tuple(
-            ScenarioMetricAdjustment(
+    evidence = config.scenario_external_evidence
+    table_path = config.scenario_external_evidence_table_path
+    if not evidence:
+        evidence_frame, resolved_path = load_scenario_external_evidence_table(table_path)
+        _validate_external_evidence_coverage(evidence_frame, frame)
+        evidence = tuple(
+            ScenarioExternalEvidence(
                 scenario_name=str(row.scenario_name),
-                pathway=str(row.pathway),
-                energy_multiplier=float(row.energy_multiplier),
-                environment_multiplier=float(row.environment_multiplier),
-                cost_multiplier=float(row.cost_multiplier),
-                carbon_load_multiplier=float(row.carbon_load_multiplier),
-                adjustment_source=str(row.adjustment_source),
-                adjustment_reference=str(row.adjustment_reference),
-                adjustment_rationale=str(row.adjustment_rationale),
+                feedstock_scale_factor=float(row.feedstock_scale_factor),
+                feedstock_cost_elasticity=float(row.feedstock_cost_elasticity),
+                carbon_tax_usd_per_ton_co2e=float(row.carbon_tax_usd_per_ton_co2e),
+                evidence_source=str(row.evidence_source),
+                evidence_reference=str(row.evidence_reference),
+                evidence_rationale=str(row.evidence_rationale),
             )
-            for row in adjustment_frame.itertuples(index=False)
+            for row in evidence_frame.itertuples(index=False)
         )
         table_path = str(resolved_path)
     return replace(
         config,
-        scenario_metric_adjustment_table_path=table_path,
-        scenario_metric_adjustments=adjustments,
+        scenario_external_evidence_table_path=table_path,
+        scenario_external_evidence=evidence,
     )
 
 
-def _validate_adjustment_coverage(adjustment_frame: pd.DataFrame, planning_frame: pd.DataFrame) -> None:
+def _validate_external_evidence_coverage(evidence_frame: pd.DataFrame, planning_frame: pd.DataFrame) -> None:
     expected = {
-        (str(row.scenario_name), str(row.pathway))
-        for row in planning_frame[["scenario_name", "pathway"]].drop_duplicates().itertuples(index=False)
+        str(row.scenario_name)
+        for row in planning_frame[["scenario_name"]].drop_duplicates().itertuples(index=False)
     }
     observed = {
-        (str(row.scenario_name), str(row.pathway))
-        for row in adjustment_frame[["scenario_name", "pathway"]].drop_duplicates().itertuples(index=False)
+        str(row.scenario_name)
+        for row in evidence_frame[["scenario_name"]].drop_duplicates().itertuples(index=False)
     }
     missing = sorted(expected - observed)
     if missing:
-        preview = ", ".join(f"{scenario}/{pathway}" for scenario, pathway in missing[:10])
+        preview = ", ".join(missing[:10])
         raise ValueError(
-            "Scenario metric adjustment calibration table does not cover all planning scenario/pathway pairs. "
+            "Scenario external evidence table does not cover all planning scenarios. "
             f"Missing: {preview}"
         )
 
 
-def _scenario_metric_adjustments_to_frame(config: PlanningConfig) -> pd.DataFrame:
+def _scenario_external_evidence_to_frame(config: PlanningConfig) -> pd.DataFrame:
     rows = [
         {
-            "scenario_name": adjustment.scenario_name,
-            "pathway": adjustment.pathway,
-            "energy_multiplier": adjustment.energy_multiplier,
-            "environment_multiplier": adjustment.environment_multiplier,
-            "cost_multiplier": adjustment.cost_multiplier,
-            "carbon_load_multiplier": adjustment.carbon_load_multiplier,
-            "adjustment_source": adjustment.adjustment_source,
-            "adjustment_reference": adjustment.adjustment_reference,
-            "adjustment_rationale": adjustment.adjustment_rationale,
-            "adjustment_table_path": config.scenario_metric_adjustment_table_path or "",
+            "scenario_name": evidence.scenario_name,
+            "feedstock_scale_factor": evidence.feedstock_scale_factor,
+            "feedstock_cost_elasticity": evidence.feedstock_cost_elasticity,
+            "carbon_tax_usd_per_ton_co2e": evidence.carbon_tax_usd_per_ton_co2e,
+            "evidence_source": evidence.evidence_source,
+            "evidence_reference": evidence.evidence_reference,
+            "evidence_rationale": evidence.evidence_rationale,
+            "evidence_table_path": config.scenario_external_evidence_table_path or "",
         }
-        for adjustment in config.scenario_metric_adjustments
+        for evidence in config.scenario_external_evidence
     ]
-    return pd.DataFrame(rows).sort_values(["scenario_name", "pathway"]).reset_index(drop=True) if rows else pd.DataFrame()
+    return pd.DataFrame(rows).sort_values(["scenario_name"]).reset_index(drop=True) if rows else pd.DataFrame()
+
+
+def _attach_scenario_external_evidence(frame: pd.DataFrame, config: PlanningConfig) -> pd.DataFrame:
+    if frame.empty or not config.scenario_external_evidence:
+        return frame.copy()
+    evidence_frame = _scenario_external_evidence_to_frame(config).drop(columns=["evidence_table_path"], errors="ignore")
+    return frame.merge(
+        evidence_frame,
+        on="scenario_name",
+        how="left",
+        validate="many_to_one",
+    )

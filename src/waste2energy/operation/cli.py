@@ -28,7 +28,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--planning-dir", default="", help="Optional explicit planning output directory.")
     parser.add_argument("--scenario-dir", default="", help="Optional explicit scenario output directory.")
     parser.add_argument("--output-dir", default="", help="Optional explicit operation output directory.")
-    parser.add_argument("--horizon-steps", type=int, default=12, help="Number of control steps per episode.")
+    parser.add_argument("--horizon-steps", type=int, default=8760, help="Number of control steps per episode.")
     parser.add_argument(
         "--mode",
         choices=["baseline", "rl", "compare"],
@@ -44,7 +44,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--total-timesteps",
         type=int,
-        default=512,
+        default=8760,
         help="Training timesteps per scenario for RL mode.",
     )
     parser.add_argument(

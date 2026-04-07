@@ -55,6 +55,8 @@ def evaluate_trained_model(
         episode_environment = 0.0
         episode_cost = 0.0
         max_violation = 0.0
+        violation_steps = 0
+        resilience_total = 0.0
         while not done:
             action, _ = model.predict(observation, deterministic=True)
             observation, reward, terminated, truncated, step_info = env.step(action)
@@ -67,6 +69,8 @@ def evaluate_trained_model(
             episode_environment += float(components["realized_environment"])
             episode_cost += float(components["realized_cost"])
             max_violation = max(max_violation, float(components["violation_penalty"]))
+            violation_steps += int(float(components.get("violation_indicator", 0.0)) > 0.0)
+            resilience_total += float(components.get("resilience_index", 0.0))
             rollout_rows.append(
                 {
                     "episode_index": episode_index,
@@ -90,6 +94,8 @@ def evaluate_trained_model(
                     "realized_environment": components["realized_environment"],
                     "realized_cost": components["realized_cost"],
                     "violation_penalty": components["violation_penalty"],
+                    "violation_indicator": components.get("violation_indicator", 0.0),
+                    "resilience_index": components.get("resilience_index", 0.0),
                     "switching_penalty": components["switching_penalty"],
                 }
             )
@@ -102,6 +108,8 @@ def evaluate_trained_model(
                 "total_realized_environment": episode_environment,
                 "total_realized_cost": episode_cost,
                 "max_violation_penalty": max_violation,
+                "violation_rate": violation_steps / max(horizon_steps, 1),
+                "resilience_index": resilience_total / max(horizon_steps, 1),
                 "final_candidate_share": step_info["state"]["candidate_share_of_effective_budget"],
                 "final_severity_offset": step_info["state"]["severity_offset"],
             }

@@ -24,7 +24,7 @@ def write_planning_outputs(
     optimization_diagnostics: pd.DataFrame,
     planning_data_quality_summary: pd.DataFrame,
     planning_candidate_exclusions: pd.DataFrame,
-    scenario_metric_adjustments: pd.DataFrame,
+    scenario_external_evidence: pd.DataFrame,
     output_dir: str | None,
     config,
     bundle,
@@ -47,7 +47,7 @@ def write_planning_outputs(
         "optimization_diagnostics": target_dir / "optimization_diagnostics.csv",
         "planning_data_quality_summary": target_dir / "planning_data_quality_summary.csv",
         "planning_candidate_exclusions": target_dir / "planning_candidate_exclusions.csv",
-        "scenario_metric_adjustments": target_dir / "scenario_metric_adjustments.csv",
+        "scenario_external_evidence": target_dir / "scenario_external_evidence.csv",
         "run_config": target_dir / "run_config.json",
     }
 
@@ -64,7 +64,7 @@ def write_planning_outputs(
     optimization_diagnostics.to_csv(outputs["optimization_diagnostics"], index=False)
     planning_data_quality_summary.to_csv(outputs["planning_data_quality_summary"], index=False)
     planning_candidate_exclusions.to_csv(outputs["planning_candidate_exclusions"], index=False)
-    scenario_metric_adjustments.to_csv(outputs["scenario_metric_adjustments"], index=False)
+    scenario_external_evidence.to_csv(outputs["scenario_external_evidence"], index=False)
 
     run_config = build_run_manifest(
         dataset_path=str(bundle.dataset_path),
@@ -75,7 +75,7 @@ def write_planning_outputs(
         planning_config=config,
         objective_weights=config.objective_weight_system,
         objective_readiness=readiness,
-        scenario_metric_adjustment_table_path=config.scenario_metric_adjustment_table_path,
+        scenario_external_evidence_table_path=config.scenario_external_evidence_table_path,
         row_count=int(len(scored)),
         planner_variant="surrogate_driven_robust_multiobjective_optimizer",
         output_files={key: str(path) for key, path in outputs.items()},

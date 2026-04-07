@@ -36,6 +36,8 @@ def run_baseline_policies(
             total_environment = 0.0
             total_cost = 0.0
             max_violation = 0.0
+            violation_steps = 0
+            resilience_total = 0.0
 
             for step_index in range(1, horizon_steps + 1):
                 action = policy_fn(state, spec)
@@ -47,6 +49,8 @@ def run_baseline_policies(
                 total_environment += components["realized_environment"]
                 total_cost += components["realized_cost"]
                 max_violation = max(max_violation, components["violation_penalty"])
+                violation_steps += int(components.get("violation_indicator", 0.0) > 0.0)
+                resilience_total += float(components.get("resilience_index", 0.0))
 
                 step_rows.append(
                     {
@@ -73,6 +77,8 @@ def run_baseline_policies(
                         "realized_environment": components["realized_environment"],
                         "realized_cost": components["realized_cost"],
                         "violation_penalty": components["violation_penalty"],
+                        "violation_indicator": components.get("violation_indicator", 0.0),
+                        "resilience_index": components.get("resilience_index", 0.0),
                         "switching_penalty": components["switching_penalty"],
                     }
                 )
@@ -90,6 +96,8 @@ def run_baseline_policies(
                     "total_realized_environment": total_environment,
                     "total_realized_cost": total_cost,
                     "max_violation_penalty": max_violation,
+                    "violation_rate": violation_steps / max(horizon_steps, 1),
+                    "resilience_index": resilience_total / max(horizon_steps, 1),
                     "final_candidate_share": state["candidate_share_of_effective_budget"],
                     "final_severity_offset": state["severity_offset"],
                     **_spec_summary(spec),
