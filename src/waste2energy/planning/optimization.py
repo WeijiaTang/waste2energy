@@ -37,6 +37,17 @@ def build_candidate_score_frame(
     config: "PlanningConfig",
 ) -> pd.DataFrame:
     scored = _apply_scenario_metric_adjustments(scenario_frame.copy(), config)
+    _require_numeric_columns(
+        scored,
+        columns=(
+            "planning_energy_intensity_mj_per_ton",
+            "planning_environment_intensity_kgco2e_per_ton",
+            "planning_cost_intensity_proxy_or_real_per_ton",
+            "planning_carbon_load_kgco2e_per_ton",
+            "combined_uncertainty_ratio",
+        ),
+        context="candidate score construction",
+    )
     scored["energy_utility"] = _normalize(scored["planning_energy_intensity_mj_per_ton"])
     scored["environment_utility"] = _normalize(scored["planning_environment_intensity_kgco2e_per_ton"])
     scored["cost_utility"] = 1.0 - _normalize(scored["planning_cost_intensity_proxy_or_real_per_ton"])
@@ -215,10 +226,22 @@ def build_pyomo_model(
         raise RuntimeError("pyomo is not installed.")
 
     subtype_groups = _subtype_groups(scored)
-    effective_budget = float(scenario_constraint.get("effective_processing_budget_ton_per_year", 0.0) or 0.0)
-    candidate_cap = float(scenario_constraint.get("candidate_share_cap_ton_per_year", 0.0) or 0.0)
-    subtype_cap = float(scenario_constraint.get("subtype_share_cap_ton_per_year", 0.0) or 0.0)
+    effective_budget = _required_constraint_value(scenario_constraint, "effective_processing_budget_ton_per_year")
+    candidate_cap = _required_constraint_value(scenario_constraint, "candidate_share_cap_ton_per_year")
+    subtype_cap = _required_constraint_value(scenario_constraint, "subtype_share_cap_ton_per_year")
     carbon_budget = _carbon_budget(scored, scenario_constraint, config)
+
+    _require_numeric_columns(
+        scored,
+        columns=(
+            "weighted_score_per_ton",
+            "planning_energy_intensity_mj_per_ton",
+            "planning_environment_intensity_kgco2e_per_ton",
+            "planning_cost_intensity_proxy_or_real_per_ton",
+            "planning_carbon_load_kgco2e_per_ton",
+        ),
+        context="pyomo model assembly",
+    )
 
     model = pyo.ConcreteModel()
     model.CASES = pyo.RangeSet(0, len(scored) - 1)
@@ -308,13 +331,21 @@ def _solve_with_scipy_milp(
     n_subtypes = len(subtype_names)
     total_vars = n_cases + n_cases + n_subtypes
 
-    effective_budget = float(scenario_constraint.get("effective_processing_budget_ton_per_year", 0.0) or 0.0)
-    candidate_cap = float(scenario_constraint.get("candidate_share_cap_ton_per_year", 0.0) or 0.0)
-    subtype_cap = float(scenario_constraint.get("subtype_share_cap_ton_per_year", 0.0) or 0.0)
+    effective_budget = _required_constraint_value(scenario_constraint, "effective_processing_budget_ton_per_year")
+    candidate_cap = _required_constraint_value(scenario_constraint, "candidate_share_cap_ton_per_year")
+    subtype_cap = _required_constraint_value(scenario_constraint, "subtype_share_cap_ton_per_year")
     carbon_budget = _carbon_budget(scored, scenario_constraint, config)
+    _require_numeric_columns(
+        scored,
+        columns=(
+            "weighted_score_per_ton",
+            "planning_carbon_load_kgco2e_per_ton",
+        ),
+        context="scipy milp assembly",
+    )
 
     cost_vector = np.zeros(total_vars, dtype=float)
-    cost_vector[:n_cases] = -pd.to_numeric(scored["weighted_score_per_ton"], errors="coerce").fillna(0.0).to_numpy()
+    cost_vector[:n_cases] = -pd.to_numeric(scored["weighted_score_per_ton"], errors="coerce").to_numpy()
 
     lower_bounds = np.zeros(total_vars, dtype=float)
     upper_bounds = np.ones(total_vars, dtype=float)
@@ -366,7 +397,7 @@ def _solve_with_scipy_milp(
     carbon_row = np.zeros(total_vars, dtype=float)
     carbon_row[:n_cases] = pd.to_numeric(
         scored["planning_carbon_load_kgco2e_per_ton"], errors="coerce"
-    ).fillna(0.0).to_numpy()
+    ).to_numpy()
     constraints.append(LinearConstraint(carbon_row, -np.inf, carbon_budget))
 
     solved = milp(
@@ -409,10 +440,15 @@ def _documented_allocation_fallback(
         ["weighted_score_per_ton", "planning_energy_intensity_mj_per_ton"],
         ascending=[False, False],
     ).copy()
-    effective_budget = float(scenario_constraint.get("effective_processing_budget_ton_per_year", 0.0) or 0.0)
-    candidate_cap = float(scenario_constraint.get("candidate_share_cap_ton_per_year", 0.0) or 0.0)
-    subtype_cap = float(scenario_constraint.get("subtype_share_cap_ton_per_year", 0.0) or 0.0)
+    effective_budget = _required_constraint_value(scenario_constraint, "effective_processing_budget_ton_per_year")
+    candidate_cap = _required_constraint_value(scenario_constraint, "candidate_share_cap_ton_per_year")
+    subtype_cap = _required_constraint_value(scenario_constraint, "subtype_share_cap_ton_per_year")
     carbon_budget = _carbon_budget(scored, scenario_constraint, config)
+    _require_numeric_columns(
+        ordered,
+        columns=("weighted_score_per_ton", "planning_energy_intensity_mj_per_ton", "planning_carbon_load_kgco2e_per_ton"),
+        context="documented allocation fallback",
+    )
 
     allocation = pd.Series(0.0, index=ordered.index, dtype=float)
     subtype_load: dict[str, float] = {}
@@ -432,7 +468,11 @@ def _documented_allocation_fallback(
             allowable = min(allowable, subtype_cap - subtype_load.get(subtype, 0.0))
         if allowable <= 1e-9:
             continue
-        row_carbon_intensity = float(pd.to_numeric(pd.Series([row["planning_carbon_load_kgco2e_per_ton"]]), errors="coerce").fillna(0.0).iloc[0])
+        row_carbon_intensity = _required_row_numeric_value(
+            row,
+            "planning_carbon_load_kgco2e_per_ton",
+            context="documented allocation fallback",
+        )
         if carbon_load + allowable * row_carbon_intensity > carbon_budget + 1e-9:
             allowable = max(0.0, (carbon_budget - carbon_load) / max(row_carbon_intensity, 1e-9))
         if allowable <= 1e-9:
@@ -519,21 +559,14 @@ def _carbon_budget(
     scenario_constraint: dict[str, object],
     config: "PlanningConfig",
 ) -> float:
-    constraint_reference = float(
-        pd.to_numeric(
-            pd.Series([scenario_constraint.get("baseline_emission_factor_kgco2e_per_metric_ton")]),
-            errors="coerce",
-        ).fillna(0.0).iloc[0]
+    constraint_reference = _required_constraint_value(
+        scenario_constraint,
+        "baseline_emission_factor_kgco2e_per_metric_ton",
     )
-    if constraint_reference > 0.0:
-        baseline_reference = constraint_reference
-    else:
-        baseline_emission = pd.to_numeric(
-            scored["scenario_baseline_waste_treatment_emission_factor_kgco2e_per_metric_ton"],
-            errors="coerce",
-        ).fillna(0.0)
-        baseline_reference = float(baseline_emission.mean()) if not baseline_emission.empty else 0.0
-    effective_budget = float(scenario_constraint.get("effective_processing_budget_ton_per_year", 0.0) or 0.0)
+    if constraint_reference <= 0.0:
+        raise ValueError("baseline_emission_factor_kgco2e_per_metric_ton must be positive for carbon-budget construction.")
+    baseline_reference = constraint_reference
+    effective_budget = _required_constraint_value(scenario_constraint, "effective_processing_budget_ton_per_year")
     return max(0.0, baseline_reference * effective_budget * config.carbon_budget_factor)
 
 
@@ -545,7 +578,9 @@ def _candidate_subtype_key(row: pd.Series) -> str:
 
 
 def _normalize(series: pd.Series) -> pd.Series:
-    values = pd.to_numeric(series, errors="coerce").replace([np.inf, -np.inf], np.nan).fillna(0.0)
+    values = pd.to_numeric(series, errors="coerce").replace([np.inf, -np.inf], np.nan)
+    if values.isna().any():
+        raise ValueError("Normalization received missing/non-finite values; upstream objective construction should exclude them.")
     minimum = float(values.min())
     maximum = float(values.max())
     if maximum <= minimum:
@@ -562,6 +597,10 @@ def _apply_scenario_metric_adjustments(
     if "scenario_name" not in frame.columns or "pathway" not in frame.columns:
         return frame
     adjusted = frame.copy()
+    adjusted["scenario_metric_adjustment_source"] = "unadjusted"
+    adjusted["scenario_metric_adjustment_reference"] = ""
+    adjusted["scenario_metric_adjustment_rationale"] = ""
+    adjusted["scenario_metric_adjustment_table_path"] = config.scenario_metric_adjustment_table_path or ""
     variance_scale = float(config.scenario_metric_variance_scale)
     for adjustment in config.scenario_metric_adjustments:
         mask = (
@@ -570,27 +609,35 @@ def _apply_scenario_metric_adjustments(
         )
         if not mask.any():
             continue
-        adjusted.loc[mask, "planning_energy_intensity_mj_per_ton"] = (
-            pd.to_numeric(adjusted.loc[mask, "planning_energy_intensity_mj_per_ton"], errors="coerce").fillna(0.0)
-            * _scaled_multiplier(adjustment.energy_multiplier, variance_scale)
+        adjusted.loc[mask, "planning_energy_intensity_mj_per_ton"] = _scale_numeric_series(
+            adjusted.loc[mask, "planning_energy_intensity_mj_per_ton"],
+            _scaled_multiplier(adjustment.energy_multiplier, variance_scale),
         )
-        adjusted.loc[mask, "planning_environment_intensity_kgco2e_per_ton"] = (
-            pd.to_numeric(adjusted.loc[mask, "planning_environment_intensity_kgco2e_per_ton"], errors="coerce").fillna(0.0)
-            * _scaled_multiplier(adjustment.environment_multiplier, variance_scale)
+        adjusted.loc[mask, "planning_environment_intensity_kgco2e_per_ton"] = _scale_numeric_series(
+            adjusted.loc[mask, "planning_environment_intensity_kgco2e_per_ton"],
+            _scaled_multiplier(adjustment.environment_multiplier, variance_scale),
         )
-        adjusted.loc[mask, "planning_cost_intensity_proxy_or_real_per_ton"] = (
-            pd.to_numeric(adjusted.loc[mask, "planning_cost_intensity_proxy_or_real_per_ton"], errors="coerce").fillna(0.0)
-            * _scaled_multiplier(adjustment.cost_multiplier, variance_scale)
+        adjusted.loc[mask, "planning_cost_intensity_proxy_or_real_per_ton"] = _scale_numeric_series(
+            adjusted.loc[mask, "planning_cost_intensity_proxy_or_real_per_ton"],
+            _scaled_multiplier(adjustment.cost_multiplier, variance_scale),
         )
-        adjusted.loc[mask, "planning_carbon_load_kgco2e_per_ton"] = (
-            pd.to_numeric(adjusted.loc[mask, "planning_carbon_load_kgco2e_per_ton"], errors="coerce").fillna(0.0)
-            * _scaled_multiplier(adjustment.carbon_load_multiplier, variance_scale)
+        adjusted.loc[mask, "planning_carbon_load_kgco2e_per_ton"] = _scale_numeric_series(
+            adjusted.loc[mask, "planning_carbon_load_kgco2e_per_ton"],
+            _scaled_multiplier(adjustment.carbon_load_multiplier, variance_scale),
         )
+        adjusted.loc[mask, "scenario_metric_adjustment_source"] = adjustment.adjustment_source
+        adjusted.loc[mask, "scenario_metric_adjustment_reference"] = adjustment.adjustment_reference
+        adjusted.loc[mask, "scenario_metric_adjustment_rationale"] = adjustment.adjustment_rationale
     return adjusted
 
 
 def _scaled_multiplier(multiplier: float, variance_scale: float) -> float:
     return 1.0 + (float(multiplier) - 1.0) * variance_scale
+
+
+def _scale_numeric_series(series: pd.Series, multiplier: float) -> pd.Series:
+    values = pd.to_numeric(series, errors="coerce")
+    return values * float(multiplier)
 
 
 def _constraint_diagnostics(
@@ -687,11 +734,13 @@ def _pareto_efficient_mask(
 ) -> pd.Series:
     frame = pd.DataFrame(
         {
-            "energy": pd.to_numeric(energy, errors="coerce").fillna(0.0),
-            "environment": pd.to_numeric(environment, errors="coerce").fillna(0.0),
-            "cost": pd.to_numeric(cost, errors="coerce").fillna(0.0),
+            "energy": pd.to_numeric(energy, errors="coerce"),
+            "environment": pd.to_numeric(environment, errors="coerce"),
+            "cost": pd.to_numeric(cost, errors="coerce"),
         }
     ).reset_index(drop=True)
+    if frame.isna().any().any():
+        raise ValueError("Pareto-front construction received missing objective values.")
     efficient = []
     for _, row in frame.iterrows():
         dominated = (
@@ -706,3 +755,43 @@ def _pareto_efficient_mask(
         )
         efficient.append(not bool(dominated.any()))
     return pd.Series(efficient, index=energy.index)
+
+
+def _require_numeric_columns(
+    frame: pd.DataFrame,
+    *,
+    columns: tuple[str, ...],
+    context: str,
+) -> None:
+    for column in columns:
+        if column not in frame.columns:
+            raise ValueError(f"{context} requires column '{column}', but it is missing.")
+        values = pd.to_numeric(frame[column], errors="coerce").replace([np.inf, -np.inf], np.nan)
+        if values.isna().any():
+            invalid_rows = frame.loc[values.isna(), "optimization_case_id"] if "optimization_case_id" in frame.columns else frame.index[values.isna()]
+            preview = ", ".join(str(value) for value in list(invalid_rows[:5]))
+            raise ValueError(
+                f"{context} encountered missing/non-finite values in '{column}' for row(s): {preview}."
+            )
+
+
+def _required_constraint_value(scenario_constraint: dict[str, object], key: str) -> float:
+    if key not in scenario_constraint:
+        raise ValueError(f"Scenario optimization constraint is missing required key '{key}'.")
+    value = pd.to_numeric(pd.Series([scenario_constraint.get(key)]), errors="coerce").iloc[0]
+    if pd.isna(value):
+        scenario_name = scenario_constraint.get("scenario_name", "unknown_scenario")
+        raise ValueError(
+            f"Scenario optimization constraint for '{scenario_name}' contains missing/non-numeric value in '{key}'."
+        )
+    return float(value)
+
+
+def _required_row_numeric_value(row: pd.Series, key: str, *, context: str) -> float:
+    if key not in row.index:
+        raise ValueError(f"{context} requires row key '{key}', but it is missing.")
+    value = pd.to_numeric(pd.Series([row[key]]), errors="coerce").iloc[0]
+    if pd.isna(value):
+        row_id = row.get("optimization_case_id", "unknown_case")
+        raise ValueError(f"{context} encountered missing/non-numeric '{key}' for row '{row_id}'.")
+    return float(value)

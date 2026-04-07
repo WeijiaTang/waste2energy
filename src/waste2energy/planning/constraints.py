@@ -128,5 +128,11 @@ def _safe_ratio(numerator: float, denominator: float) -> float:
 
 def _value(row: pd.Series, column: str) -> float:
     if column not in row.index:
-        return 0.0
-    return float(pd.to_numeric(pd.Series([row[column]]), errors="coerce").fillna(0.0).iloc[0])
+        raise ValueError(f"Scenario constraint input is missing required column '{column}'.")
+    value = pd.to_numeric(pd.Series([row[column]]), errors="coerce").iloc[0]
+    if pd.isna(value):
+        scenario_name = str(row.get("scenario_name", "unknown_scenario"))
+        raise ValueError(
+            f"Scenario constraint input for '{scenario_name}' contains missing/non-numeric value in '{column}'."
+        )
+    return float(value)

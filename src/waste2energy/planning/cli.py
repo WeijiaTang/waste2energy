@@ -96,6 +96,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="Scale factor applied to pathway-specific scenario metric perturbations.",
     )
     parser.add_argument(
+        "--scenario-metric-adjustment-table",
+        default="",
+        help="Traceable CSV calibration table for scenario/pathway metric multipliers.",
+    )
+    parser.add_argument(
         "--optimization-method",
         choices=["auto", "pyomo", "scipy"],
         default="auto",
@@ -143,6 +148,7 @@ def main() -> int:
                 constraint_relaxation_ratio=args.constraint_relaxation_ratio,
                 subtype_relaxation_ratio=args.subtype_relaxation_ratio,
                 scenario_metric_variance_scale=args.scenario_metric_variance_scale,
+                scenario_metric_adjustment_table_path=args.scenario_metric_adjustment_table or None,
                 optimization_method=args.optimization_method,
                 pyomo_solver_preference=args.pyomo_solver,
                 pareto_point_count=args.pareto_point_count,

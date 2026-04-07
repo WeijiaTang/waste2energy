@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 import pandas as pd
 
@@ -13,7 +13,7 @@ from ..config import (
 )
 from .artifacts import write_planning_outputs
 from .constraints import build_scenario_constraints
-from .inputs import load_planning_input_bundle
+from .inputs import load_planning_input_bundle, load_scenario_metric_adjustment_table
 from .optimization import (
     build_candidate_score_frame,
     generate_pareto_front,
@@ -31,67 +31,9 @@ class ScenarioMetricAdjustment:
     environment_multiplier: float = 1.0
     cost_multiplier: float = 1.0
     carbon_load_multiplier: float = 1.0
-
-
-def default_scenario_metric_adjustments() -> tuple[ScenarioMetricAdjustment, ...]:
-    return (
-        ScenarioMetricAdjustment(
-            scenario_name="baseline_region_case",
-            pathway="pyrolysis",
-            energy_multiplier=1.02,
-            environment_multiplier=1.00,
-            cost_multiplier=0.99,
-            carbon_load_multiplier=1.00,
-        ),
-        ScenarioMetricAdjustment(
-            scenario_name="high_supply_case",
-            pathway="pyrolysis",
-            energy_multiplier=0.95,
-            environment_multiplier=0.97,
-            cost_multiplier=1.07,
-            carbon_load_multiplier=1.05,
-        ),
-        ScenarioMetricAdjustment(
-            scenario_name="high_supply_case",
-            pathway="htc",
-            energy_multiplier=1.10,
-            environment_multiplier=1.08,
-            cost_multiplier=0.92,
-            carbon_load_multiplier=0.95,
-        ),
-        ScenarioMetricAdjustment(
-            scenario_name="high_supply_case",
-            pathway="ad",
-            energy_multiplier=1.03,
-            environment_multiplier=1.05,
-            cost_multiplier=0.98,
-            carbon_load_multiplier=0.97,
-        ),
-        ScenarioMetricAdjustment(
-            scenario_name="policy_support_case",
-            pathway="pyrolysis",
-            energy_multiplier=1.00,
-            environment_multiplier=1.02,
-            cost_multiplier=0.98,
-            carbon_load_multiplier=0.99,
-        ),
-        ScenarioMetricAdjustment(
-            scenario_name="policy_support_case",
-            pathway="htc",
-            energy_multiplier=1.06,
-            environment_multiplier=1.12,
-            cost_multiplier=0.88,
-            carbon_load_multiplier=0.92,
-        ),
-        ScenarioMetricAdjustment(
-            scenario_name="policy_support_case",
-            pathway="ad",
-            energy_multiplier=1.08,
-            environment_multiplier=1.18,
-            cost_multiplier=0.84,
-            carbon_load_multiplier=0.90,
-        ),
-    )
+    adjustment_source: str = ""
+    adjustment_reference: str = ""
+    adjustment_rationale: str = ""
 
 
 @dataclass(frozen=True)
@@ -115,9 +57,8 @@ class PlanningConfig:
     enforce_max_selected: bool = True
     enforce_min_distinct_subtypes: bool = True
     scenario_metric_variance_scale: float = 1.00
-    scenario_metric_adjustments: tuple[ScenarioMetricAdjustment, ...] = field(
-        default_factory=default_scenario_metric_adjustments
-    )
+    scenario_metric_adjustment_table_path: str | None = None
+    scenario_metric_adjustments: tuple[ScenarioMetricAdjustment, ...] = field(default_factory=tuple)
     optimization_method: str = "auto"
     pyomo_solver_preference: str = "auto"
     pareto_point_count: int = 12
@@ -149,30 +90,9 @@ class PlanningConfig:
             environment=self.environment_weight if environment_weight is None else environment_weight,
             cost=self.cost_weight if cost_weight is None else cost_weight,
         )
-        return PlanningConfig(
-            objective_weight_preset=self.objective_weight_preset,
+        return replace(
+            self,
             objective_weight_system=updated_system,
-            top_k_per_scenario=self.top_k_per_scenario,
-            max_portfolio_candidates=self.max_portfolio_candidates,
-            max_candidate_share=self.max_candidate_share,
-            max_subtype_share=self.max_subtype_share,
-            min_distinct_subtypes=self.min_distinct_subtypes,
-            deployable_capacity_fraction=self.deployable_capacity_fraction,
-            robustness_factor=self.robustness_factor,
-            carbon_budget_factor=self.carbon_budget_factor,
-            constraint_relaxation_ratio=self.constraint_relaxation_ratio,
-            subtype_relaxation_ratio=self.subtype_relaxation_ratio,
-            enforce_candidate_cap=self.enforce_candidate_cap,
-            enforce_subtype_cap=self.enforce_subtype_cap,
-            enforce_max_selected=self.enforce_max_selected,
-            enforce_min_distinct_subtypes=self.enforce_min_distinct_subtypes,
-            scenario_metric_variance_scale=self.scenario_metric_variance_scale,
-            scenario_metric_adjustments=self.scenario_metric_adjustments,
-            optimization_method=self.optimization_method,
-            pyomo_solver_preference=self.pyomo_solver_preference,
-            pareto_point_count=self.pareto_point_count,
-            enable_pareto_export=self.enable_pareto_export,
-            allow_surrogate_fallback=self.allow_surrogate_fallback,
         )
 
 
@@ -181,10 +101,9 @@ def run_planning_baseline(
     output_dir: str | None = None,
     config: PlanningConfig | None = None,
 ) -> dict[str, object]:
-    active_config = config or PlanningConfig()
-    _validate_config(active_config)
-
     bundle = load_planning_input_bundle(dataset_path=dataset_path)
+    active_config = _resolve_planning_config(config or PlanningConfig(), bundle.frame)
+    _validate_config(active_config)
     execution = execute_planning_pipeline(bundle=bundle, config=active_config)
     outputs = write_planning_outputs(
         scored=execution["scored"],
@@ -197,6 +116,9 @@ def run_planning_baseline(
         pathway_summary=execution["pathway_summary"],
         surrogate_predictions=execution["surrogate_predictions"],
         optimization_diagnostics=execution["optimization_diagnostics"],
+        planning_data_quality_summary=execution["planning_data_quality_summary"],
+        planning_candidate_exclusions=execution["planning_candidate_exclusions"],
+        scenario_metric_adjustments=execution["scenario_metric_adjustments"],
         output_dir=output_dir,
         config=active_config,
         bundle=bundle,
@@ -218,18 +140,19 @@ def run_planning_baseline(
 
 
 def execute_planning_pipeline(bundle, config: PlanningConfig) -> dict[str, object]:
+    active_config = _resolve_planning_config(config, bundle.frame)
     surrogate_predictions = build_surrogate_predictions(bundle.frame)
-    objective_frame, readiness = assemble_objective_frame(
+    objective_frame, readiness, data_quality_summary, candidate_exclusions = assemble_objective_frame(
         base_frame=bundle.frame,
         surrogate_predictions=surrogate_predictions,
-        robustness_factor=config.robustness_factor,
+        robustness_factor=active_config.robustness_factor,
         real_cost_columns=bundle.real_cost_columns,
     )
-    scenario_constraints = build_scenario_constraints(objective_frame, config)
-    scored = score_cases(objective_frame, config)
-    scenario_recommendations = build_scenario_recommendations(scored, config.top_k_per_scenario)
-    portfolio_allocations, diagnostics = build_scenario_portfolios(scored, scenario_constraints, config)
-    pareto_candidates = build_portfolio_pareto_candidates(scored, scenario_constraints, config)
+    scenario_constraints = build_scenario_constraints(objective_frame, active_config)
+    scored = score_cases(objective_frame, active_config)
+    scenario_recommendations = build_scenario_recommendations(scored, active_config.top_k_per_scenario)
+    portfolio_allocations, diagnostics = build_scenario_portfolios(scored, scenario_constraints, active_config)
+    pareto_candidates = build_portfolio_pareto_candidates(scored, scenario_constraints, active_config)
     portfolio_summary = build_portfolio_summary(portfolio_allocations, scenario_constraints)
     scenario_summary = build_scenario_summary(
         scored=scored,
@@ -254,6 +177,9 @@ def execute_planning_pipeline(bundle, config: PlanningConfig) -> dict[str, objec
         "scenario_summary": scenario_summary,
         "pathway_summary": pathway_summary,
         "optimization_diagnostics": diagnostics,
+        "planning_data_quality_summary": data_quality_summary,
+        "planning_candidate_exclusions": candidate_exclusions,
+        "scenario_metric_adjustments": _scenario_metric_adjustments_to_frame(active_config),
     }
 
 
@@ -532,3 +458,68 @@ def _validate_config(config: PlanningConfig) -> None:
         raise ValueError("carbon_budget_factor must be positive.")
     if config.pyomo_solver_preference not in {"auto", "appsi_highs", "highs", "glpk", "cbc"}:
         raise ValueError("pyomo_solver_preference must be one of: auto, appsi_highs, highs, glpk, cbc.")
+
+
+def _resolve_planning_config(config: PlanningConfig, frame: pd.DataFrame) -> PlanningConfig:
+    adjustments = config.scenario_metric_adjustments
+    table_path = config.scenario_metric_adjustment_table_path
+    if not adjustments:
+        adjustment_frame, resolved_path = load_scenario_metric_adjustment_table(table_path)
+        _validate_adjustment_coverage(adjustment_frame, frame)
+        adjustments = tuple(
+            ScenarioMetricAdjustment(
+                scenario_name=str(row.scenario_name),
+                pathway=str(row.pathway),
+                energy_multiplier=float(row.energy_multiplier),
+                environment_multiplier=float(row.environment_multiplier),
+                cost_multiplier=float(row.cost_multiplier),
+                carbon_load_multiplier=float(row.carbon_load_multiplier),
+                adjustment_source=str(row.adjustment_source),
+                adjustment_reference=str(row.adjustment_reference),
+                adjustment_rationale=str(row.adjustment_rationale),
+            )
+            for row in adjustment_frame.itertuples(index=False)
+        )
+        table_path = str(resolved_path)
+    return replace(
+        config,
+        scenario_metric_adjustment_table_path=table_path,
+        scenario_metric_adjustments=adjustments,
+    )
+
+
+def _validate_adjustment_coverage(adjustment_frame: pd.DataFrame, planning_frame: pd.DataFrame) -> None:
+    expected = {
+        (str(row.scenario_name), str(row.pathway))
+        for row in planning_frame[["scenario_name", "pathway"]].drop_duplicates().itertuples(index=False)
+    }
+    observed = {
+        (str(row.scenario_name), str(row.pathway))
+        for row in adjustment_frame[["scenario_name", "pathway"]].drop_duplicates().itertuples(index=False)
+    }
+    missing = sorted(expected - observed)
+    if missing:
+        preview = ", ".join(f"{scenario}/{pathway}" for scenario, pathway in missing[:10])
+        raise ValueError(
+            "Scenario metric adjustment calibration table does not cover all planning scenario/pathway pairs. "
+            f"Missing: {preview}"
+        )
+
+
+def _scenario_metric_adjustments_to_frame(config: PlanningConfig) -> pd.DataFrame:
+    rows = [
+        {
+            "scenario_name": adjustment.scenario_name,
+            "pathway": adjustment.pathway,
+            "energy_multiplier": adjustment.energy_multiplier,
+            "environment_multiplier": adjustment.environment_multiplier,
+            "cost_multiplier": adjustment.cost_multiplier,
+            "carbon_load_multiplier": adjustment.carbon_load_multiplier,
+            "adjustment_source": adjustment.adjustment_source,
+            "adjustment_reference": adjustment.adjustment_reference,
+            "adjustment_rationale": adjustment.adjustment_rationale,
+            "adjustment_table_path": config.scenario_metric_adjustment_table_path or "",
+        }
+        for adjustment in config.scenario_metric_adjustments
+    ]
+    return pd.DataFrame(rows).sort_values(["scenario_name", "pathway"]).reset_index(drop=True) if rows else pd.DataFrame()

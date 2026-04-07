@@ -42,9 +42,12 @@ def analyze_weight_sensitivity(
             enforce_max_selected=config.enforce_max_selected,
             enforce_min_distinct_subtypes=config.enforce_min_distinct_subtypes,
             scenario_metric_variance_scale=config.scenario_metric_variance_scale,
+            scenario_metric_adjustment_table_path=config.scenario_metric_adjustment_table_path,
             scenario_metric_adjustments=config.scenario_metric_adjustments,
             optimization_method=config.optimization_method,
+            pyomo_solver_preference=config.pyomo_solver_preference,
             pareto_point_count=config.pareto_point_count,
+            enable_pareto_export=config.enable_pareto_export,
             allow_surrogate_fallback=config.allow_surrogate_fallback,
         )
         with TemporaryDirectory(prefix="wte_weight_sensitivity_") as tmp_dir:

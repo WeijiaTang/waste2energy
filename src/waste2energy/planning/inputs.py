@@ -17,6 +17,7 @@ from ..config import MODEL_READY_DIR
 
 
 DEFAULT_PLANNING_DATASET = MODEL_READY_DIR / "optimization_input_dataset.csv"
+DEFAULT_SCENARIO_METRIC_ADJUSTMENT_TABLE = MODEL_READY_DIR / "scenario_metric_adjustment_calibration.csv"
 
 REQUIRED_PLANNING_COLUMNS = [
     "optimization_case_id",
@@ -75,6 +76,18 @@ REAL_COST_CANDIDATE_COLUMNS = [
     "unit_net_system_cost_usd_per_ton",
 ]
 
+REQUIRED_SCENARIO_METRIC_ADJUSTMENT_COLUMNS = [
+    "scenario_name",
+    "pathway",
+    "energy_multiplier",
+    "environment_multiplier",
+    "cost_multiplier",
+    "carbon_load_multiplier",
+    "adjustment_source",
+    "adjustment_reference",
+    "adjustment_rationale",
+]
+
 
 @dataclass(frozen=True)
 class PlanningInputBundle:
@@ -116,6 +129,24 @@ def load_planning_input_bundle(dataset_path: str | Path | None = None) -> Planni
     )
 
 
+def load_scenario_metric_adjustment_table(
+    table_path: str | Path | None = None,
+) -> tuple[pd.DataFrame, Path]:
+    path = Path(table_path) if table_path else DEFAULT_SCENARIO_METRIC_ADJUSTMENT_TABLE
+    if not path.exists():
+        raise FileNotFoundError(f"Scenario metric adjustment calibration table not found: {path}")
+
+    frame = pd.read_csv(path)
+    validate_scenario_metric_adjustment_table(frame, path)
+    normalized = frame.copy()
+    normalized["scenario_name"] = normalized["scenario_name"].astype(str).str.strip()
+    normalized["pathway"] = normalized["pathway"].astype(str).str.strip()
+    normalized["adjustment_source"] = normalized["adjustment_source"].astype(str).str.strip()
+    normalized["adjustment_reference"] = normalized["adjustment_reference"].astype(str).str.strip()
+    normalized["adjustment_rationale"] = normalized["adjustment_rationale"].astype(str).str.strip()
+    return normalized, path
+
+
 def validate_planning_frame(frame: pd.DataFrame, dataset_path: Path) -> None:
     missing = [column for column in REQUIRED_PLANNING_COLUMNS if column not in frame.columns]
     if missing:
@@ -149,6 +180,72 @@ def validate_planning_frame(frame: pd.DataFrame, dataset_path: Path) -> None:
             )
 
 
+def validate_scenario_metric_adjustment_table(frame: pd.DataFrame, table_path: Path) -> None:
+    missing = [column for column in REQUIRED_SCENARIO_METRIC_ADJUSTMENT_COLUMNS if column not in frame.columns]
+    if missing:
+        raise ValueError(
+            f"Scenario metric adjustment table '{table_path}' is missing required columns: {', '.join(missing)}"
+        )
+
+    if frame.empty:
+        raise ValueError(f"Scenario metric adjustment table '{table_path}' is empty.")
+
+    frame = frame.copy()
+    frame["scenario_name"] = frame["scenario_name"].astype(str).str.strip()
+    frame["pathway"] = frame["pathway"].astype(str).str.strip()
+    if (frame["scenario_name"] == "").any() or (frame["pathway"] == "").any():
+        raise ValueError(
+            f"Scenario metric adjustment table '{table_path}' contains blank scenario_name/pathway values."
+        )
+
+    duplicate_mask = frame.duplicated(subset=["scenario_name", "pathway"], keep=False)
+    if duplicate_mask.any():
+        duplicates = frame.loc[duplicate_mask, ["scenario_name", "pathway"]].drop_duplicates()
+        preview = ", ".join(
+            f"{row.scenario_name}/{row.pathway}" for row in duplicates.itertuples(index=False)
+        )
+        raise ValueError(
+            f"Scenario metric adjustment table '{table_path}' contains duplicate scenario/pathway rows: {preview}"
+        )
+
+    numeric_columns = [
+        "energy_multiplier",
+        "environment_multiplier",
+        "cost_multiplier",
+        "carbon_load_multiplier",
+    ]
+    for column in numeric_columns:
+        numeric = pd.to_numeric(frame[column], errors="coerce")
+        if numeric.isna().any():
+            invalid_rows = numeric[numeric.isna()].index.tolist()
+            preview = ", ".join(str(index) for index in invalid_rows[:5])
+            raise ValueError(
+                f"Scenario metric adjustment table '{table_path}' contains missing or non-numeric values in "
+                f"'{column}' at row(s): {preview}."
+            )
+        if (numeric <= 0.0).any():
+            invalid_rows = numeric[numeric <= 0.0].index.tolist()
+            preview = ", ".join(str(index) for index in invalid_rows[:5])
+            raise ValueError(
+                f"Scenario metric adjustment table '{table_path}' must keep '{column}' strictly positive; "
+                f"violations at row(s): {preview}."
+            )
+
+    text_columns = [
+        "adjustment_source",
+        "adjustment_reference",
+        "adjustment_rationale",
+    ]
+    for column in text_columns:
+        values = frame[column].astype(str).str.strip()
+        if (values == "").any():
+            invalid_rows = values[values == ""].index.tolist()
+            preview = ", ".join(str(index) for index in invalid_rows[:5])
+            raise ValueError(
+                f"Scenario metric adjustment table '{table_path}' contains blank values in '{column}' at row(s): {preview}."
+            )
+
+
 def normalize_planning_units(frame: pd.DataFrame) -> pd.DataFrame:
     normalized = frame.copy()
     source_units = normalized["baseline_waste_treatment_factor_unit_reference"].astype(str).map(
@@ -166,7 +263,7 @@ def normalize_planning_units(frame: pd.DataFrame) -> pd.DataFrame:
             pd.to_numeric(
                 normalized["baseline_waste_treatment_emission_factor_kgco2e_per_short_ton_reference"],
                 errors="coerce",
-            ).fillna(0.0),
+            ),
             source_units,
             strict=False,
         )
@@ -177,7 +274,7 @@ def normalize_planning_units(frame: pd.DataFrame) -> pd.DataFrame:
             pd.to_numeric(
                 normalized["scenario_baseline_waste_treatment_emission_factor_kgco2e_per_short_ton"],
                 errors="coerce",
-            ).fillna(0.0),
+            ),
             source_units,
             strict=False,
         )

@@ -62,6 +62,10 @@ class SurrogateEvaluator:
     def evaluate(self, frame: pd.DataFrame) -> pd.DataFrame:
         predictions = frame[["optimization_case_id", "pathway"]].copy()
         predictions["pathway"] = predictions["pathway"].astype(str).str.strip().str.lower()
+        predictions["surrogate_prediction_status"] = ""
+        predictions["surrogate_feature_imputation_flag"] = False
+        predictions["surrogate_missing_feature_columns"] = ""
+        predictions["surrogate_fallback_reason"] = ""
 
         for target in SURROGATE_TARGETS:
             predictions[f"predicted_{target}"] = np.nan
@@ -71,21 +75,44 @@ class SurrogateEvaluator:
             predictions[f"{target}_uncertainty_ratio"] = np.nan
             predictions[f"{target}_prediction_source"] = ""
 
-        for pathway, pathway_frame in frame.groupby(frame["pathway"].astype(str).str.strip().str.lower(), dropna=False):
+        grouped = frame.groupby(frame["pathway"].astype(str).str.strip().str.lower(), dropna=False)
+        for pathway, pathway_frame in grouped:
             pathway_index = pathway_frame.index
             if pathway in SUPPORTED_SURROGATE_PATHWAYS:
+                target_payloads: list[pd.DataFrame] = []
                 for target in SURROGATE_TARGETS:
-                    payload_frame = self._predict_target_batch(
-                        pathway_frame,
-                        pathway=pathway,
-                        target_column=target,
+                    target_payloads.append(
+                        self._predict_target_batch(
+                            pathway_frame,
+                            pathway=pathway,
+                            target_column=target,
+                        )
                     )
-                    for column in payload_frame.columns:
-                        if column in {"optimization_case_id", "pathway"}:
-                            continue
-                        predictions.loc[pathway_index, column] = payload_frame[column].to_numpy()
+                merged_payload = target_payloads[0]
+                for payload in target_payloads[1:]:
+                    merge_columns = [
+                        "surrogate_prediction_status",
+                        "surrogate_feature_imputation_flag",
+                        "surrogate_missing_feature_columns",
+                        "surrogate_fallback_reason",
+                    ]
+                    payload = payload.drop(columns=[column for column in merge_columns if column in payload.columns])
+                    merged_payload = merged_payload.merge(
+                        payload,
+                        on=["optimization_case_id", "pathway"],
+                        how="left",
+                        validate="one_to_one",
+                    )
+                for column in merged_payload.columns:
+                    if column in {"optimization_case_id", "pathway"}:
+                        continue
+                    predictions.loc[pathway_index, column] = merged_payload[column].to_numpy()
             else:
-                fallback_frame = self._build_documented_fallback_batch(pathway_frame, pathway=pathway)
+                fallback_frame = self._build_documented_fallback_batch(
+                    pathway_frame,
+                    pathway=pathway,
+                    reason=f"unsupported_pathway:{pathway or 'unknown'}",
+                )
                 for column in fallback_frame.columns:
                     if column in {"optimization_case_id", "pathway"}:
                         continue
@@ -110,14 +137,31 @@ class SurrogateEvaluator:
                 frame=frame,
                 target_column=target_column,
                 reason="missing_artifact",
+                prediction_status="documented_fallback_missing_artifact",
+                missing_feature_columns=pd.Series([""] * len(frame), index=frame.index, dtype="object"),
+                feature_imputation_flag=pd.Series([False] * len(frame), index=frame.index, dtype=bool),
+            )
+
+        materialized = self._materialize_features(frame, artifact.feature_columns)
+        missing_feature_mask = materialized["missing_required_feature_columns"].astype(str).str.len().gt(0)
+        if missing_feature_mask.any():
+            if not self.allow_documented_fallback:
+                details = materialized.loc[missing_feature_mask, "missing_required_feature_columns"].iloc[0]
+                raise ValueError(
+                    f"Missing required surrogate features for pathway='{pathway}' target='{target_column}': {details}"
+                )
+            return self._fallback_payload_batch(
+                frame=frame,
+                target_column=target_column,
+                reason=f"missing_required_feature:{target_column}",
+                prediction_status="documented_fallback_missing_required_feature",
+                missing_feature_columns=materialized["missing_required_feature_columns"],
+                feature_imputation_flag=materialized["feature_imputation_flag"],
             )
 
         model = self._load_model(artifact)
         prediction_std = self._estimate_prediction_std(artifact)
-        feature_frame = pd.DataFrame(
-            [self._materialize_features(row, artifact.feature_columns) for _, row in frame.iterrows()]
-        )
-        mean_values = np.asarray(model.predict(feature_frame), dtype=float)
+        mean_values = np.asarray(model.predict(materialized["feature_frame"]), dtype=float)
         lower = mean_values - 1.96 * prediction_std
         upper = mean_values + 1.96 * prediction_std
         ratio = np.abs(upper - lower) / np.maximum(np.abs(mean_values), 1.0)
@@ -125,6 +169,10 @@ class SurrogateEvaluator:
             {
                 "optimization_case_id": frame["optimization_case_id"].to_numpy(),
                 "pathway": frame["pathway"].astype(str).str.strip().str.lower().to_numpy(),
+                "surrogate_prediction_status": ["trained_surrogate_prediction"] * len(frame),
+                "surrogate_feature_imputation_flag": materialized["feature_imputation_flag"].to_numpy(),
+                "surrogate_missing_feature_columns": materialized["missing_required_feature_columns"].to_numpy(),
+                "surrogate_fallback_reason": [""] * len(frame),
                 f"predicted_{target_column}": mean_values,
                 f"{target_column}_ci_lower": lower,
                 f"{target_column}_ci_upper": upper,
@@ -235,30 +283,52 @@ class SurrogateEvaluator:
 
     def _materialize_features(
         self,
-        row: pd.Series,
+        frame: pd.DataFrame,
         feature_columns: tuple[str, ...],
-    ) -> dict[str, float]:
-        record: dict[str, float] = {}
-        manure_subtype = str(row.get("manure_subtype", "") or "").strip().lower()
-        feedstock_group = str(row.get("feedstock_group", "") or "").strip().lower()
-        row_origin = self._infer_row_origin(row)
-        for feature_name in feature_columns:
-            if feature_name in row.index:
-                record[feature_name] = float(
-                    pd.to_numeric(pd.Series([row[feature_name]]), errors="coerce").fillna(0.0).iloc[0]
-                )
-                continue
-            if feature_name.startswith("feedstock_group_"):
-                record[feature_name] = 1.0 if feedstock_group == feature_name.removeprefix("feedstock_group_") else 0.0
-                continue
-            if feature_name.startswith("manure_subtype_"):
-                record[feature_name] = 1.0 if manure_subtype == feature_name.removeprefix("manure_subtype_") else 0.0
-                continue
-            if feature_name.startswith("row_origin_"):
-                record[feature_name] = 1.0 if row_origin == feature_name.removeprefix("row_origin_") else 0.0
-                continue
-            record[feature_name] = 0.0
-        return record
+    ) -> dict[str, pd.DataFrame | pd.Series]:
+        records: list[dict[str, float]] = []
+        missing_columns: list[str] = []
+        feature_imputation_flags: list[bool] = []
+
+        for _, row in frame.iterrows():
+            record: dict[str, float] = {}
+            missing_for_row: list[str] = []
+            manure_subtype = str(row.get("manure_subtype", "") or "").strip().lower()
+            feedstock_group = str(row.get("feedstock_group", "") or "").strip().lower()
+            row_origin = self._infer_row_origin(row)
+            for feature_name in feature_columns:
+                if feature_name in row.index:
+                    numeric_value = pd.to_numeric(pd.Series([row[feature_name]]), errors="coerce").iloc[0]
+                    if pd.isna(numeric_value):
+                        missing_for_row.append(feature_name)
+                        record[feature_name] = np.nan
+                    else:
+                        record[feature_name] = float(numeric_value)
+                    continue
+                if feature_name.startswith("feedstock_group_"):
+                    record[feature_name] = (
+                        1.0 if feedstock_group == feature_name.removeprefix("feedstock_group_") else 0.0
+                    )
+                    continue
+                if feature_name.startswith("manure_subtype_"):
+                    record[feature_name] = (
+                        1.0 if manure_subtype == feature_name.removeprefix("manure_subtype_") else 0.0
+                    )
+                    continue
+                if feature_name.startswith("row_origin_"):
+                    record[feature_name] = 1.0 if row_origin == feature_name.removeprefix("row_origin_") else 0.0
+                    continue
+                missing_for_row.append(feature_name)
+                record[feature_name] = np.nan
+            records.append(record)
+            missing_columns.append("|".join(sorted(set(missing_for_row))))
+            feature_imputation_flags.append(bool(missing_for_row))
+
+        return {
+            "feature_frame": pd.DataFrame(records, index=frame.index),
+            "missing_required_feature_columns": pd.Series(missing_columns, index=frame.index, dtype="object"),
+            "feature_imputation_flag": pd.Series(feature_imputation_flags, index=frame.index, dtype=bool),
+        }
 
     def _infer_row_origin(self, row: pd.Series) -> str:
         source_kind = str(row.get("source_dataset_kind", "") or "").lower()
@@ -271,21 +341,34 @@ class SurrogateEvaluator:
             return "synthetic"
         return "observed"
 
-    def _build_documented_fallback_batch(self, frame: pd.DataFrame, *, pathway: str) -> pd.DataFrame:
+    def _build_documented_fallback_batch(
+        self,
+        frame: pd.DataFrame,
+        *,
+        pathway: str,
+        reason: str,
+    ) -> pd.DataFrame:
         payload = frame[["optimization_case_id", "pathway"]].copy()
+        payload["surrogate_prediction_status"] = "documented_static_fallback"
+        payload["surrogate_feature_imputation_flag"] = False
+        payload["surrogate_missing_feature_columns"] = ""
+        payload["surrogate_fallback_reason"] = reason
         uncertainty_columns = []
         for target in SURROGATE_TARGETS:
             fallback = self._fallback_payload_batch(
                 frame=frame,
                 target_column=target,
-                reason=f"static_direct:{pathway or 'unknown'}",
+                reason=reason,
+                prediction_status="documented_static_fallback",
+                missing_feature_columns=pd.Series([""] * len(frame), index=frame.index, dtype="object"),
+                feature_imputation_flag=pd.Series([False] * len(frame), index=frame.index, dtype=bool),
             )
             for column in fallback.columns:
                 if column in {"optimization_case_id", "pathway"}:
                     continue
                 payload[column] = fallback[column].to_numpy()
             uncertainty_columns.append(f"{target}_uncertainty_ratio")
-        payload["combined_uncertainty_ratio"] = payload[uncertainty_columns].mean(axis=1).fillna(0.0)
+        payload["combined_uncertainty_ratio"] = payload[uncertainty_columns].mean(axis=1, skipna=True)
         payload["surrogate_mode"] = "documented_static_fallback"
         return payload
 
@@ -295,21 +378,50 @@ class SurrogateEvaluator:
         frame: pd.DataFrame,
         target_column: str,
         reason: str,
+        prediction_status: str,
+        missing_feature_columns: pd.Series,
+        feature_imputation_flag: pd.Series,
     ) -> pd.DataFrame:
-        values = pd.to_numeric(frame.get(target_column), errors="coerce").fillna(0.0)
-        std = np.maximum(np.abs(values.to_numpy()) * self.fallback_uncertainty_ratio, self.fallback_uncertainty_ratio)
+        if target_column in frame.columns:
+            values = pd.to_numeric(frame[target_column], errors="coerce")
+        else:
+            values = pd.Series(np.nan, index=frame.index, dtype=float)
+        std = np.maximum(
+            np.abs(values.fillna(0.0).to_numpy()) * self.fallback_uncertainty_ratio,
+            self.fallback_uncertainty_ratio,
+        )
         lower = values.to_numpy() - 1.96 * std
         upper = values.to_numpy() + 1.96 * std
+        ratio = np.where(
+            np.isnan(values.to_numpy()),
+            np.nan,
+            np.abs(upper - lower) / np.maximum(np.abs(values.to_numpy()), 1.0),
+        )
+        status = np.where(
+            values.isna(),
+            "documented_fallback_missing_target_value",
+            prediction_status,
+        )
+        fallback_reason = np.where(values.isna(), f"{reason}|missing_target_value", reason)
+        prediction_source = np.where(
+            values.isna(),
+            f"{reason}|target_missing",
+            reason,
+        )
         return pd.DataFrame(
             {
                 "optimization_case_id": frame["optimization_case_id"].to_numpy(),
                 "pathway": frame["pathway"].astype(str).str.strip().str.lower().to_numpy(),
+                "surrogate_prediction_status": status,
+                "surrogate_feature_imputation_flag": feature_imputation_flag.to_numpy(),
+                "surrogate_missing_feature_columns": missing_feature_columns.to_numpy(),
+                "surrogate_fallback_reason": fallback_reason,
                 f"predicted_{target_column}": values.to_numpy(),
                 f"{target_column}_ci_lower": lower,
                 f"{target_column}_ci_upper": upper,
                 f"{target_column}_prediction_std": std,
-                f"{target_column}_uncertainty_ratio": np.abs(upper - lower) / np.maximum(np.abs(values.to_numpy()), 1.0),
-                f"{target_column}_prediction_source": [reason] * len(frame),
+                f"{target_column}_uncertainty_ratio": ratio,
+                f"{target_column}_prediction_source": prediction_source,
             }
         )
 
@@ -325,14 +437,16 @@ def build_surrogate_predictions(frame: pd.DataFrame) -> pd.DataFrame:
     evaluator = SurrogateEvaluator()
     predictions = evaluator.evaluate(frame)
     uncertainty_columns = [f"{target}_uncertainty_ratio" for target in SURROGATE_TARGETS]
-    predictions["combined_uncertainty_ratio"] = (
-        predictions[[column for column in uncertainty_columns if column in predictions.columns]]
-        .mean(axis=1)
-        .fillna(0.0)
-    )
+    predictions["combined_uncertainty_ratio"] = predictions[
+        [column for column in uncertainty_columns if column in predictions.columns]
+    ].mean(axis=1, skipna=True)
     predictions["surrogate_mode"] = np.where(
         predictions["pathway"].isin(tuple(SUPPORTED_SURROGATE_PATHWAYS)),
-        "trained_surrogate_or_fallback",
+        np.where(
+            predictions["surrogate_prediction_status"].astype(str).str.startswith("trained_surrogate"),
+            "trained_surrogate",
+            "trained_surrogate_with_documented_fallback",
+        ),
         "documented_static_fallback",
     )
     predictions = predictions.fillna(

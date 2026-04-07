@@ -61,6 +61,7 @@ def build_confirmatory_audit(
     pathway_reliability = build_pathway_reliability_summary(ml_flags)
     planning_flags = build_planning_claim_flag_table(active_planning_dir, active_scenario_dir)
     planning_ml_consistency = build_planning_ml_consistency_summary(active_planning_dir, pathway_reliability)
+    planning_data_quality = _read_csv_if_exists(active_planning_dir / "planning_data_quality_summary.csv")
     operation_table = build_operation_comparison_summary(active_operation_dir)
     operation_flags = build_operation_claim_flag_table(active_operation_dir)
     artifact_inventory = build_artifact_inventory(
@@ -83,6 +84,7 @@ def build_confirmatory_audit(
         "pathway_reliability_summary": pathway_reliability,
         "planning_claim_flag_table": planning_flags,
         "planning_ml_consistency_summary": planning_ml_consistency,
+        "planning_data_quality_summary": planning_data_quality,
         "operation_comparison_summary": operation_table,
         "operation_claim_flag_table": operation_flags,
         "artifact_inventory": artifact_inventory,
@@ -241,7 +243,11 @@ def build_operation_claim_flag_table(operation_dir: Path) -> pd.DataFrame:
 
         claim_status = "supportive"
         notes = []
-        reward_ratio = 1.0 + float(row["reward_improvement_vs_hold_plan_pct"])
+        hold_plan_reward = float(row.get("hold_plan_reward_mean", 0.0))
+        reward_delta = float(row.get("reward_improvement_vs_hold_plan_abs", 0.0))
+        reward_scale = abs(hold_plan_reward)
+        relative_reward_change = reward_delta / reward_scale if reward_scale > 0.0 else 0.0
+        reward_ratio = 1.0 + relative_reward_change
         if row["method_type"] == "rl_agent":
             if reward_ratio < 0.90:
                 claim_status = "unsupported"
@@ -249,7 +255,7 @@ def build_operation_claim_flag_table(operation_dir: Path) -> pd.DataFrame:
             elif reward_ratio < 0.98:
                 claim_status = "weak"
                 notes.append("reward_below_98pct_of_hold_plan")
-        if method_name == "sac" and abs(float(row["reward_improvement_vs_hold_plan_abs"])) < 1e-9:
+        if row["method_type"] == "rl_agent" and abs(float(row["reward_improvement_vs_hold_plan_abs"])) < 1e-9:
             claim_status = "conservative_match"
             notes.append("matches_hold_plan_reward")
         if float(row["max_violation_mean"]) > 0.0:
@@ -269,7 +275,7 @@ def build_operation_claim_flag_table(operation_dir: Path) -> pd.DataFrame:
                 "reward_mean": row["reward_mean"],
                 "reward_std": row["reward_std"],
                 "max_violation_mean": row["max_violation_mean"],
-                "reward_improvement_vs_hold_plan_pct": row["reward_improvement_vs_hold_plan_pct"],
+                "reward_improvement_vs_hold_plan_pct": relative_reward_change,
                 "reward_ratio_vs_hold_plan": reward_ratio,
                 "violation_aware_rank_within_scenario": row["violation_aware_rank_within_scenario"],
                 "throughput_nonzero_rate_mean": behavior_row.get("throughput_nonzero_rate_mean", pd.NA),
@@ -612,3 +618,7 @@ def _describe_planning_claim_rule(row: pd.Series) -> str:
     if str(row.get("writing_label", "")) == "comparison anchor":
         return "Retained as the manuscript comparison anchor rather than as a selected pathway."
     return "Available for pathway comparison but not currently supported as a selected planning recommendation."
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

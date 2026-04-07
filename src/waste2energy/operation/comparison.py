@@ -175,8 +175,11 @@ def _attach_hold_plan_improvement(comparison: pd.DataFrame) -> pd.DataFrame:
     merged["reward_improvement_vs_hold_plan_abs"] = (
         merged["reward_mean"] - merged["hold_plan_reward_mean"]
     )
+    # Use the absolute hold-plan reward as the scale so negative baselines do
+    # not invert the sign of relative improvement in scenario comparisons.
     merged["reward_improvement_vs_hold_plan_pct"] = (
-        merged["reward_improvement_vs_hold_plan_abs"] / merged["hold_plan_reward_mean"].replace(0.0, pd.NA)
+        merged["reward_improvement_vs_hold_plan_abs"]
+        / merged["hold_plan_reward_mean"].abs().replace(0.0, pd.NA)
     ).fillna(0.0)
     merged["average_reward_improvement_vs_hold_plan_abs"] = (
         merged["average_reward_mean"] - merged["hold_plan_average_reward_mean"]
