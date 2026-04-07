@@ -7,7 +7,13 @@ import pytest
 
 from waste2energy.common import METRIC_TON_TO_SHORT_TON
 from waste2energy.planning.constraints import build_scenario_constraints
-from waste2energy.planning.inputs import load_planning_input_bundle
+from waste2energy.planning.inputs import (
+    REQUIRED_PLANNING_COLUMNS,
+    load_planning_input_bundle,
+    normalize_planning_units,
+    validate_planning_frame,
+)
+from waste2energy.planning.objectives import _build_carbon_load
 from waste2energy.planning.optimization import _carbon_budget
 from waste2energy.planning.solve import PlanningConfig
 
@@ -76,3 +82,68 @@ def test_carbon_budget_uses_metric_ton_baseline_emission_factor():
 
     budget = _carbon_budget(scored, scenario_constraint, PlanningConfig())
     assert budget == pytest.approx(11023.113109243878)
+
+
+def test_missing_pathway_emission_factor_preserves_nan_for_fallback_logic():
+    frame = pd.DataFrame(
+        [
+            {
+                "baseline_waste_treatment_factor_unit_reference": "kgco2e_per_short_ton",
+                "baseline_waste_treatment_emission_factor_kgco2e_per_short_ton_reference": 100.0,
+                "scenario_baseline_waste_treatment_emission_factor_kgco2e_per_short_ton": 100.0,
+                "pathway_emission_factor_kgco2e_per_short_ton_scenario_proxy": pd.NA,
+            }
+        ]
+    )
+
+    normalized = normalize_planning_units(frame)
+
+    assert pd.isna(normalized.loc[0, "pathway_emission_factor_kgco2e_per_metric_ton_scenario_proxy"])
+
+
+def test_carbon_load_falls_back_when_pathway_emission_factor_is_missing():
+    frame = pd.DataFrame(
+        {
+            "pathway_emission_factor_kgco2e_per_metric_ton_scenario_proxy": [pd.NA],
+            "planning_environment_intensity_kgco2e_per_ton": [150.0],
+        }
+    )
+    baseline_emission = pd.Series([200.0], dtype=float)
+
+    carbon_load = _build_carbon_load(frame, baseline_emission)
+
+    assert carbon_load.iloc[0] == pytest.approx(50.0)
+
+
+def test_carbon_load_clips_negative_explicit_emission_factor_to_zero():
+    frame = pd.DataFrame(
+        {
+            "pathway_emission_factor_kgco2e_per_metric_ton_scenario_proxy": [-44.092452],
+            "planning_environment_intensity_kgco2e_per_ton": [340.0],
+        }
+    )
+    baseline_emission = pd.Series([363.742566], dtype=float)
+
+    carbon_load = _build_carbon_load(frame, baseline_emission)
+
+    assert carbon_load.iloc[0] == pytest.approx(0.0)
+
+
+def test_planning_input_validation_rejects_missing_required_baseline_emission_factor():
+    row = {column: 1.0 for column in REQUIRED_PLANNING_COLUMNS}
+    row.update(
+        {
+            "optimization_case_id": "case-1",
+            "sample_id": "sample-1",
+            "scenario_name": "baseline_region_case",
+            "pathway": "pyrolysis",
+            "baseline_waste_treatment_factor_unit_reference": "kgco2e_per_short_ton",
+            "cost_model_basis": "reference_cost_model",
+            "cost_model_source_trace": "traceable_source",
+            "baseline_waste_treatment_emission_factor_kgco2e_per_short_ton_reference": pd.NA,
+        }
+    )
+    frame = pd.DataFrame([row])
+
+    with pytest.raises(ValueError, match="baseline_waste_treatment_emission_factor_kgco2e_per_short_ton_reference"):
+        validate_planning_frame(frame, load_planning_input_bundle().dataset_path)

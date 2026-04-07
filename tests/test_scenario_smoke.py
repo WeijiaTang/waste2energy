@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pandas as pd
 
-from waste2energy.planning.reporting import build_main_results_table
+from waste2energy.planning.reporting import _classify_results_row, build_main_results_table
 from waste2energy.scenarios.run import run_scenario_robustness_baseline
 
 
@@ -48,11 +48,29 @@ def test_reporting_preserves_environment_priority_ad_support(workflow_dirs):
         assert ad_rows.loc[positive_support, "stress_tests_supporting_pathway"].str.contains(
             "environment_priority"
         ).all()
+        assert ad_rows.loc[positive_support, "writing_label"].eq(
+            "environment-sensitive alternative"
+        ).all()
     else:
         assert (ad_rows["stress_tests_supporting_pathway"] == "none").all()
         assert ad_rows["writing_label"].isin(
             {"competitive but unselected", "comparison only"}
         ).all()
+
+
+def test_reporting_classifies_environment_priority_when_multiple_stress_tags_exist():
+    row = pd.Series(
+        {
+            "portfolio_selected_count": 0,
+            "portfolio_allocated_feed_share": 0.0,
+            "max_stress_selection_rate": 0.143,
+            "score_gap_to_scenario_best_pct": 0.08,
+            "pathway": "ad",
+            "stress_test_tags": "cost_guardrail|environment_priority",
+        }
+    )
+
+    assert _classify_results_row(row) == "environment_sensitive_alternative"
 
 
 def test_scenario_run_refreshes_audit_outputs(workflow_dirs):
