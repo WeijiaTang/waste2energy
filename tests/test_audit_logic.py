@@ -74,6 +74,70 @@ def test_operation_claim_flag_downgrades_underperforming_rl(tmp_path):
     assert "reward_below_90pct_of_hold_plan" in td3["notes"]
 
 
+def test_operation_claim_flag_handles_negative_hold_plan_rewards(tmp_path):
+    operation_dir = tmp_path / "operation_negative_hold_plan"
+    operation_dir.mkdir()
+    pd.DataFrame(
+        [
+            {
+                "scenario_name": "high_supply_case",
+                "method_type": "baseline_policy",
+                "method_name": "hold_plan",
+                "reward_mean": -0.5,
+                "reward_std": 0.0,
+                "max_violation_mean": 0.0,
+                "average_reward_mean": -0.05,
+                "hold_plan_reward_mean": -0.5,
+                "hold_plan_average_reward_mean": -0.05,
+                "hold_plan_max_violation_mean": 0.0,
+                "reward_improvement_vs_hold_plan_abs": 0.0,
+                "reward_improvement_vs_hold_plan_pct": 0.0,
+                "average_reward_improvement_vs_hold_plan_abs": 0.0,
+                "violation_delta_vs_hold_plan": 0.0,
+                "violation_aware_score": -0.5,
+                "reward_rank_within_scenario": 1.0,
+                "violation_aware_rank_within_scenario": 1.0,
+            },
+            {
+                "scenario_name": "high_supply_case",
+                "method_type": "rl_agent",
+                "method_name": "td3",
+                "reward_mean": -0.6,
+                "reward_std": 0.0,
+                "max_violation_mean": 0.0,
+                "average_reward_mean": -0.06,
+                "hold_plan_reward_mean": -0.5,
+                "hold_plan_average_reward_mean": -0.05,
+                "hold_plan_max_violation_mean": 0.0,
+                "reward_improvement_vs_hold_plan_abs": -0.1,
+                "reward_improvement_vs_hold_plan_pct": -0.2,
+                "average_reward_improvement_vs_hold_plan_abs": -0.01,
+                "violation_delta_vs_hold_plan": 0.0,
+                "violation_aware_score": -0.6,
+                "reward_rank_within_scenario": 2.0,
+                "violation_aware_rank_within_scenario": 2.0,
+            },
+        ]
+    ).to_csv(operation_dir / "rl_vs_baseline_comparison.csv", index=False)
+    pd.DataFrame(
+        [
+            {
+                "scenario_name": "high_supply_case",
+                "method_name": "td3",
+                "throughput_nonzero_rate_mean": 0.0,
+                "severity_nonzero_rate_mean": 0.0,
+            }
+        ]
+    ).to_csv(operation_dir / "policy_behavior_comparison.csv", index=False)
+
+    flags = build_operation_claim_flag_table(operation_dir)
+    td3 = flags.loc[flags["method_name"] == "td3"].iloc[0]
+
+    assert td3["reward_ratio_vs_hold_plan"] == 0.8
+    assert td3["claim_status"] == "unsupported"
+    assert "reward_below_90pct_of_hold_plan" in td3["notes"]
+
+
 def test_pathway_reliability_summary_adds_htc_restriction():
     ml_flags = pd.DataFrame(
         [
