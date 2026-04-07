@@ -12,6 +12,16 @@ if TYPE_CHECKING:
 
 def build_scenario_constraints(frame: pd.DataFrame, config: "PlanningConfig") -> pd.DataFrame:
     rows: list[dict[str, object]] = []
+    effective_candidate_share = (
+        min(1.0, config.max_candidate_share * config.constraint_relaxation_ratio)
+        if config.enforce_candidate_cap
+        else 1.0
+    )
+    effective_subtype_share = (
+        min(1.0, config.max_subtype_share * config.subtype_relaxation_ratio)
+        if config.enforce_subtype_cap
+        else 1.0
+    )
     for scenario_name, scenario_frame in frame.groupby("scenario_name", dropna=False):
         anchor = scenario_frame.iloc[0]
         feed_budget = _value(anchor, "scenario_wet_waste_feed_allocation_ton_per_year_proxy")
@@ -56,11 +66,24 @@ def build_scenario_constraints(frame: pd.DataFrame, config: "PlanningConfig") ->
                 "pre_portfolio_feed_coverage_ratio": _safe_ratio(effective_budget, feed_budget),
                 "capacity_constraint_binding": effective_budget + 1e-9 < feed_budget,
                 "capacity_binding_reason": binding_reason,
-                "candidate_share_cap_ton_per_year": effective_budget * config.max_candidate_share,
-                "subtype_share_cap_ton_per_year": effective_budget * config.max_subtype_share,
-                "max_portfolio_candidates": int(config.max_portfolio_candidates),
-                "min_distinct_subtypes": int(min(config.min_distinct_subtypes, config.max_portfolio_candidates)),
+                "candidate_share_cap_ton_per_year": effective_budget * effective_candidate_share,
+                "subtype_share_cap_ton_per_year": effective_budget * effective_subtype_share,
+                "candidate_share_cap_ratio_applied": effective_candidate_share,
+                "subtype_share_cap_ratio_applied": effective_subtype_share,
+                "constraint_relaxation_ratio": float(config.constraint_relaxation_ratio),
+                "subtype_relaxation_ratio": float(config.subtype_relaxation_ratio),
+                "candidate_cap_enforced": bool(config.enforce_candidate_cap),
+                "subtype_cap_enforced": bool(config.enforce_subtype_cap),
+                "max_selected_enforced": bool(config.enforce_max_selected),
+                "min_distinct_subtypes_enforced": bool(config.enforce_min_distinct_subtypes),
+                "max_portfolio_candidates": int(config.max_portfolio_candidates if config.enforce_max_selected else len(scenario_frame)),
+                "min_distinct_subtypes": int(
+                    min(config.min_distinct_subtypes, config.max_portfolio_candidates)
+                    if config.enforce_min_distinct_subtypes
+                    else 0
+                ),
                 "deployable_capacity_fraction": float(config.deployable_capacity_fraction),
+                "scenario_metric_variance_scale": float(config.scenario_metric_variance_scale),
                 "planning_mass_unit_basis": mass_unit_basis,
                 "baseline_emission_factor_source_unit": source_unit,
                 "baseline_emission_factor_internal_unit": internal_unit,

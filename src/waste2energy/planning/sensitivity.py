@@ -35,6 +35,14 @@ def analyze_weight_sensitivity(
             deployable_capacity_fraction=config.deployable_capacity_fraction,
             robustness_factor=config.robustness_factor,
             carbon_budget_factor=config.carbon_budget_factor,
+            constraint_relaxation_ratio=config.constraint_relaxation_ratio,
+            subtype_relaxation_ratio=config.subtype_relaxation_ratio,
+            enforce_candidate_cap=config.enforce_candidate_cap,
+            enforce_subtype_cap=config.enforce_subtype_cap,
+            enforce_max_selected=config.enforce_max_selected,
+            enforce_min_distinct_subtypes=config.enforce_min_distinct_subtypes,
+            scenario_metric_variance_scale=config.scenario_metric_variance_scale,
+            scenario_metric_adjustments=config.scenario_metric_adjustments,
             optimization_method=config.optimization_method,
             pareto_point_count=config.pareto_point_count,
             allow_surrogate_fallback=config.allow_surrogate_fallback,
@@ -97,4 +105,3 @@ def analyze_weight_sensitivity(
         pd.DataFrame(rows).sort_values("weight_preset").reset_index(drop=True),
         pd.DataFrame(ranking_rows).sort_values(["weight_preset", "scenario_name"]).reset_index(drop=True),
     )
-

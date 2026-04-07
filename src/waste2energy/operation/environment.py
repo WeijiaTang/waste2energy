@@ -30,17 +30,27 @@ class OperationEnvironmentSpec:
     candidate_feed_upper_bound_ton_per_year: float
     nominal_energy_intensity_mj_per_ton: float
     nominal_environment_intensity_kgco2e_per_ton: float
+    nominal_carbon_load_kgco2e_per_ton: float
     nominal_cost_intensity_proxy_or_real_per_ton: float
+    global_energy_reference_mj_per_year: float
+    global_net_environment_reference_kgco2e_per_year: float
+    global_cost_reference_proxy_or_real_per_year: float
+    global_carbon_load_reference_kgco2e_per_year: float
     energy_disturbance_amplitude: float
     environment_disturbance_amplitude: float
     cost_disturbance_amplitude: float
     coverage_disturbance_amplitude: float
+    market_noise_amplitude: float
+    feed_quality_noise_amplitude: float
+    carbon_noise_amplitude: float
+    noise_seed_base: int
     max_unmet_feed_ton_per_year: float
     dominant_selection_rate: float
     stable_candidate_count: int
     cross_scenario_selection_rate: float
     selected_in_all_scenarios: bool
     capacity_binding_reason: str
+    anchor_selection_score: float
     objective_weight_preset: str = "balanced_cleaner_production"
     reward_energy_weight: float = 0.40
     reward_environment_weight: float = 0.35
@@ -119,6 +129,9 @@ class OperationEnvironment:
             energy_multiplier=state_view["energy_disturbance_multiplier"],
             environment_multiplier=state_view["environment_disturbance_multiplier"],
             cost_multiplier=state_view["cost_disturbance_multiplier"],
+            market_noise_multiplier=state_view["market_noise_multiplier"],
+            feed_quality_multiplier=state_view["feed_quality_multiplier"],
+            carbon_noise_multiplier=state_view["carbon_noise_multiplier"],
             throughput_signal=throughput_signal,
             severity_signal=severity_signal,
         )
@@ -132,6 +145,9 @@ class OperationEnvironment:
         throughput_ton = self._state["throughput_ton_per_year"]
         candidate_share = _safe_ratio(throughput_ton, self.spec.effective_processing_budget_ton_per_year)
         target_gap = candidate_share - self.spec.scenario_candidate_share_target
+        market_noise = self.spec.market_noise_amplitude * sin(phase + (self.spec.noise_seed_base % 11) * 0.17)
+        feed_noise = self.spec.feed_quality_noise_amplitude * cos(phase + (self.spec.noise_seed_base % 13) * 0.11)
+        carbon_noise = self.spec.carbon_noise_amplitude * sin(phase + (self.spec.noise_seed_base % 7) * 0.23)
 
         energy_multiplier = 1.0 + self.spec.energy_disturbance_amplitude * sin(phase)
         environment_multiplier = 1.0 + self.spec.environment_disturbance_amplitude * cos(phase)
@@ -150,6 +166,9 @@ class OperationEnvironment:
             "environment_disturbance_multiplier": environment_multiplier,
             "cost_disturbance_multiplier": cost_multiplier,
             "load_disturbance_multiplier": load_multiplier,
+            "market_noise_multiplier": 1.0 + market_noise,
+            "feed_quality_multiplier": 1.0 + feed_noise,
+            "carbon_noise_multiplier": 1.0 + carbon_noise,
             "capacity_pressure": max(0.0, candidate_share - self.spec.scenario_candidate_share_upper_bound),
             "coverage_pressure": max(0.0, self.spec.scenario_candidate_share_lower_bound - candidate_share),
         }
@@ -163,6 +182,9 @@ class OperationEnvironment:
         energy_multiplier: float,
         environment_multiplier: float,
         cost_multiplier: float,
+        market_noise_multiplier: float,
+        feed_quality_multiplier: float,
+        carbon_noise_multiplier: float,
         throughput_signal: int,
         severity_signal: int,
     ) -> dict[str, float]:
@@ -175,35 +197,38 @@ class OperationEnvironment:
             * self.spec.nominal_energy_intensity_mj_per_ton
             * energy_multiplier
             * energy_effect
+            * feed_quality_multiplier
         )
         realized_environment = (
             throughput_ton_per_year
             * self.spec.nominal_environment_intensity_kgco2e_per_ton
             * environment_multiplier
             * environment_effect
+            * carbon_noise_multiplier
+        )
+        realized_carbon_load = (
+            throughput_ton_per_year
+            * self.spec.nominal_carbon_load_kgco2e_per_ton
+            * max(0.70, carbon_noise_multiplier)
         )
         realized_cost = (
             throughput_ton_per_year
             * self.spec.nominal_cost_intensity_proxy_or_real_per_ton
             * cost_multiplier
             * cost_effect
+            * market_noise_multiplier
         )
-
-        nominal_energy = (
-            self.spec.candidate_feed_target_ton_per_year * self.spec.nominal_energy_intensity_mj_per_ton
+        net_environment_benefit = max(0.0, realized_environment - realized_carbon_load)
+        energy_term = realized_energy / max(self.spec.global_energy_reference_mj_per_year, 1.0)
+        environment_term = net_environment_benefit / max(
+            self.spec.global_net_environment_reference_kgco2e_per_year,
+            1.0,
         )
-        nominal_environment = (
-            self.spec.candidate_feed_target_ton_per_year
-            * self.spec.nominal_environment_intensity_kgco2e_per_ton
+        cost_term = realized_cost / max(self.spec.global_cost_reference_proxy_or_real_per_year, 1.0)
+        carbon_load_term = realized_carbon_load / max(
+            self.spec.global_carbon_load_reference_kgco2e_per_year,
+            1.0,
         )
-        nominal_cost = (
-            self.spec.candidate_feed_target_ton_per_year
-            * self.spec.nominal_cost_intensity_proxy_or_real_per_ton
-        )
-
-        energy_term = _safe_ratio(realized_energy, nominal_energy)
-        environment_term = _safe_ratio(realized_environment, nominal_environment)
-        cost_term = _safe_ratio(realized_cost, nominal_cost)
 
         lower_violation = max(0.0, self.spec.scenario_candidate_share_lower_bound - candidate_share)
         upper_violation = max(0.0, candidate_share - self.spec.scenario_candidate_share_upper_bound)
@@ -214,16 +239,20 @@ class OperationEnvironment:
             self._weights.energy * energy_term
             + self._weights.environment * environment_term
             - self._weights.cost * cost_term
+            - 0.30 * carbon_load_term
             - violation_penalty
             - switching_penalty
         )
         return {
             "realized_energy": realized_energy,
             "realized_environment": realized_environment,
+            "realized_carbon_load": realized_carbon_load,
+            "realized_net_environment_benefit": net_environment_benefit,
             "realized_cost": realized_cost,
             "energy_term": energy_term,
             "environment_term": environment_term,
             "cost_term": cost_term,
+            "carbon_load_term": carbon_load_term,
             "reward_energy_weight": self._weights.energy,
             "reward_environment_weight": self._weights.environment,
             "reward_cost_weight": self._weights.cost,
@@ -252,4 +281,3 @@ def _safe_ratio(numerator: float, denominator: float) -> float:
     if denominator <= 0.0:
         return 0.0
     return numerator / denominator
-

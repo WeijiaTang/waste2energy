@@ -58,7 +58,9 @@ def build_confirmatory_audit(
     ml_summary = build_ml_split_coverage_summary(ml_paths)
     ml_best = build_ml_best_result_summary(ml_paths)
     ml_flags = build_ml_claim_flag_table(ml_paths)
+    pathway_reliability = build_pathway_reliability_summary(ml_flags)
     planning_flags = build_planning_claim_flag_table(active_planning_dir, active_scenario_dir)
+    planning_ml_consistency = build_planning_ml_consistency_summary(active_planning_dir, pathway_reliability)
     operation_table = build_operation_comparison_summary(active_operation_dir)
     operation_flags = build_operation_claim_flag_table(active_operation_dir)
     artifact_inventory = build_artifact_inventory(
@@ -78,7 +80,9 @@ def build_confirmatory_audit(
         "ml_split_coverage_summary": ml_summary,
         "ml_best_result_summary": ml_best,
         "ml_claim_flag_table": ml_flags,
+        "pathway_reliability_summary": pathway_reliability,
         "planning_claim_flag_table": planning_flags,
+        "planning_ml_consistency_summary": planning_ml_consistency,
         "operation_comparison_summary": operation_table,
         "operation_claim_flag_table": operation_flags,
         "artifact_inventory": artifact_inventory,
@@ -237,16 +241,25 @@ def build_operation_claim_flag_table(operation_dir: Path) -> pd.DataFrame:
 
         claim_status = "supportive"
         notes = []
+        reward_ratio = 1.0 + float(row["reward_improvement_vs_hold_plan_pct"])
+        if row["method_type"] == "rl_agent":
+            if reward_ratio < 0.90:
+                claim_status = "unsupported"
+                notes.append("reward_below_90pct_of_hold_plan")
+            elif reward_ratio < 0.98:
+                claim_status = "weak"
+                notes.append("reward_below_98pct_of_hold_plan")
         if method_name == "sac" and abs(float(row["reward_improvement_vs_hold_plan_abs"])) < 1e-9:
             claim_status = "conservative_match"
             notes.append("matches_hold_plan_reward")
         if float(row["max_violation_mean"]) > 0.0:
-            claim_status = "violation_prone"
             notes.append("nonzero_violation")
+            if claim_status == "supportive":
+                claim_status = "violation_prone"
         if float(row["reward_std"]) > 1.0:
-            claim_status = "unstable"
             notes.append("high_seed_variation")
-
+            if claim_status == "supportive":
+                claim_status = "unstable"
         rows.append(
             {
                 "scenario_name": scenario_name,
@@ -257,6 +270,7 @@ def build_operation_claim_flag_table(operation_dir: Path) -> pd.DataFrame:
                 "reward_std": row["reward_std"],
                 "max_violation_mean": row["max_violation_mean"],
                 "reward_improvement_vs_hold_plan_pct": row["reward_improvement_vs_hold_plan_pct"],
+                "reward_ratio_vs_hold_plan": reward_ratio,
                 "violation_aware_rank_within_scenario": row["violation_aware_rank_within_scenario"],
                 "throughput_nonzero_rate_mean": behavior_row.get("throughput_nonzero_rate_mean", pd.NA),
                 "severity_nonzero_rate_mean": behavior_row.get("severity_nonzero_rate_mean", pd.NA),
@@ -266,6 +280,95 @@ def build_operation_claim_flag_table(operation_dir: Path) -> pd.DataFrame:
     if not rows:
         return pd.DataFrame()
     return pd.DataFrame(rows).sort_values(["scenario_name", "method_type", "method_name"]).reset_index(drop=True)
+
+
+def build_pathway_reliability_summary(ml_flags: pd.DataFrame) -> pd.DataFrame:
+    if ml_flags.empty:
+        return pd.DataFrame()
+    rows: list[dict[str, object]] = []
+    leave_study_out = ml_flags[ml_flags["summary_label"] == "leave_study_out"].copy()
+    if leave_study_out.empty:
+        return pd.DataFrame()
+    leave_study_out["pathway"] = leave_study_out["dataset_key"].apply(_pathway_from_dataset_key)
+    for pathway, pathway_frame in leave_study_out.groupby("pathway", dropna=False):
+        supportive = int((pathway_frame["claim_status"] == "supportive").sum())
+        weak = int((pathway_frame["claim_status"] == "weak").sum())
+        unsupported = int((pathway_frame["claim_status"] == "unsupported").sum())
+        total = max(int(len(pathway_frame)), 1)
+        weak_or_unsupported_ratio = (weak + unsupported) / total
+        reliability_score = (supportive + 0.5 * weak) / total
+        if weak_or_unsupported_ratio > 0.50 and pathway == "htc":
+            reviewer_sentence = "The findings for HTC are auxiliary and lack cross-study generalizability."
+            reliability_tier = "auxiliary_only"
+        elif reliability_score >= 0.60:
+            reviewer_sentence = "Cross-study evidence remains pathway-specific and should be written with claim discipline."
+            reliability_tier = "conditional_support"
+        else:
+            reviewer_sentence = "Cross-study evidence is limited and should not be generalized without qualification."
+            reliability_tier = "limited_support"
+        rows.append(
+            {
+                "pathway": pathway,
+                "leave_study_out_supportive_count": supportive,
+                "leave_study_out_weak_count": weak,
+                "leave_study_out_unsupported_count": unsupported,
+                "leave_study_out_total_count": total,
+                "weak_or_unsupported_ratio": weak_or_unsupported_ratio,
+                "reliability_score": reliability_score,
+                "reliability_tier": reliability_tier,
+                "reviewer_restriction_sentence": reviewer_sentence,
+            }
+        )
+    return pd.DataFrame(rows).sort_values("pathway").reset_index(drop=True)
+
+
+def build_planning_ml_consistency_summary(
+    planning_dir: Path,
+    pathway_reliability: pd.DataFrame,
+) -> pd.DataFrame:
+    pathway_summary = _read_csv_if_exists(planning_dir / "pathway_summary.csv")
+    if pathway_summary.empty or pathway_reliability.empty:
+        return pd.DataFrame()
+    evidence_map = pathway_reliability.set_index("pathway")["reliability_score"].to_dict()
+    rows: list[dict[str, object]] = []
+    for scenario_name, frame in pathway_summary.groupby("scenario_name", dropna=False):
+        working = frame.copy()
+        working["evidence_score"] = working["pathway"].map(evidence_map).fillna(0.0)
+        working["portfolio_allocated_feed_share"] = pd.to_numeric(
+            working["portfolio_allocated_feed_share"], errors="coerce"
+        ).fillna(0.0)
+        if len(working) >= 2 and working["evidence_score"].nunique() > 1:
+            consistency_correlation = float(
+                working["portfolio_allocated_feed_share"].corr(working["evidence_score"])
+            )
+        else:
+            consistency_correlation = 0.0
+        weighted_evidence_support = float(
+            (working["portfolio_allocated_feed_share"] * working["evidence_score"]).sum()
+        )
+        unsupported_mass = float(
+            working.loc[working["evidence_score"] < 0.34, "portfolio_allocated_feed_share"].sum()
+        )
+        if unsupported_mass > 0.25:
+            risk_tier = "high_risk"
+            risk_note = "High allocation mass is assigned to pathways with weak or unsupported cross-study evidence."
+        elif consistency_correlation < 0.0:
+            risk_tier = "medium_risk"
+            risk_note = "Planning allocation is inversely aligned with pathway-level ML reliability."
+        else:
+            risk_tier = "managed_risk"
+            risk_note = "Planning allocation remains broadly aligned with available pathway-level ML evidence."
+        rows.append(
+            {
+                "scenario_name": scenario_name,
+                "planning_ml_consistency_correlation": consistency_correlation,
+                "weighted_evidence_support": weighted_evidence_support,
+                "unsupported_allocation_share": unsupported_mass,
+                "risk_tier": risk_tier,
+                "risk_note": risk_note,
+            }
+        )
+    return pd.DataFrame(rows).sort_values("scenario_name").reset_index(drop=True)
 
 
 def build_planning_claim_flag_table(planning_dir: Path, scenario_dir: Path) -> pd.DataFrame:
@@ -465,6 +568,17 @@ def _build_claim_rows_from_frame(
             }
         )
     return rows
+
+
+def _pathway_from_dataset_key(dataset_key: object) -> str:
+    value = str(dataset_key)
+    if "pyrolysis" in value:
+        return "pyrolysis"
+    if "htc" in value:
+        return "htc"
+    if "ad" in value:
+        return "ad"
+    return value
 
 
 def _read_csv_if_exists(path: Path) -> pd.DataFrame:

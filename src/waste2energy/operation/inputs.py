@@ -72,34 +72,38 @@ def build_operation_environment_specs(
     decision_map = decision.set_index(["scenario_name", "sample_id"]).to_dict("index")
     constraint_map = constraints.set_index("scenario_name").to_dict("index")
     cross_map = cross_stability.set_index("sample_id").to_dict("index")
+    global_refs = _build_global_physical_references(allocations)
 
     rows: list[dict[str, object]] = []
-    for _, summary in uncertainty.iterrows():
+    for record in _select_operation_anchor_rows(
+        uncertainty=uncertainty,
+        allocations=allocations,
+        decision_map=decision_map,
+        constraint_map=constraint_map,
+        cross_map=cross_map,
+    ):
+        summary = record["summary"]
+        allocation = record["allocation"]
         scenario_name = str(summary["scenario_name"])
-        dominant_sample_id = str(summary["dominant_sample_id"])
-        allocation_rows = allocations[
-            (allocations["scenario_name"] == scenario_name)
-            & (allocations["sample_id"] == dominant_sample_id)
-        ].copy()
-        if allocation_rows.empty:
-            continue
-
-        allocation = allocation_rows.iloc[0]
-        decision_row = decision_map.get((scenario_name, dominant_sample_id), {})
-        constraint_row = constraint_map.get(scenario_name, {})
-        cross_row = cross_map.get(dominant_sample_id, {})
+        dominant_sample_id = str(allocation.get("sample_id", ""))
+        decision_row = record["decision_row"]
+        constraint_row = record["constraint_row"]
+        cross_row = record["cross_row"]
 
         effective_budget = _value(allocation, "effective_processing_budget_ton_per_year")
+        candidate_capacity_cap = _value(allocation, "candidate_capacity_cap_ton_per_year")
         baseline_share = _safe_ratio(_value(allocation, "allocated_feed_ton_per_year"), effective_budget)
         avg_share = _value_from_mapping(decision_row, "avg_allocated_feed_share", baseline_share)
         max_share = _value_from_mapping(decision_row, "max_allocated_feed_share", baseline_share)
         coverage_range_ratio = _value(summary, "coverage_range_ratio")
+        candidate_share_cap = _safe_ratio(candidate_capacity_cap, effective_budget)
 
         lower_share = max(0.05, avg_share * max(0.50, 1.0 - coverage_range_ratio))
         upper_share = min(
-            1.0,
+            max(0.05, candidate_share_cap if candidate_share_cap > 0.0 else 1.0),
             max(max_share, baseline_share, avg_share + coverage_range_ratio * max(avg_share, 0.10)),
         )
+        lower_share = min(lower_share, upper_share)
         target_share = min(max(avg_share, lower_share), upper_share)
 
         rows.append(
@@ -114,9 +118,7 @@ def build_operation_environment_specs(
                 "planned_allocated_feed_ton_per_year": _value(allocation, "allocated_feed_ton_per_year"),
                 "scenario_feed_budget_ton_per_year": _value(allocation, "scenario_feed_budget_ton_per_year"),
                 "effective_processing_budget_ton_per_year": effective_budget,
-                "candidate_capacity_cap_ton_per_year": _value(
-                    allocation, "candidate_capacity_cap_ton_per_year"
-                ),
+                "candidate_capacity_cap_ton_per_year": candidate_capacity_cap,
                 "scenario_candidate_share_lower_bound": lower_share,
                 "scenario_candidate_share_target": target_share,
                 "scenario_candidate_share_upper_bound": upper_share,
@@ -129,15 +131,26 @@ def build_operation_environment_specs(
                 "nominal_environment_intensity_kgco2e_per_ton": _value(
                     allocation, "planning_environment_intensity_kgco2e_per_ton"
                 ),
+                "nominal_carbon_load_kgco2e_per_ton": _value(
+                    allocation, "planning_carbon_load_kgco2e_per_ton"
+                ),
                 "nominal_cost_intensity_proxy_or_real_per_ton": _value(
                     allocation, "planning_cost_intensity_proxy_or_real_per_ton"
                 ),
+                "global_energy_reference_mj_per_year": global_refs["energy"],
+                "global_net_environment_reference_kgco2e_per_year": global_refs["net_environment"],
+                "global_cost_reference_proxy_or_real_per_year": global_refs["cost"],
+                "global_carbon_load_reference_kgco2e_per_year": global_refs["carbon_load"],
                 "energy_disturbance_amplitude": _clip(_value(summary, "energy_range_ratio"), 0.05, 0.35),
                 "environment_disturbance_amplitude": _clip(
                     _value(summary, "environment_range_ratio"), 0.05, 0.35
                 ),
                 "cost_disturbance_amplitude": _clip(_value(summary, "cost_range_ratio"), 0.05, 0.35),
                 "coverage_disturbance_amplitude": _clip(coverage_range_ratio, 0.05, 0.35),
+                "market_noise_amplitude": _clip(max(_value(summary, "cost_range_ratio"), _value(summary, "energy_range_ratio")) * 0.08, 0.02, 0.15),
+                "feed_quality_noise_amplitude": _clip(coverage_range_ratio * 0.30, 0.02, 0.18),
+                "carbon_noise_amplitude": _clip(_value(summary, "environment_range_ratio") * 0.08, 0.02, 0.15),
+                "noise_seed_base": _stable_seed(f"{scenario_name}|{dominant_sample_id}"),
                 "max_unmet_feed_ton_per_year": _value(summary, "unmet_feed_max"),
                 "dominant_selection_rate": _value(summary, "dominant_selection_rate"),
                 "stable_candidate_count": int(_value(summary, "stable_candidate_count")),
@@ -148,6 +161,7 @@ def build_operation_environment_specs(
                     _value_from_mapping(cross_row, "selected_in_all_scenarios", False)
                 ),
                 "capacity_binding_reason": str(constraint_row.get("capacity_binding_reason", "")),
+                "anchor_selection_score": float(record["anchor_score"]),
                 "objective_weight_preset": weight_system.preset_name,
                 "reward_energy_weight": weight_system.energy,
                 "reward_environment_weight": weight_system.environment,
@@ -167,6 +181,123 @@ def _extract_weight_system(run_config: dict[str, object]):
         environment=_coerce_float(weights.get("environment"), default=None),
         cost=_coerce_float(weights.get("cost"), default=None),
     )
+
+
+def _select_operation_anchor_rows(
+    *,
+    uncertainty: pd.DataFrame,
+    allocations: pd.DataFrame,
+    decision_map: dict[tuple[str, str], dict[str, object]],
+    constraint_map: dict[str, dict[str, object]],
+    cross_map: dict[str, dict[str, object]],
+) -> list[dict[str, object]]:
+    selected: list[dict[str, object]] = []
+    used_sample_ids: set[str] = set()
+    selected_anchor_rows: list[pd.Series] = []
+    for _, summary in uncertainty.sort_values("scenario_name").iterrows():
+        scenario_name = str(summary["scenario_name"])
+        scenario_allocations = allocations[allocations["scenario_name"] == scenario_name].copy()
+        if scenario_allocations.empty:
+            continue
+        candidates: list[dict[str, object]] = []
+        for _, allocation in scenario_allocations.iterrows():
+            sample_id = str(allocation.get("sample_id", ""))
+            decision_row = decision_map.get((scenario_name, sample_id), {})
+            cross_row = cross_map.get(sample_id, {})
+            diversity_score = _anchor_diversity_score(allocation, selected_anchor_rows)
+            baseline_share = _safe_ratio(
+                _value(allocation, "allocated_feed_ton_per_year"),
+                _value(allocation, "effective_processing_budget_ton_per_year"),
+            )
+            decision_share = _value_from_mapping(decision_row, "avg_allocated_feed_share", baseline_share)
+            anchor_score = (
+                0.60 * baseline_share
+                + 0.20 * decision_share
+                + 0.15 * (1.0 - _value_from_mapping(cross_row, "cross_scenario_selection_rate", 0.0))
+                + 0.05 * diversity_score
+            )
+            candidates.append(
+                {
+                    "summary": summary,
+                    "allocation": allocation,
+                    "decision_row": decision_row,
+                    "constraint_row": constraint_map.get(scenario_name, {}),
+                    "cross_row": cross_row,
+                    "sample_id": sample_id,
+                    "anchor_score": float(anchor_score),
+                }
+            )
+        unique_candidates = [candidate for candidate in candidates if candidate["sample_id"] not in used_sample_ids]
+        ranked_candidates = unique_candidates or candidates
+        ranked_candidates.sort(
+            key=lambda item: (
+                item["anchor_score"],
+                _value(item["allocation"], "allocated_feed_ton_per_year"),
+                _value(item["allocation"], "planning_environment_intensity_kgco2e_per_ton"),
+            ),
+            reverse=True,
+        )
+        if not ranked_candidates:
+            continue
+        chosen = ranked_candidates[0]
+        used_sample_ids.add(chosen["sample_id"])
+        selected_anchor_rows.append(chosen["allocation"])
+        selected.append(chosen)
+    return selected
+
+
+def _anchor_diversity_score(candidate: pd.Series, selected_anchor_rows: list[pd.Series]) -> float:
+    if not selected_anchor_rows:
+        return 0.0
+    distances: list[float] = []
+    candidate_energy = _value(candidate, "planning_energy_intensity_mj_per_ton")
+    candidate_environment = _value(candidate, "planning_environment_intensity_kgco2e_per_ton")
+    candidate_cost = _value(candidate, "planning_cost_intensity_proxy_or_real_per_ton")
+    for row in selected_anchor_rows:
+        distances.append(
+            abs(candidate_energy - _value(row, "planning_energy_intensity_mj_per_ton"))
+            + abs(candidate_environment - _value(row, "planning_environment_intensity_kgco2e_per_ton"))
+            + abs(candidate_cost - _value(row, "planning_cost_intensity_proxy_or_real_per_ton"))
+        )
+    return float(sum(distances) / max(len(distances), 1))
+
+
+def _build_global_physical_references(allocations: pd.DataFrame) -> dict[str, float]:
+    if allocations.empty:
+        return {
+            "energy": 1.0,
+            "net_environment": 1.0,
+            "cost": 1.0,
+            "carbon_load": 1.0,
+        }
+    allocated_feed = pd.to_numeric(allocations["allocated_feed_ton_per_year"], errors="coerce").fillna(0.0)
+    energy = (
+        allocated_feed
+        * pd.to_numeric(allocations["planning_energy_intensity_mj_per_ton"], errors="coerce").fillna(0.0)
+    ).abs()
+    environment = (
+        allocated_feed
+        * pd.to_numeric(allocations["planning_environment_intensity_kgco2e_per_ton"], errors="coerce").fillna(0.0)
+    )
+    carbon_load = (
+        allocated_feed
+        * pd.to_numeric(allocations["planning_carbon_load_kgco2e_per_ton"], errors="coerce").fillna(0.0)
+    )
+    net_environment = (environment - carbon_load).abs()
+    cost = (
+        allocated_feed
+        * pd.to_numeric(allocations["planning_cost_intensity_proxy_or_real_per_ton"], errors="coerce").fillna(0.0)
+    ).abs()
+    return {
+        "energy": max(float(energy.max()), 1.0),
+        "net_environment": max(float(net_environment.max()), 1.0),
+        "cost": max(float(cost.max()), 1.0),
+        "carbon_load": max(float(carbon_load.abs().max()), 1.0),
+    }
+
+
+def _stable_seed(value: str) -> int:
+    return sum((index + 1) * ord(char) for index, char in enumerate(value))
 
 
 def _clip(value: float, minimum: float, maximum: float) -> float:

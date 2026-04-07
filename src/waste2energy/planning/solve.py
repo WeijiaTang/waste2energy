@@ -24,6 +24,77 @@ from .surrogate_evaluator import build_surrogate_predictions
 
 
 @dataclass(frozen=True)
+class ScenarioMetricAdjustment:
+    scenario_name: str
+    pathway: str
+    energy_multiplier: float = 1.0
+    environment_multiplier: float = 1.0
+    cost_multiplier: float = 1.0
+    carbon_load_multiplier: float = 1.0
+
+
+def default_scenario_metric_adjustments() -> tuple[ScenarioMetricAdjustment, ...]:
+    return (
+        ScenarioMetricAdjustment(
+            scenario_name="baseline_region_case",
+            pathway="pyrolysis",
+            energy_multiplier=1.02,
+            environment_multiplier=1.00,
+            cost_multiplier=0.99,
+            carbon_load_multiplier=1.00,
+        ),
+        ScenarioMetricAdjustment(
+            scenario_name="high_supply_case",
+            pathway="pyrolysis",
+            energy_multiplier=0.95,
+            environment_multiplier=0.97,
+            cost_multiplier=1.07,
+            carbon_load_multiplier=1.05,
+        ),
+        ScenarioMetricAdjustment(
+            scenario_name="high_supply_case",
+            pathway="htc",
+            energy_multiplier=1.10,
+            environment_multiplier=1.08,
+            cost_multiplier=0.92,
+            carbon_load_multiplier=0.95,
+        ),
+        ScenarioMetricAdjustment(
+            scenario_name="high_supply_case",
+            pathway="ad",
+            energy_multiplier=1.03,
+            environment_multiplier=1.05,
+            cost_multiplier=0.98,
+            carbon_load_multiplier=0.97,
+        ),
+        ScenarioMetricAdjustment(
+            scenario_name="policy_support_case",
+            pathway="pyrolysis",
+            energy_multiplier=1.00,
+            environment_multiplier=1.02,
+            cost_multiplier=0.98,
+            carbon_load_multiplier=0.99,
+        ),
+        ScenarioMetricAdjustment(
+            scenario_name="policy_support_case",
+            pathway="htc",
+            energy_multiplier=1.06,
+            environment_multiplier=1.12,
+            cost_multiplier=0.88,
+            carbon_load_multiplier=0.92,
+        ),
+        ScenarioMetricAdjustment(
+            scenario_name="policy_support_case",
+            pathway="ad",
+            energy_multiplier=1.08,
+            environment_multiplier=1.18,
+            cost_multiplier=0.84,
+            carbon_load_multiplier=0.90,
+        ),
+    )
+
+
+@dataclass(frozen=True)
 class PlanningConfig:
     objective_weight_preset: str = DEFAULT_OBJECTIVE_WEIGHT_PRESET
     objective_weight_system: ObjectiveWeightSystem = field(
@@ -37,6 +108,16 @@ class PlanningConfig:
     deployable_capacity_fraction: float = 0.85
     robustness_factor: float = 0.35
     carbon_budget_factor: float = 1.00
+    constraint_relaxation_ratio: float = 1.00
+    subtype_relaxation_ratio: float = 1.00
+    enforce_candidate_cap: bool = True
+    enforce_subtype_cap: bool = True
+    enforce_max_selected: bool = True
+    enforce_min_distinct_subtypes: bool = True
+    scenario_metric_variance_scale: float = 1.00
+    scenario_metric_adjustments: tuple[ScenarioMetricAdjustment, ...] = field(
+        default_factory=default_scenario_metric_adjustments
+    )
     optimization_method: str = "auto"
     pyomo_solver_preference: str = "auto"
     pareto_point_count: int = 12
@@ -79,6 +160,14 @@ class PlanningConfig:
             deployable_capacity_fraction=self.deployable_capacity_fraction,
             robustness_factor=self.robustness_factor,
             carbon_budget_factor=self.carbon_budget_factor,
+            constraint_relaxation_ratio=self.constraint_relaxation_ratio,
+            subtype_relaxation_ratio=self.subtype_relaxation_ratio,
+            enforce_candidate_cap=self.enforce_candidate_cap,
+            enforce_subtype_cap=self.enforce_subtype_cap,
+            enforce_max_selected=self.enforce_max_selected,
+            enforce_min_distinct_subtypes=self.enforce_min_distinct_subtypes,
+            scenario_metric_variance_scale=self.scenario_metric_variance_scale,
+            scenario_metric_adjustments=self.scenario_metric_adjustments,
             optimization_method=self.optimization_method,
             pyomo_solver_preference=self.pyomo_solver_preference,
             pareto_point_count=self.pareto_point_count,
@@ -421,10 +510,20 @@ def _validate_config(config: PlanningConfig) -> None:
         raise ValueError("max_candidate_share must be within (0, 1].")
     if not 0.0 < config.max_subtype_share <= 1.0:
         raise ValueError("max_subtype_share must be within (0, 1].")
-    if config.max_subtype_share + 1e-9 < config.max_candidate_share:
+    if (
+        config.enforce_candidate_cap
+        and config.enforce_subtype_cap
+        and config.max_subtype_share + 1e-9 < config.max_candidate_share
+    ):
         raise ValueError("max_subtype_share must be greater than or equal to max_candidate_share.")
     if config.min_distinct_subtypes < 1:
         raise ValueError("min_distinct_subtypes must be at least 1.")
+    if config.constraint_relaxation_ratio <= 0.0:
+        raise ValueError("constraint_relaxation_ratio must be positive.")
+    if config.subtype_relaxation_ratio <= 0.0:
+        raise ValueError("subtype_relaxation_ratio must be positive.")
+    if config.scenario_metric_variance_scale <= 0.0:
+        raise ValueError("scenario_metric_variance_scale must be positive.")
     if not 0.0 < config.deployable_capacity_fraction <= 1.0:
         raise ValueError("deployable_capacity_fraction must be within (0, 1].")
     if not 0.0 <= config.robustness_factor <= 1.0:

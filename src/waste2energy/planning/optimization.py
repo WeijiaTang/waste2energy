@@ -36,7 +36,7 @@ def build_candidate_score_frame(
     scenario_frame: pd.DataFrame,
     config: "PlanningConfig",
 ) -> pd.DataFrame:
-    scored = scenario_frame.copy()
+    scored = _apply_scenario_metric_adjustments(scenario_frame.copy(), config)
     scored["energy_utility"] = _normalize(scored["planning_energy_intensity_mj_per_ton"])
     scored["environment_utility"] = _normalize(scored["planning_environment_intensity_kgco2e_per_ton"])
     scored["cost_utility"] = 1.0 - _normalize(scored["planning_cost_intensity_proxy_or_real_per_ton"])
@@ -65,7 +65,10 @@ def solve_scenario_optimization(
         return ScenarioOptimizationResult(
             scenario_name=str(scenario_constraint.get("scenario_name", "")),
             allocations=pd.DataFrame(),
-            diagnostics={"solver_status": "empty_candidate_set"},
+            diagnostics={
+                "solver_status": "empty_candidate_set",
+                **_constraint_diagnostics(scored, scenario_constraint, config, pd.DataFrame()),
+            },
         )
 
     pyomo_attempt_diagnostics: dict[str, object] = {}
@@ -177,6 +180,7 @@ def _solve_with_pyomo_if_available(
                     "solver_status": status,
                     "solver_backend": f"pyomo:{solver_name}",
                     "solver_native_status": solver_status,
+                    **_constraint_diagnostics(scored, scenario_constraint, config, allocations),
                 },
             )
     except Exception as exc:
@@ -187,6 +191,7 @@ def _solve_with_pyomo_if_available(
                 "solver_status": "pyomo_exception",
                 "solver_backend": "pyomo",
                 "solver_error": str(exc),
+                **_constraint_diagnostics(scored, scenario_constraint, config, pd.DataFrame()),
             },
         )
     return ScenarioOptimizationResult(
@@ -196,6 +201,7 @@ def _solve_with_pyomo_if_available(
             "solver_status": "pyomo_solver_unavailable",
             "solver_backend": "pyomo",
             "solver_candidates": "|".join(solver_candidates),
+            **_constraint_diagnostics(scored, scenario_constraint, config, pd.DataFrame()),
         },
     )
 
@@ -238,15 +244,18 @@ def build_pyomo_model(
     model.feed_budget = pyo.Constraint(expr=sum(model.x[i] for i in model.CASES) <= effective_budget)
     model.candidate_limit = pyo.ConstraintList()
     for i in model.CASES:
-        model.candidate_limit.add(model.x[i] <= candidate_cap * model.y[i])
-    model.max_selected = pyo.Constraint(expr=sum(model.y[i] for i in model.CASES) <= config.max_portfolio_candidates)
+        cap = candidate_cap if config.enforce_candidate_cap else effective_budget
+        model.candidate_limit.add(model.x[i] <= cap * model.y[i])
+    if config.enforce_max_selected:
+        model.max_selected = pyo.Constraint(expr=sum(model.y[i] for i in model.CASES) <= config.max_portfolio_candidates)
 
     model.subtype_cap = pyo.ConstraintList()
     model.subtype_activation = pyo.ConstraintList()
     for subtype, indices in subtype_groups.items():
-        model.subtype_cap.add(sum(model.x[i] for i in indices) <= subtype_cap)
+        if config.enforce_subtype_cap:
+            model.subtype_cap.add(sum(model.x[i] for i in indices) <= subtype_cap)
         model.subtype_activation.add(model.z[subtype] <= sum(model.y[i] for i in indices))
-    if len(subtype_groups) >= config.min_distinct_subtypes:
+    if config.enforce_min_distinct_subtypes and len(subtype_groups) >= config.min_distinct_subtypes:
         model.min_diversity = pyo.Constraint(
             expr=sum(model.z[subtype] for subtype in model.SUBTYPES) >= config.min_distinct_subtypes
         )
@@ -286,7 +295,11 @@ def _solve_with_scipy_milp(
         return ScenarioOptimizationResult(
             scenario_name=str(scenario_constraint.get("scenario_name", "")),
             allocations=allocation,
-            diagnostics={"solver_status": "documented_greedy_fallback", "solver_backend": "none"},
+            diagnostics={
+                "solver_status": "documented_greedy_fallback",
+                "solver_backend": "none",
+                **_constraint_diagnostics(scored, scenario_constraint, config, allocation),
+            },
         )
 
     n_cases = len(scored)
@@ -305,7 +318,7 @@ def _solve_with_scipy_milp(
 
     lower_bounds = np.zeros(total_vars, dtype=float)
     upper_bounds = np.ones(total_vars, dtype=float)
-    upper_bounds[:n_cases] = candidate_cap
+    upper_bounds[:n_cases] = candidate_cap if config.enforce_candidate_cap else effective_budget
     upper_bounds[n_cases : n_cases + n_cases] = 1.0
     upper_bounds[n_cases + n_cases :] = 1.0
     bounds = Bounds(lower_bounds, upper_bounds)
@@ -319,14 +332,15 @@ def _solve_with_scipy_milp(
     feed_budget_row[:n_cases] = 1.0
     constraints.append(LinearConstraint(feed_budget_row, -np.inf, effective_budget))
 
-    selection_row = np.zeros(total_vars, dtype=float)
-    selection_row[n_cases : n_cases + n_cases] = 1.0
-    constraints.append(LinearConstraint(selection_row, -np.inf, float(config.max_portfolio_candidates)))
+    if config.enforce_max_selected:
+        selection_row = np.zeros(total_vars, dtype=float)
+        selection_row[n_cases : n_cases + n_cases] = 1.0
+        constraints.append(LinearConstraint(selection_row, -np.inf, float(config.max_portfolio_candidates)))
 
     for i in range(n_cases):
         row = np.zeros(total_vars, dtype=float)
         row[i] = 1.0
-        row[n_cases + i] = -candidate_cap
+        row[n_cases + i] = -(candidate_cap if config.enforce_candidate_cap else effective_budget)
         constraints.append(LinearConstraint(row, -np.inf, 0.0))
 
     for subtype_index, subtype in enumerate(subtype_names):
@@ -336,14 +350,15 @@ def _solve_with_scipy_milp(
             row[case_index] = 1.0
             subtype_y_row[n_cases + case_index] = -1.0
         row[n_cases + n_cases + subtype_index] = 0.0
-        constraints.append(LinearConstraint(row, -np.inf, subtype_cap))
+        if config.enforce_subtype_cap:
+            constraints.append(LinearConstraint(row, -np.inf, subtype_cap))
 
         subtype_activation = np.zeros(total_vars, dtype=float)
         subtype_activation[n_cases + n_cases + subtype_index] = 1.0
         subtype_activation += subtype_y_row
         constraints.append(LinearConstraint(subtype_activation, -np.inf, 0.0))
 
-    if n_subtypes >= config.min_distinct_subtypes:
+    if config.enforce_min_distinct_subtypes and n_subtypes >= config.min_distinct_subtypes:
         diversity_row = np.zeros(total_vars, dtype=float)
         diversity_row[n_cases + n_cases :] = 1.0
         constraints.append(LinearConstraint(diversity_row, float(config.min_distinct_subtypes), np.inf))
@@ -365,7 +380,11 @@ def _solve_with_scipy_milp(
         return ScenarioOptimizationResult(
             scenario_name=str(scenario_constraint.get("scenario_name", "")),
             allocations=allocation,
-            diagnostics={"solver_status": "scipy_milp_failed_fallback", "solver_backend": "scipy_milp"},
+            diagnostics={
+                "solver_status": "scipy_milp_failed_fallback",
+                "solver_backend": "scipy_milp",
+                **_constraint_diagnostics(scored, scenario_constraint, config, allocation),
+            },
         )
 
     allocation = pd.Series(solved.x[:n_cases], index=scored.index, dtype=float)
@@ -373,7 +392,11 @@ def _solve_with_scipy_milp(
     return ScenarioOptimizationResult(
         scenario_name=str(scenario_constraint.get("scenario_name", "")),
         allocations=allocations,
-        diagnostics={"solver_status": "optimal", "solver_backend": "scipy_milp"},
+        diagnostics={
+            "solver_status": "optimal",
+            "solver_backend": "scipy_milp",
+            **_constraint_diagnostics(scored, scenario_constraint, config, allocations),
+        },
     )
 
 
@@ -396,13 +419,17 @@ def _documented_allocation_fallback(
     carbon_load = 0.0
     chosen = 0
     for idx, row in ordered.iterrows():
-        if chosen >= config.max_portfolio_candidates:
+        if config.enforce_max_selected and chosen >= config.max_portfolio_candidates:
             break
         subtype = _candidate_subtype_key(row)
         remaining = effective_budget - float(allocation.sum())
         if remaining <= 1e-9:
             break
-        allowable = min(remaining, candidate_cap, subtype_cap - subtype_load.get(subtype, 0.0))
+        allowable = remaining
+        if config.enforce_candidate_cap:
+            allowable = min(allowable, candidate_cap)
+        if config.enforce_subtype_cap:
+            allowable = min(allowable, subtype_cap - subtype_load.get(subtype, 0.0))
         if allowable <= 1e-9:
             continue
         row_carbon_intensity = float(pd.to_numeric(pd.Series([row["planning_carbon_load_kgco2e_per_ton"]]), errors="coerce").fillna(0.0).iloc[0])
@@ -524,6 +551,133 @@ def _normalize(series: pd.Series) -> pd.Series:
     if maximum <= minimum:
         return pd.Series(0.0, index=values.index)
     return (values - minimum) / (maximum - minimum)
+
+
+def _apply_scenario_metric_adjustments(
+    frame: pd.DataFrame,
+    config: "PlanningConfig",
+) -> pd.DataFrame:
+    if frame.empty or not config.scenario_metric_adjustments:
+        return frame
+    if "scenario_name" not in frame.columns or "pathway" not in frame.columns:
+        return frame
+    adjusted = frame.copy()
+    variance_scale = float(config.scenario_metric_variance_scale)
+    for adjustment in config.scenario_metric_adjustments:
+        mask = (
+            adjusted["scenario_name"].astype(str).eq(adjustment.scenario_name)
+            & adjusted["pathway"].astype(str).eq(adjustment.pathway)
+        )
+        if not mask.any():
+            continue
+        adjusted.loc[mask, "planning_energy_intensity_mj_per_ton"] = (
+            pd.to_numeric(adjusted.loc[mask, "planning_energy_intensity_mj_per_ton"], errors="coerce").fillna(0.0)
+            * _scaled_multiplier(adjustment.energy_multiplier, variance_scale)
+        )
+        adjusted.loc[mask, "planning_environment_intensity_kgco2e_per_ton"] = (
+            pd.to_numeric(adjusted.loc[mask, "planning_environment_intensity_kgco2e_per_ton"], errors="coerce").fillna(0.0)
+            * _scaled_multiplier(adjustment.environment_multiplier, variance_scale)
+        )
+        adjusted.loc[mask, "planning_cost_intensity_proxy_or_real_per_ton"] = (
+            pd.to_numeric(adjusted.loc[mask, "planning_cost_intensity_proxy_or_real_per_ton"], errors="coerce").fillna(0.0)
+            * _scaled_multiplier(adjustment.cost_multiplier, variance_scale)
+        )
+        adjusted.loc[mask, "planning_carbon_load_kgco2e_per_ton"] = (
+            pd.to_numeric(adjusted.loc[mask, "planning_carbon_load_kgco2e_per_ton"], errors="coerce").fillna(0.0)
+            * _scaled_multiplier(adjustment.carbon_load_multiplier, variance_scale)
+        )
+    return adjusted
+
+
+def _scaled_multiplier(multiplier: float, variance_scale: float) -> float:
+    return 1.0 + (float(multiplier) - 1.0) * variance_scale
+
+
+def _constraint_diagnostics(
+    scored: pd.DataFrame,
+    scenario_constraint: dict[str, object],
+    config: "PlanningConfig",
+    allocations: pd.DataFrame,
+) -> dict[str, object]:
+    effective_budget = float(scenario_constraint.get("effective_processing_budget_ton_per_year", 0.0) or 0.0)
+    candidate_cap = float(scenario_constraint.get("candidate_share_cap_ton_per_year", 0.0) or 0.0)
+    subtype_cap = float(scenario_constraint.get("subtype_share_cap_ton_per_year", 0.0) or 0.0)
+    carbon_budget = _carbon_budget(scored, scenario_constraint, config)
+    allocation_frame = allocations.copy() if isinstance(allocations, pd.DataFrame) else pd.DataFrame()
+    if allocation_frame.empty:
+        total_allocated = 0.0
+        selected_count = 0
+        candidate_load_max = 0.0
+        subtype_load_max = 0.0
+        carbon_used = 0.0
+        distinct_selected = 0
+    else:
+        total_allocated = float(
+            pd.to_numeric(allocation_frame["allocated_feed_ton_per_year"], errors="coerce").fillna(0.0).sum()
+        )
+        selected_count = int(len(allocation_frame))
+        candidate_load_max = float(
+            pd.to_numeric(allocation_frame["allocated_feed_ton_per_year"], errors="coerce").fillna(0.0).max()
+        )
+        subtype_load_max = (
+            float(
+                pd.to_numeric(
+                    allocation_frame.groupby("manure_subtype", dropna=False)["allocated_feed_ton_per_year"].sum(),
+                    errors="coerce",
+                )
+                .fillna(0.0)
+                .max()
+            )
+            if "manure_subtype" in allocation_frame.columns
+            else 0.0
+        )
+        carbon_used = float(
+            pd.to_numeric(allocation_frame.get("allocated_carbon_load_kgco2e"), errors="coerce").fillna(0.0).sum()
+        )
+        distinct_selected = (
+            int(allocation_frame["manure_subtype"].astype(str).nunique())
+            if "manure_subtype" in allocation_frame.columns
+            else 0
+        )
+    min_distinct_required = int(scenario_constraint.get("min_distinct_subtypes", config.min_distinct_subtypes) or 0)
+    return {
+        "constraint_relaxation_ratio": float(config.constraint_relaxation_ratio),
+        "subtype_relaxation_ratio": float(config.subtype_relaxation_ratio),
+        "candidate_cap_enforced": bool(config.enforce_candidate_cap),
+        "subtype_cap_enforced": bool(config.enforce_subtype_cap),
+        "max_selected_enforced": bool(config.enforce_max_selected),
+        "min_distinct_subtypes_enforced": bool(config.enforce_min_distinct_subtypes),
+        "scenario_metric_variance_scale": float(config.scenario_metric_variance_scale),
+        "effective_budget_ton_per_year": effective_budget,
+        "allocated_feed_ton_per_year": total_allocated,
+        "feed_budget_slack_ton_per_year": max(0.0, effective_budget - total_allocated),
+        "feed_budget_binding": bool(effective_budget > 0.0 and abs(effective_budget - total_allocated) <= 1e-6),
+        "candidate_cap_ton_per_year": candidate_cap,
+        "candidate_cap_max_observed_ton_per_year": candidate_load_max,
+        "candidate_cap_slack_ton_per_year": max(0.0, candidate_cap - candidate_load_max),
+        "candidate_cap_binding": bool(config.enforce_candidate_cap and candidate_cap > 0.0 and abs(candidate_cap - candidate_load_max) <= 1e-6),
+        "candidate_cap_shadow_price_proxy": 1.0 if config.enforce_candidate_cap and candidate_cap > 0.0 and abs(candidate_cap - candidate_load_max) <= 1e-6 else 0.0,
+        "subtype_cap_ton_per_year": subtype_cap,
+        "subtype_cap_max_observed_ton_per_year": subtype_load_max,
+        "subtype_cap_slack_ton_per_year": max(0.0, subtype_cap - subtype_load_max),
+        "subtype_cap_binding": bool(config.enforce_subtype_cap and subtype_cap > 0.0 and abs(subtype_cap - subtype_load_max) <= 1e-6),
+        "subtype_cap_shadow_price_proxy": 1.0 if config.enforce_subtype_cap and subtype_cap > 0.0 and abs(subtype_cap - subtype_load_max) <= 1e-6 else 0.0,
+        "max_selected_limit": int(config.max_portfolio_candidates),
+        "selected_candidate_count": selected_count,
+        "max_selected_slack": max(0, int(config.max_portfolio_candidates) - selected_count),
+        "max_selected_binding": bool(config.enforce_max_selected and selected_count >= int(config.max_portfolio_candidates)),
+        "max_selected_shadow_price_proxy": 1.0 if config.enforce_max_selected and selected_count >= int(config.max_portfolio_candidates) else 0.0,
+        "min_distinct_subtypes_required": min_distinct_required,
+        "distinct_subtypes_selected": distinct_selected,
+        "min_distinct_subtypes_slack": max(0, distinct_selected - min_distinct_required),
+        "min_distinct_subtypes_binding": bool(config.enforce_min_distinct_subtypes and min_distinct_required > 0 and distinct_selected == min_distinct_required),
+        "min_distinct_subtypes_shadow_price_proxy": 1.0 if config.enforce_min_distinct_subtypes and min_distinct_required > 0 and distinct_selected == min_distinct_required else 0.0,
+        "carbon_budget_kgco2e": carbon_budget,
+        "carbon_load_used_kgco2e": carbon_used,
+        "carbon_budget_slack_kgco2e": max(0.0, carbon_budget - carbon_used),
+        "carbon_budget_binding": bool(carbon_budget > 0.0 and abs(carbon_budget - carbon_used) <= 1e-6),
+        "carbon_budget_shadow_price_proxy": 1.0 if carbon_budget > 0.0 and abs(carbon_budget - carbon_used) <= 1e-6 else 0.0,
+    }
 
 
 def _pareto_efficient_mask(

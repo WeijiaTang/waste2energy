@@ -83,6 +83,24 @@ def build_parser() -> argparse.ArgumentParser:
         default=1.0,
         help="Fraction of baseline-treatment carbon budget allowed in the optimized portfolio.",
     )
+    parser.add_argument(
+        "--constraint-relaxation-ratio",
+        type=float,
+        default=1.0,
+        help="Multiplier applied to candidate share caps before stress tests add their own overrides.",
+    )
+    parser.add_argument(
+        "--subtype-relaxation-ratio",
+        type=float,
+        default=1.0,
+        help="Multiplier applied to subtype share caps before stress tests add their own overrides.",
+    )
+    parser.add_argument(
+        "--scenario-metric-variance-scale",
+        type=float,
+        default=1.0,
+        help="Scale factor applied to pathway-level scenario perturbations.",
+    )
     return parser
 
 
@@ -111,6 +129,9 @@ def main() -> int:
                 deployable_capacity_fraction=args.deployable_capacity_fraction,
                 robustness_factor=args.robustness_factor,
                 carbon_budget_factor=args.carbon_budget_factor,
+                constraint_relaxation_ratio=args.constraint_relaxation_ratio,
+                subtype_relaxation_ratio=args.subtype_relaxation_ratio,
+                scenario_metric_variance_scale=args.scenario_metric_variance_scale,
             ),
         )
     except Exception as exc:

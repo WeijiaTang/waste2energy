@@ -78,6 +78,24 @@ def build_parser() -> argparse.ArgumentParser:
         help="Fraction of baseline-treatment carbon budget allowed in the optimized portfolio.",
     )
     parser.add_argument(
+        "--constraint-relaxation-ratio",
+        type=float,
+        default=1.0,
+        help="Multiplier applied to candidate share caps for sensitivity analysis.",
+    )
+    parser.add_argument(
+        "--subtype-relaxation-ratio",
+        type=float,
+        default=1.0,
+        help="Multiplier applied to subtype share caps for sensitivity analysis.",
+    )
+    parser.add_argument(
+        "--scenario-metric-variance-scale",
+        type=float,
+        default=1.0,
+        help="Scale factor applied to pathway-specific scenario metric perturbations.",
+    )
+    parser.add_argument(
         "--optimization-method",
         choices=["auto", "pyomo", "scipy"],
         default="auto",
@@ -122,6 +140,9 @@ def main() -> int:
                 deployable_capacity_fraction=args.deployable_capacity_fraction,
                 robustness_factor=args.robustness_factor,
                 carbon_budget_factor=args.carbon_budget_factor,
+                constraint_relaxation_ratio=args.constraint_relaxation_ratio,
+                subtype_relaxation_ratio=args.subtype_relaxation_ratio,
+                scenario_metric_variance_scale=args.scenario_metric_variance_scale,
                 optimization_method=args.optimization_method,
                 pyomo_solver_preference=args.pyomo_solver,
                 pareto_point_count=args.pareto_point_count,
