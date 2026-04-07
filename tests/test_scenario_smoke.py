@@ -29,6 +29,9 @@ def test_scenario_robustness_smoke(tmp_path):
 
     assert "robustness_factor" in stress_registry.columns
     assert "carbon_budget_factor" in stress_registry.columns
+    assert "constraint_relaxation_ratio" in stress_registry.columns
+    assert "candidate_cap_enforced" in stress_registry.columns
+    assert "unconstrained_scenario" in set(stress_registry["stress_test_name"])
     assert not decision_stability.empty
     assert not uncertainty_summary.empty
     assert not planning_claim_flags.empty

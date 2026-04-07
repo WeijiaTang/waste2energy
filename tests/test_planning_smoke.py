@@ -31,6 +31,9 @@ def test_planning_baseline_smoke(tmp_path):
     assert "combined_uncertainty_ratio" in surrogate_predictions.columns
     assert surrogate_predictions["combined_uncertainty_ratio"].ge(0.0).all()
     assert set(optimization_diagnostics["solver_status"]) == {"optimal"}
+    assert "candidate_cap_binding" in optimization_diagnostics.columns
+    assert "subtype_cap_binding" in optimization_diagnostics.columns
+    assert "constraint_relaxation_ratio" in optimization_diagnostics.columns
     assert "planning_score_scope" in scored_cases.columns
     assert set(scored_cases["planning_score_scope"]) == {"scenario_local_optimizer"}
     assert "scenario_baseline_waste_treatment_emission_factor_kgco2e_per_metric_ton" in scored_cases.columns
