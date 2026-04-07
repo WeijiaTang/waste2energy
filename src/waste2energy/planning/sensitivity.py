@@ -70,6 +70,7 @@ def analyze_weight_sensitivity(
             run_scenario_robustness_baseline(
                 dataset_path=dataset_path,
                 output_dir=str(scenario_dir),
+                planning_dir=str(planning_dir),
                 base_config=variant_config,
             )
             specs = build_operation_environment_specs(

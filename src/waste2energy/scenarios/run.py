@@ -6,6 +6,7 @@ from typing import Any
 import pandas as pd
 
 from ..audit import build_confirmatory_audit, write_confirmatory_audit
+from ..config import OUTPUTS_ROOT
 from ..planning.reporting import build_main_results_table, write_main_results_table
 from ..planning.inputs import load_planning_input_bundle
 from ..planning.solve import PlanningConfig, execute_planning_pipeline
@@ -19,12 +20,39 @@ from .robustness import (
 from .uncertainty import build_uncertainty_summary
 
 
+def resolve_audit_output_dir(
+    *,
+    scenario_dir: str | Path | None = None,
+    planning_dir: str | Path | None = None,
+) -> Path:
+    if planning_dir:
+        planning_path = Path(planning_dir)
+        if planning_path.name == "baseline" and planning_path.parent.name == "planning":
+            return planning_path.parent.parent / "audit"
+        if planning_path.name == "planning":
+            return planning_path.parent / "audit"
+        return planning_path.parent / "audit"
+    if scenario_dir:
+        scenario_path = Path(scenario_dir)
+        if scenario_path.name == "baseline" and scenario_path.parent.name == "scenarios":
+            return scenario_path.parent.parent / "audit"
+        if scenario_path.name == "scenarios":
+            return scenario_path.parent / "audit"
+        return scenario_path.parent / "audit"
+    return OUTPUTS_ROOT / "audit"
+
+
 def run_scenario_robustness_baseline(
     dataset_path: str | None = None,
     output_dir: str | None = None,
     planning_dir: str | None = None,
     base_config: PlanningConfig | None = None,
 ) -> dict[str, Any]:
+    if planning_dir is None:
+        raise ValueError(
+            "run_scenario_robustness_baseline requires an explicit planning_dir so scenario outputs, "
+            "reporting artifacts, and audit summaries stay bound to the same planning run."
+        )
     baseline_seed = base_config or PlanningConfig()
     baseline_config = PlanningConfig(
         objective_weight_preset=baseline_seed.objective_weight_preset,
@@ -119,41 +147,28 @@ def run_scenario_robustness_baseline(
     reporting_outputs: dict[str, str] = {}
     audit_outputs: dict[str, str] = {}
     scenario_output_root = Path(output_dir) if output_dir else None
-    planning_output_root = Path(planning_dir) if planning_dir else None
-    audit_output_dir = None
-    if scenario_output_root is not None:
-        if scenario_output_root.parent.name == "scenarios":
-            audit_output_dir = scenario_output_root.parent.parent / "audit"
-        else:
-            audit_output_dir = scenario_output_root.parent / "audit"
-    elif planning_output_root is not None:
-        if planning_output_root.parent.name == "planning":
-            audit_output_dir = planning_output_root.parent.parent / "audit"
-        else:
-            audit_output_dir = planning_output_root.parent / "audit"
-    try:
-        table, manifest = build_main_results_table(
-            planning_dir=planning_dir,
-            scenario_dir=output_dir,
-        )
-        reporting_outputs = write_main_results_table(
-            table,
-            manifest,
-            planning_dir=planning_dir,
-        )
-    except FileNotFoundError:
-        reporting_outputs = {}
-    try:
-        audit_payload = build_confirmatory_audit(
-            planning_dir=planning_dir,
-            scenario_dir=output_dir,
-        )
-        audit_outputs = write_confirmatory_audit(
-            audit_payload,
-            output_dir=audit_output_dir,
-        )
-    except FileNotFoundError:
-        audit_outputs = {}
+    planning_output_root = Path(planning_dir)
+    audit_output_dir = resolve_audit_output_dir(
+        scenario_dir=scenario_output_root,
+        planning_dir=planning_output_root,
+    )
+    table, manifest = build_main_results_table(
+        planning_dir=planning_dir,
+        scenario_dir=output_dir,
+    )
+    reporting_outputs = write_main_results_table(
+        table,
+        manifest,
+        planning_dir=planning_dir,
+    )
+    audit_payload = build_confirmatory_audit(
+        planning_dir=planning_dir,
+        scenario_dir=output_dir,
+    )
+    audit_outputs = write_confirmatory_audit(
+        audit_payload,
+        output_dir=audit_output_dir,
+    )
     return {
         "dataset_path": str(bundle.dataset_path),
         "stress_test_count": int(len(stress_registry)),

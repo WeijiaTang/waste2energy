@@ -560,13 +560,25 @@ def build_planning_claim_flag_table(planning_dir: Path, scenario_dir: Path) -> p
 
     planning_flags["claim_status"] = planning_flags.apply(_classify_planning_claim_status, axis=1)
     planning_flags["claim_rule"] = planning_flags.apply(_describe_planning_claim_rule, axis=1)
-    manual_calibration_flag = planning_flags["scenario_name"].isin(
-        scenario_external_evidence.get("scenario_name", pd.Series(dtype="object")).astype(str)
-    ) & planning_flags["Surrogate_Support_Level"].fillna("unknown").astype(str).isin(
-        ["documented_static_fallback", "unsupported_pathway", "unknown"]
+    support_levels = planning_flags["Surrogate_Support_Level"].fillna("unknown").astype(str)
+    evidence_gap_flag = np.where(
+        support_levels.eq("documented_static_fallback"),
+        "Evidence Gap: Documented Static Fallback",
+        np.where(
+            support_levels.eq("unsupported_pathway"),
+            "Evidence Gap: Unsupported Pathway",
+            np.where(
+                support_levels.eq("unknown")
+                & planning_flags["scenario_name"].isin(
+                    scenario_external_evidence.get("scenario_name", pd.Series(dtype="object")).astype(str)
+                ),
+                "Evidence Gap: Support Level Unresolved",
+                "",
+            ),
+        ),
     )
     planning_flags["evidence_gap_flag"] = pd.Series(
-        np.where(manual_calibration_flag, "Evidence Gap: Manual Calibration Involved", ""),
+        evidence_gap_flag,
         index=planning_flags.index,
     )
     selected_columns = [
