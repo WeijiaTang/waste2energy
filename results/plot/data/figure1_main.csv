@@ -1,0 +1,13 @@
+scenario_name,scenario_order,scenario_display,pathway,pathway_order,pathway_display,writing_label,selected_in_baseline_portfolio,selected_flag,claim_boundary,claim_color_group,portfolio_share_pct,energy_value,environment_value,score_value,stress_support_pct
+baseline_region_case,1,Baseline region,htc,1,HTC,supporting portfolio,True,selected,planning-ready candidate with cross-study caution,planning_ready,12.4,10.37,212.1,1.226,75.0
+baseline_region_case,1,Baseline region,pyrolysis,2,Pyrolysis,supporting portfolio,True,selected,planning-ready candidate with blended-feed caution,planning_ready,87.6,9.65,214.8,0.913,50.0
+baseline_region_case,1,Baseline region,ad,3,AD,comparison only,False,not_selected,planning comparison only,comparison_only,0.0,1.5,291.1,0.081,
+baseline_region_case,1,Baseline region,baseline,4,Baseline,comparison anchor,False,not_selected,comparison anchor only,anchor_only,0.0,0.79,0.0,0.018,
+high_supply_case,2,High supply,htc,1,HTC,supporting portfolio,True,selected,planning-ready candidate with cross-study caution,planning_ready,12.1,11.4,233.3,1.226,75.0
+high_supply_case,2,High supply,pyrolysis,2,Pyrolysis,supporting portfolio,True,selected,planning-ready candidate with blended-feed caution,planning_ready,87.9,10.62,236.3,0.913,37.5
+high_supply_case,2,High supply,ad,3,AD,comparison only,False,not_selected,planning comparison only,comparison_only,0.0,1.65,320.2,0.08,
+high_supply_case,2,High supply,baseline,4,Baseline,comparison anchor,False,not_selected,comparison anchor only,anchor_only,0.0,0.87,0.0,0.018,
+policy_support_case,3,Policy support,htc,1,HTC,competitive but unselected,False,not_selected,planning-ready candidate with cross-study caution,planning_ready,0.0,10.37,254.5,1.227,
+policy_support_case,3,Policy support,pyrolysis,2,Pyrolysis,dominant portfolio,True,selected,planning-ready candidate with blended-feed caution,planning_ready,100.0,9.65,257.8,0.913,62.5
+policy_support_case,3,Policy support,ad,3,AD,comparison only,False,not_selected,planning comparison only,comparison_only,0.0,1.5,349.3,0.084,
+policy_support_case,3,Policy support,baseline,4,Baseline,comparison anchor,False,not_selected,comparison anchor only,anchor_only,0.0,0.79,0.0,0.015,

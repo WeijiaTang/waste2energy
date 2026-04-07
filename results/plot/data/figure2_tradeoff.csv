@@ -1,0 +1,13 @@
+scenario_name,scenario_order,scenario_display,pathway,pathway_order,pathway_display,selected_in_baseline_portfolio,claim_color_group,portfolio_share_pct,energy_value,environment_value
+baseline_region_case,1,Baseline region,htc,1,HTC,True,planning_ready,12.4,10.37,212.1
+baseline_region_case,1,Baseline region,pyrolysis,2,Pyrolysis,True,planning_ready,87.6,9.65,214.8
+baseline_region_case,1,Baseline region,ad,3,AD,False,comparison_only,0.0,1.5,291.1
+baseline_region_case,1,Baseline region,baseline,4,Baseline,False,anchor_only,0.0,0.79,0.0
+high_supply_case,2,High supply,htc,1,HTC,True,planning_ready,12.1,11.4,233.3
+high_supply_case,2,High supply,pyrolysis,2,Pyrolysis,True,planning_ready,87.9,10.62,236.3
+high_supply_case,2,High supply,ad,3,AD,False,comparison_only,0.0,1.65,320.2
+high_supply_case,2,High supply,baseline,4,Baseline,False,anchor_only,0.0,0.87,0.0
+policy_support_case,3,Policy support,htc,1,HTC,False,planning_ready,0.0,10.37,254.5
+policy_support_case,3,Policy support,pyrolysis,2,Pyrolysis,True,planning_ready,100.0,9.65,257.8
+policy_support_case,3,Policy support,ad,3,AD,False,comparison_only,0.0,1.5,349.3
+policy_support_case,3,Policy support,baseline,4,Baseline,False,anchor_only,0.0,0.79,0.0

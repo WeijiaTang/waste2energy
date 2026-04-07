@@ -1,0 +1,101 @@
+{
+  "output_dir": "D:\\EnergyStorage\\JOCP\\results\\plot",
+  "data_outputs": {
+    "figure1_main": "D:\\EnergyStorage\\JOCP\\results\\plot\\data\\figure1_main.csv",
+    "figure2_tradeoff": "D:\\EnergyStorage\\JOCP\\results\\plot\\data\\figure2_tradeoff.csv",
+    "figure3_robustness": "D:\\EnergyStorage\\JOCP\\results\\plot\\data\\figure3_robustness.csv",
+    "paper1_sup_s1_scenario_fingerprint": "D:\\EnergyStorage\\JOCP\\results\\plot\\data\\paper1_sup_s1_scenario_fingerprint.csv",
+    "paper1_sup_s2_dominance_evidence_landscape": "D:\\EnergyStorage\\JOCP\\results\\plot\\data\\paper1_sup_s2_dominance_evidence_landscape.csv"
+  },
+  "figure_outputs": {
+    "paper1_fig1_decision_narrative": {
+      "eps": "D:\\EnergyStorage\\JOCP\\results\\plot\\eps\\paper1_fig1_decision_narrative.eps",
+      "pdf": "D:\\EnergyStorage\\JOCP\\results\\plot\\pdf\\paper1_fig1_decision_narrative.pdf",
+      "png": "D:\\EnergyStorage\\JOCP\\results\\plot\\png\\paper1_fig1_decision_narrative.png",
+      "tiff": "D:\\EnergyStorage\\JOCP\\results\\plot\\tiff\\paper1_fig1_decision_narrative.tiff"
+    },
+    "paper1_fig2_tradeoff_mechanism": {
+      "eps": "D:\\EnergyStorage\\JOCP\\results\\plot\\eps\\paper1_fig2_tradeoff_mechanism.eps",
+      "pdf": "D:\\EnergyStorage\\JOCP\\results\\plot\\pdf\\paper1_fig2_tradeoff_mechanism.pdf",
+      "png": "D:\\EnergyStorage\\JOCP\\results\\plot\\png\\paper1_fig2_tradeoff_mechanism.png",
+      "tiff": "D:\\EnergyStorage\\JOCP\\results\\plot\\tiff\\paper1_fig2_tradeoff_mechanism.tiff"
+    },
+    "paper1_fig3_robustness_evidence_boundary": {
+      "eps": "D:\\EnergyStorage\\JOCP\\results\\plot\\eps\\paper1_fig3_robustness_evidence_boundary.eps",
+      "pdf": "D:\\EnergyStorage\\JOCP\\results\\plot\\pdf\\paper1_fig3_robustness_evidence_boundary.pdf",
+      "png": "D:\\EnergyStorage\\JOCP\\results\\plot\\png\\paper1_fig3_robustness_evidence_boundary.png",
+      "tiff": "D:\\EnergyStorage\\JOCP\\results\\plot\\tiff\\paper1_fig3_robustness_evidence_boundary.tiff"
+    },
+    "paper1_sup_fig_s1_scenario_fingerprint": {
+      "eps": "D:\\EnergyStorage\\JOCP\\results\\plot\\eps\\paper1_sup_fig_s1_scenario_fingerprint.eps",
+      "pdf": "D:\\EnergyStorage\\JOCP\\results\\plot\\pdf\\paper1_sup_fig_s1_scenario_fingerprint.pdf",
+      "png": "D:\\EnergyStorage\\JOCP\\results\\plot\\png\\paper1_sup_fig_s1_scenario_fingerprint.png",
+      "tiff": "D:\\EnergyStorage\\JOCP\\results\\plot\\tiff\\paper1_sup_fig_s1_scenario_fingerprint.tiff"
+    },
+    "paper1_sup_fig_s2_dominance_evidence_landscape": {
+      "eps": "D:\\EnergyStorage\\JOCP\\results\\plot\\eps\\paper1_sup_fig_s2_dominance_evidence_landscape.eps",
+      "pdf": "D:\\EnergyStorage\\JOCP\\results\\plot\\pdf\\paper1_sup_fig_s2_dominance_evidence_landscape.pdf",
+      "png": "D:\\EnergyStorage\\JOCP\\results\\plot\\png\\paper1_sup_fig_s2_dominance_evidence_landscape.png",
+      "tiff": "D:\\EnergyStorage\\JOCP\\results\\plot\\tiff\\paper1_sup_fig_s2_dominance_evidence_landscape.tiff"
+    }
+  },
+  "latex_pdf_targets": {
+    "paper1_fig1_decision_narrative": "D:\\EnergyStorage\\JOCP\\results\\plot\\pdf\\paper1_fig1_decision_narrative.pdf",
+    "paper1_fig2_tradeoff_mechanism": "D:\\EnergyStorage\\JOCP\\results\\plot\\pdf\\paper1_fig2_tradeoff_mechanism.pdf",
+    "paper1_fig3_robustness_evidence_boundary": "D:\\EnergyStorage\\JOCP\\results\\plot\\pdf\\paper1_fig3_robustness_evidence_boundary.pdf",
+    "paper1_sup_fig_s1_scenario_fingerprint": "D:\\EnergyStorage\\JOCP\\results\\plot\\pdf\\paper1_sup_fig_s1_scenario_fingerprint.pdf",
+    "paper1_sup_fig_s2_dominance_evidence_landscape": "D:\\EnergyStorage\\JOCP\\results\\plot\\pdf\\paper1_sup_fig_s2_dominance_evidence_landscape.pdf"
+  },
+  "source_manifest": {
+    "based_on_table": "main_results_table.csv",
+    "row_count": 12,
+    "metric_long_row_count": 72,
+    "annotation_row_count": 12,
+    "figure_specs": [
+      {
+        "figure_id": "planning_results_panel_a",
+        "recommended_chart": "faceted bar chart",
+        "data_file": "paper1_planning_visual_metrics_long.csv",
+        "filter_metric_key": "best_case_score_index",
+        "x": "pathway",
+        "y": "value",
+        "facet": "scenario_name",
+        "color": "selected_flag",
+        "annotation_file": "paper1_planning_visual_annotations.csv",
+        "purpose": "Show pathway competition and the selected planning winner in each scenario."
+      },
+      {
+        "figure_id": "planning_results_panel_b",
+        "recommended_chart": "paired bar chart",
+        "data_file": "paper1_planning_visual_metrics_long.csv",
+        "filter_metric_keys": [
+          "best_case_energy_pj_per_year",
+          "best_case_environment_ktco2e_per_year"
+        ],
+        "x": "pathway",
+        "y": "value",
+        "facet": "scenario_name",
+        "color": "metric_label",
+        "annotation_file": "paper1_planning_visual_annotations.csv",
+        "purpose": "Compare energy and environment outputs across pathways within each scenario."
+      },
+      {
+        "figure_id": "planning_results_panel_c",
+        "recommended_chart": "bubble plot or heatmap",
+        "data_file": "paper1_planning_visual_metrics_long.csv",
+        "filter_metric_keys": [
+          "baseline_portfolio_share_pct",
+          "max_stress_selection_rate"
+        ],
+        "x": "pathway",
+        "y": "scenario_name",
+        "size_or_fill": "value",
+        "color": "claim_color_group",
+        "annotation_file": "paper1_planning_visual_annotations.csv",
+        "purpose": "Summarize portfolio dominance, robustness support, and claim boundary in one manuscript panel."
+      }
+    ],
+    "purpose": "Visualization-ready Paper 1 planning bundle for manuscript-grade plotting.",
+    "generated_at_utc": "2026-04-07T14:07:34+00:00"
+  }
+}

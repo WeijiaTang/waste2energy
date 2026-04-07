@@ -1,0 +1,13 @@
+scenario_name,scenario_order,scenario_display,pathway,pathway_order,pathway_display,selected_in_baseline_portfolio,claim_color_group,claim_boundary,portfolio_share_pct,stress_support_pct
+baseline_region_case,1,Baseline region,htc,1,HTC,True,planning_ready,planning-ready candidate with cross-study caution,12.4,75.0
+baseline_region_case,1,Baseline region,pyrolysis,2,Pyrolysis,True,planning_ready,planning-ready candidate with blended-feed caution,87.6,50.0
+baseline_region_case,1,Baseline region,ad,3,AD,False,comparison_only,planning comparison only,0.0,
+baseline_region_case,1,Baseline region,baseline,4,Baseline,False,anchor_only,comparison anchor only,0.0,
+high_supply_case,2,High supply,htc,1,HTC,True,planning_ready,planning-ready candidate with cross-study caution,12.1,75.0
+high_supply_case,2,High supply,pyrolysis,2,Pyrolysis,True,planning_ready,planning-ready candidate with blended-feed caution,87.9,37.5
+high_supply_case,2,High supply,ad,3,AD,False,comparison_only,planning comparison only,0.0,
+high_supply_case,2,High supply,baseline,4,Baseline,False,anchor_only,comparison anchor only,0.0,
+policy_support_case,3,Policy support,htc,1,HTC,False,planning_ready,planning-ready candidate with cross-study caution,0.0,
+policy_support_case,3,Policy support,pyrolysis,2,Pyrolysis,True,planning_ready,planning-ready candidate with blended-feed caution,100.0,62.5
+policy_support_case,3,Policy support,ad,3,AD,False,comparison_only,planning comparison only,0.0,
+policy_support_case,3,Policy support,baseline,4,Baseline,False,anchor_only,comparison anchor only,0.0,

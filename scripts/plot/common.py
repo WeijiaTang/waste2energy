@@ -16,7 +16,7 @@ if str(SRC_DIR) not in sys.path:
 from waste2energy.config import FIGURES_TABLES_DIR
 
 
-RESULTS_PAPER_DIR = ROOT / "results" / "paper"
+RESULTS_PLOT_DIR = ROOT / "results" / "plot"
 EXPORT_FORMATS = ("eps", "pdf", "png", "tiff")
 PATHWAY_ORDER = ["htc", "pyrolysis", "ad", "baseline"]
 PATHWAY_LABELS = {
@@ -97,8 +97,9 @@ def load_planning_visual_bundle(
 
 
 def ensure_results_dir(output_dir: Path | None = None) -> Path:
-    target = output_dir if output_dir else RESULTS_PAPER_DIR
+    target = output_dir if output_dir else RESULTS_PLOT_DIR
     target.mkdir(parents=True, exist_ok=True)
+    (target / "data").mkdir(parents=True, exist_ok=True)
     for extension in EXPORT_FORMATS:
         (target / extension).mkdir(parents=True, exist_ok=True)
     return target
