@@ -405,7 +405,7 @@ def _classify_results_row(row: pd.Series) -> str:
     stress_rate = float(pd.to_numeric(pd.Series([row.get("max_stress_selection_rate")]), errors="coerce").fillna(0.0).iloc[0])
     score_gap = float(pd.to_numeric(pd.Series([row.get("score_gap_to_scenario_best_pct")]), errors="coerce").fillna(0.0).iloc[0])
     pathway = str(row.get("pathway", ""))
-    tags = str(row.get("stress_test_tags", ""))
+    tags = _split_stress_test_tags(row.get("stress_test_tags", ""))
 
     if selected and portfolio_share >= 0.99:
         return "dominant_baseline_portfolio"
@@ -413,7 +413,7 @@ def _classify_results_row(row: pd.Series) -> str:
         return "supporting_baseline_portfolio"
     if pathway == "baseline":
         return "baseline_comparison_anchor"
-    if stress_rate > 0 and tags == "environment_priority":
+    if stress_rate > 0 and "environment_priority" in tags:
         return "environment_sensitive_alternative"
     if stress_rate > 0:
         return "stress_sensitive_alternative"
@@ -517,3 +517,11 @@ def _format_metric_label(value: float, unit: str) -> str:
     if unit == "ktCO2e/year":
         return f"{value:.1f}"
     return str(value)
+
+
+def _split_stress_test_tags(raw_value: object) -> set[str]:
+    return {
+        part.strip()
+        for part in str(raw_value or "").split("|")
+        if part.strip() and part.strip().lower() != "none"
+    }

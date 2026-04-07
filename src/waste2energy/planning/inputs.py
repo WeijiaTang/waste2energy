@@ -34,6 +34,7 @@ REQUIRED_PLANNING_COLUMNS = [
     "product_char_hhv_mj_per_kg",
     "energy_recovery_pct",
     "carbon_retention_pct",
+    "baseline_waste_treatment_emission_factor_kgco2e_per_short_ton_reference",
     "scenario_wet_waste_feed_allocation_ton_per_year_proxy",
     "scenario_baseline_waste_treatment_emission_factor_kgco2e_per_short_ton",
     "scenario_grid_electricity_emission_factor_kgco2e_per_kwh",
@@ -133,6 +134,20 @@ def validate_planning_frame(frame: pd.DataFrame, dataset_path: Path) -> None:
             "Planning dataset must define at least one baseline_waste_treatment_factor_unit_reference value."
         )
 
+    required_numeric_columns = [
+        "baseline_waste_treatment_emission_factor_kgco2e_per_short_ton_reference",
+        "scenario_baseline_waste_treatment_emission_factor_kgco2e_per_short_ton",
+    ]
+    for column in required_numeric_columns:
+        numeric = pd.to_numeric(frame[column], errors="coerce")
+        if numeric.isna().any():
+            invalid_rows = numeric[numeric.isna()].index.tolist()
+            preview = ", ".join(str(index) for index in invalid_rows[:5])
+            raise ValueError(
+                f"Planning dataset '{dataset_path}' contains missing or non-numeric values in required column "
+                f"'{column}' at row(s): {preview}."
+            )
+
 
 def normalize_planning_units(frame: pd.DataFrame) -> pd.DataFrame:
     normalized = frame.copy()
@@ -169,28 +184,33 @@ def normalize_planning_units(frame: pd.DataFrame) -> pd.DataFrame:
     ]
 
     if "pathway_emission_factor_kgco2e_per_short_ton_reference" in normalized.columns:
-        normalized["pathway_emission_factor_kgco2e_per_metric_ton_reference"] = [
-            emission_factor_to_metric_ton(value, unit)
-            for value, unit in zip(
-                pd.to_numeric(
-                    normalized["pathway_emission_factor_kgco2e_per_short_ton_reference"],
-                    errors="coerce",
-                ).fillna(0.0),
-                source_units,
-                strict=False,
-            )
-        ]
+        normalized["pathway_emission_factor_kgco2e_per_metric_ton_reference"] = _convert_optional_emission_factor_series(
+            pd.to_numeric(
+                normalized["pathway_emission_factor_kgco2e_per_short_ton_reference"],
+                errors="coerce",
+            ),
+            source_units,
+        )
     if "pathway_emission_factor_kgco2e_per_short_ton_scenario_proxy" in normalized.columns:
-        normalized["pathway_emission_factor_kgco2e_per_metric_ton_scenario_proxy"] = [
-            emission_factor_to_metric_ton(value, unit)
-            for value, unit in zip(
-                pd.to_numeric(
-                    normalized["pathway_emission_factor_kgco2e_per_short_ton_scenario_proxy"],
-                    errors="coerce",
-                ).fillna(0.0),
-                source_units,
-                strict=False,
-            )
-        ]
+        normalized["pathway_emission_factor_kgco2e_per_metric_ton_scenario_proxy"] = _convert_optional_emission_factor_series(
+            pd.to_numeric(
+                normalized["pathway_emission_factor_kgco2e_per_short_ton_scenario_proxy"],
+                errors="coerce",
+            ),
+            source_units,
+        )
 
     return normalized
+
+
+def _convert_optional_emission_factor_series(
+    values: pd.Series,
+    source_units: pd.Series,
+) -> pd.Series:
+    converted: list[float] = []
+    for value, unit in zip(values, source_units, strict=False):
+        if pd.isna(value):
+            converted.append(float("nan"))
+            continue
+        converted.append(emission_factor_to_metric_ton(float(value), unit))
+    return pd.Series(converted, index=values.index, dtype=float)

@@ -175,9 +175,12 @@ def _build_cost_terms(
 
 def _build_carbon_load(frame: pd.DataFrame, baseline_emission: pd.Series) -> pd.Series:
     explicit = _optional_numeric_column(frame, "pathway_emission_factor_kgco2e_per_metric_ton_scenario_proxy")
+    fallback = (baseline_emission - frame["planning_environment_intensity_kgco2e_per_ton"]).clip(lower=0.0)
     if explicit.notna().any():
-        return explicit.fillna((baseline_emission - frame["planning_environment_intensity_kgco2e_per_ton"]).clip(lower=0.0))
-    return (baseline_emission - frame["planning_environment_intensity_kgco2e_per_ton"]).clip(lower=0.0)
+        # Carbon-load guardrails track gross residual emissions only; negative credits
+        # should be represented in dedicated benefit terms rather than as negative load.
+        return explicit.fillna(fallback).clip(lower=0.0)
+    return fallback.clip(lower=0.0)
 
 
 def _optional_numeric_column(frame: pd.DataFrame, column: str) -> pd.Series:
