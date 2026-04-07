@@ -27,6 +27,15 @@ def _default_split_summary_paths() -> dict[str, Path]:
     }
 
 
+def _default_selected_manifest_paths() -> dict[str, Path]:
+    surrogate_root = resolve_surrogate_outputs_dir()
+    return {
+        "recommended": surrogate_root / "selected_models_manifest.csv",
+        "strict_group": surrogate_root / "selected_models_manifest_strict_group.csv",
+        "leave_study_out": surrogate_root / "selected_models_manifest_leave_study_out.csv",
+    }
+
+
 DEFAULT_OPERATION_COMPARISON_DIR = OUTPUTS_ROOT / "operation" / "comparison"
 DEFAULT_PLANNING_DIR = OUTPUTS_ROOT / "planning" / "baseline"
 DEFAULT_SCENARIO_DIR = OUTPUTS_ROOT / "scenarios" / "baseline"
@@ -41,9 +50,14 @@ def build_confirmatory_audit(
 ) -> dict[str, pd.DataFrame | dict[str, object] | list[dict[str, object]]]:
     active_outputs_root = Path(outputs_root) if outputs_root else OUTPUTS_ROOT
     default_paths = _default_split_summary_paths()
+    default_selected_paths = _default_selected_manifest_paths()
     ml_paths = {
         key: (active_outputs_root / path.relative_to(OUTPUTS_ROOT))
         for key, path in default_paths.items()
+    }
+    selected_manifest_paths = {
+        key: (active_outputs_root / path.relative_to(OUTPUTS_ROOT))
+        for key, path in default_selected_paths.items()
     }
     active_planning_dir = (
         Path(planning_dir)
@@ -62,8 +76,8 @@ def build_confirmatory_audit(
     )
 
     ml_summary = build_ml_split_coverage_summary(ml_paths)
-    ml_best = build_ml_best_result_summary(ml_paths)
-    ml_flags = build_ml_claim_flag_table(ml_paths)
+    ml_best = build_ml_best_result_summary(ml_paths, selected_manifest_paths)
+    ml_flags = build_ml_claim_flag_table(ml_paths, selected_manifest_paths)
     pathway_reliability = build_pathway_reliability_summary(ml_flags)
     planning_flags = build_planning_claim_flag_table(active_planning_dir, active_scenario_dir)
     planning_ml_consistency = build_planning_ml_consistency_summary(active_planning_dir, pathway_reliability)
@@ -151,28 +165,29 @@ def build_ml_split_coverage_summary(summary_paths: dict[str, Path]) -> pd.DataFr
     return pd.DataFrame(rows)
 
 
-def build_ml_best_result_summary(summary_paths: dict[str, Path]) -> pd.DataFrame:
+def build_ml_best_result_summary(
+    summary_paths: dict[str, Path],
+    selected_manifest_paths: dict[str, Path] | None = None,
+) -> pd.DataFrame:
     rows: list[dict[str, object]] = []
     for label, path in summary_paths.items():
         frame = _read_csv_if_exists(path)
         if frame.empty or "test_r2" not in frame.columns:
             continue
-        best = (
-            frame.sort_values("test_r2", ascending=False)
-            .groupby(["dataset_key", "target_column"], dropna=False)
-            .first()
-            .reset_index()
-        )
+        manifest = _read_selected_manifest(selected_manifest_paths, label)
+        best = _selected_or_best_frame(frame, manifest)
         for _, row in best.iterrows():
             rows.append(
                 {
                     "summary_label": label,
                     "dataset_key": row["dataset_key"],
                     "target_column": row["target_column"],
-                    "best_model_key": row["model_key"],
-                    "best_test_r2": row["test_r2"],
-                    "best_test_rmse": row["test_rmse"],
-                    "best_test_mae": row["test_mae"],
+                    "best_model_key": row["selected_model_key"],
+                    "selection_metric_name": row.get("selection_metric_name", "validation_r2"),
+                    "selection_metric_value": row.get("selection_metric_value", pd.NA),
+                    "best_test_r2": row["selected_test_r2"],
+                    "best_test_rmse": row["selected_test_rmse"],
+                    "best_test_mae": row["selected_test_mae"],
                 }
             )
     if not rows:
@@ -180,7 +195,10 @@ def build_ml_best_result_summary(summary_paths: dict[str, Path]) -> pd.DataFrame
     return pd.DataFrame(rows).sort_values(["summary_label", "dataset_key", "target_column"]).reset_index(drop=True)
 
 
-def build_ml_claim_flag_table(summary_paths: dict[str, Path]) -> pd.DataFrame:
+def build_ml_claim_flag_table(
+    summary_paths: dict[str, Path],
+    selected_manifest_paths: dict[str, Path] | None = None,
+) -> pd.DataFrame:
     rows: list[dict[str, object]] = []
     strict_group = _read_csv_if_exists(summary_paths["strict_group"])
     leave_study_out = _read_csv_if_exists(summary_paths["leave_study_out"])
@@ -188,6 +206,7 @@ def build_ml_claim_flag_table(summary_paths: dict[str, Path]) -> pd.DataFrame:
     rows.extend(
         _build_claim_rows_from_frame(
             strict_group,
+            selected_manifest=_read_selected_manifest(selected_manifest_paths, "strict_group"),
             summary_label="strict_group",
             claim_rule="Paper 1 main-table benchmark evidence tier",
             positive_threshold=0.65,
@@ -196,6 +215,7 @@ def build_ml_claim_flag_table(summary_paths: dict[str, Path]) -> pd.DataFrame:
     rows.extend(
         _build_claim_rows_from_frame(
             leave_study_out,
+            selected_manifest=_read_selected_manifest(selected_manifest_paths, "leave_study_out"),
             summary_label="leave_study_out",
             claim_rule="Cross-study stress test across available study-labeled datasets",
             positive_threshold=0.50,
@@ -708,6 +728,7 @@ def build_audit_manifest(
 def _build_claim_rows_from_frame(
     frame: pd.DataFrame,
     *,
+    selected_manifest: pd.DataFrame | None = None,
     summary_label: str,
     claim_rule: str,
     positive_threshold: float,
@@ -716,14 +737,9 @@ def _build_claim_rows_from_frame(
     if frame.empty:
         return rows
 
-    best = (
-        frame.sort_values("test_r2", ascending=False)
-        .groupby(["dataset_key", "target_column"], dropna=False)
-        .first()
-        .reset_index()
-    )
+    best = _selected_or_best_frame(frame, selected_manifest)
     for _, row in best.iterrows():
-        test_r2 = float(row["test_r2"])
+        test_r2 = float(row["selected_test_r2"])
         if test_r2 >= positive_threshold:
             claim_status = "supportive"
         elif test_r2 >= 0.0:
@@ -736,12 +752,118 @@ def _build_claim_rows_from_frame(
                 "claim_rule": claim_rule,
                 "dataset_key": row["dataset_key"],
                 "target_column": row["target_column"],
-                "best_model_key": row["model_key"],
+                "best_model_key": row["selected_model_key"],
+                "selection_metric_name": row.get("selection_metric_name", "validation_r2"),
+                "selection_metric_value": row.get("selection_metric_value", pd.NA),
                 "best_test_r2": test_r2,
                 "claim_status": claim_status,
             }
         )
     return rows
+
+
+def _read_selected_manifest(
+    selected_manifest_paths: dict[str, Path] | None,
+    label: str,
+) -> pd.DataFrame:
+    if not selected_manifest_paths:
+        return pd.DataFrame()
+    path = selected_manifest_paths.get(label)
+    if path is None:
+        return pd.DataFrame()
+    return _read_csv_if_exists(path)
+
+
+def _selected_or_best_frame(frame: pd.DataFrame, selected_manifest: pd.DataFrame | None) -> pd.DataFrame:
+    if selected_manifest is not None and not selected_manifest.empty:
+        manifest = selected_manifest.copy()
+        manifest = manifest.rename(
+            columns={
+                "selected_model_key": "selected_model_key",
+                "selected_test_r2": "selected_test_r2",
+                "selected_test_rmse": "selected_test_rmse",
+                "selected_test_mae": "selected_test_mae",
+            }
+        )
+        return manifest.reset_index(drop=True)
+
+    summary_selected = _selected_from_summary_frame(frame)
+    if summary_selected is not None and not summary_selected.empty:
+        return summary_selected
+
+    fallback = (
+        frame.sort_values("test_r2", ascending=False)
+        .groupby(["dataset_key", "target_column"], dropna=False)
+        .first()
+        .reset_index()
+    )
+    fallback["selected_model_key"] = fallback["model_key"]
+    fallback["selected_test_r2"] = fallback["test_r2"]
+    fallback["selected_test_rmse"] = fallback["test_rmse"]
+    fallback["selected_test_mae"] = fallback["test_mae"]
+    fallback["selection_metric_name"] = "legacy_test_r2"
+    fallback["selection_metric_value"] = fallback["test_r2"]
+    return fallback
+
+
+def _selected_from_summary_frame(frame: pd.DataFrame) -> pd.DataFrame | None:
+    if frame.empty or "model_key" not in frame.columns:
+        return None
+
+    selected = pd.DataFrame()
+    if "is_selected_model" in frame.columns:
+        selected = frame[frame["is_selected_model"].astype(bool)].copy()
+
+    if selected.empty and "selection_rank_within_dataset_target" in frame.columns:
+        ranked = frame.copy()
+        ranked["selection_rank_within_dataset_target"] = pd.to_numeric(
+            ranked["selection_rank_within_dataset_target"],
+            errors="coerce",
+        )
+        selected = ranked.loc[ranked["selection_rank_within_dataset_target"] == 1].copy()
+
+    if selected.empty and "validation_r2" in frame.columns:
+        selected_groups: list[pd.DataFrame] = []
+        for _, subset in frame.groupby(["dataset_key", "target_column"], dropna=False, sort=False):
+            working = subset.copy()
+            working["_validation_r2_sort"] = pd.to_numeric(
+                working.get("validation_r2"),
+                errors="coerce",
+            ).fillna(float("-inf"))
+            working["_validation_rmse_sort"] = pd.to_numeric(
+                working.get("validation_rmse"),
+                errors="coerce",
+            ).fillna(float("inf"))
+            working["_validation_mae_sort"] = pd.to_numeric(
+                working.get("validation_mae"),
+                errors="coerce",
+            ).fillna(float("inf"))
+            working = working.sort_values(
+                ["_validation_r2_sort", "_validation_rmse_sort", "_validation_mae_sort", "model_key"],
+                ascending=[False, True, True, True],
+            ).head(1)
+            selected_groups.append(
+                working.drop(
+                    columns=["_validation_r2_sort", "_validation_rmse_sort", "_validation_mae_sort"],
+                    errors="ignore",
+                )
+            )
+        if selected_groups:
+            selected = pd.concat(selected_groups, ignore_index=True)
+
+    if selected.empty:
+        return None
+
+    selected = selected.copy()
+    selected["selected_model_key"] = selected["model_key"]
+    selected["selected_test_r2"] = pd.to_numeric(selected.get("test_r2"), errors="coerce")
+    selected["selected_test_rmse"] = pd.to_numeric(selected.get("test_rmse"), errors="coerce")
+    selected["selected_test_mae"] = pd.to_numeric(selected.get("test_mae"), errors="coerce")
+    if "selection_metric_name" not in selected.columns:
+        selected["selection_metric_name"] = "validation_r2"
+    if "selection_metric_value" not in selected.columns:
+        selected["selection_metric_value"] = pd.to_numeric(selected.get("validation_r2"), errors="coerce")
+    return selected.reset_index(drop=True)
 
 
 def _pathway_from_dataset_key(dataset_key: object) -> str:

@@ -52,7 +52,11 @@ def build_strict_group_splits(
         ),
     }
 
-    if "augmentation" in spec.training_splits and not augmentation_frame.empty:
+    if (
+        "augmentation" in spec.training_splits
+        and "strict_group" in spec.augmentation_training_splits
+        and not augmentation_frame.empty
+    ):
         split_frames["train"] = pd.concat(
             [split_frames["train"], augmentation_frame],
             ignore_index=True,
@@ -106,7 +110,11 @@ def build_leave_group_out_splits(
         ),
     }
 
-    if "augmentation" in spec.training_splits and not augmentation_frame.empty:
+    if (
+        "augmentation" in spec.training_splits
+        and group_column_to_split_strategy(group_column) in spec.augmentation_training_splits
+        and not augmentation_frame.empty
+    ):
         split_frames["train"] = pd.concat(
             [split_frames["train"], augmentation_frame],
             ignore_index=True,
@@ -241,3 +249,11 @@ def assign_holdout_group_splits(group_counts: dict[str, int]) -> dict[str, str]:
 
 def stable_group_order_key(group_id: str) -> str:
     return hashlib.sha256(group_id.encode("utf-8")).hexdigest()
+
+
+def group_column_to_split_strategy(group_column: str) -> str:
+    mapping = {
+        "source_repo": "leave_source_repo_out",
+        "study_group": "leave_study_out",
+    }
+    return mapping.get(group_column, group_column)

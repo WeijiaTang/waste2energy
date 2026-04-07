@@ -190,6 +190,11 @@ class SurrogateEvaluator:
         if cache_key in self._artifact_cache:
             return self._artifact_cache[cache_key]
 
+        selected_manifest_candidates = [
+            self.outputs_root / f"selected_models_manifest_{self.preferred_split_strategy}.csv",
+            self.outputs_root / "selected_models_manifest.csv",
+            self.outputs_root / f"selected_models_manifest_{self.fallback_split_strategy}.csv",
+        ]
         summary_candidates = [
             self.outputs_root / "traditional_ml_suite_summary_strict_group.csv",
             self.outputs_root / self.preferred_split_strategy / "traditional_ml_suite_summary_strict_group.csv",
@@ -198,6 +203,37 @@ class SurrogateEvaluator:
         ]
         datasets = PATHWAY_DATASET_PREFERENCES.get(pathway, ())
         selected: SurrogateArtifact | None = None
+
+        for manifest_path in selected_manifest_candidates:
+            if not manifest_path.exists():
+                continue
+            manifest = pd.read_csv(manifest_path)
+            subset = manifest[
+                manifest["dataset_key"].isin(datasets) & manifest["target_column"].eq(target_column)
+            ].copy()
+            if subset.empty:
+                continue
+            preferred_subset = subset[
+                subset.get("artifact_role", pd.Series([""] * len(subset), index=subset.index)).astype(str)
+                == "selected_model_refit"
+            ]
+            if preferred_subset.empty:
+                preferred_subset = subset[
+                    subset.get("selection_status", pd.Series([""] * len(subset), index=subset.index))
+                    .astype(str)
+                    .str.startswith("selected_on_validation")
+                ]
+            if not preferred_subset.empty:
+                subset = preferred_subset
+            best = subset.sort_values(["selected_validation_r2", "selected_model_key"], ascending=[False, True]).iloc[0]
+            artifact = self._build_artifact_from_selected_manifest(best)
+            if artifact is not None:
+                selected = artifact
+                break
+
+        if selected is not None:
+            self._artifact_cache[cache_key] = selected
+            return selected
 
         for summary_path in summary_candidates:
             if not summary_path.exists():
@@ -217,6 +253,39 @@ class SurrogateEvaluator:
 
         self._artifact_cache[cache_key] = selected
         return selected
+
+    def _build_artifact_from_selected_manifest(self, row: pd.Series) -> SurrogateArtifact | None:
+        model_key = str(row.get("selected_model_key"))
+        dataset_key = str(row.get("dataset_key"))
+        target_column = str(row.get("target_column"))
+        split_strategy = str(row.get("split_strategy", "recommended") or "recommended")
+        model_path = Path(str(row.get("model_path", "")))
+        run_config_path = Path(str(row.get("run_config_path", "")))
+        metrics_path = Path(str(row.get("metrics_path", "")))
+
+        if not model_path.exists() or not run_config_path.exists():
+            payload = pd.Series(
+                {
+                    "model_key": model_key,
+                    "dataset_key": dataset_key,
+                    "target_column": target_column,
+                    "split_strategy": split_strategy,
+                }
+            )
+            return self._build_artifact_from_summary(payload)
+
+        payload = json.loads(run_config_path.read_text(encoding="utf-8"))
+        return SurrogateArtifact(
+            pathway=self._infer_pathway_from_dataset(dataset_key),
+            target_column=target_column,
+            dataset_key=dataset_key,
+            model_key=model_key,
+            split_strategy=split_strategy,
+            model_path=model_path,
+            run_config_path=run_config_path,
+            metrics_path=metrics_path,
+            feature_columns=tuple(payload.get("feature_columns", [])),
+        )
 
     def _build_artifact_from_summary(self, row: pd.Series) -> SurrogateArtifact | None:
         model_key = str(row["model_key"])

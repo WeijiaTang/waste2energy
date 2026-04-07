@@ -24,6 +24,7 @@ class DatasetSpec:
     description: str
     training_splits: tuple[str, ...] = ("train",)
     weight_column: str | None = None
+    augmentation_training_splits: tuple[str, ...] = ("recommended", "strict_group", "leave_source_repo_out", "leave_study_out")
 
 
 DATASET_SPECS = {
@@ -45,6 +46,7 @@ DATASET_SPECS = {
         ),
         training_splits=("train", "augmentation"),
         weight_column="recommended_sample_weight",
+        augmentation_training_splits=("recommended",),
     ),
 }
 

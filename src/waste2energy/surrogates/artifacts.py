@@ -25,6 +25,9 @@ def write_training_outputs(
     model_family: str,
     model_file_name: str,
     save_model_fn,
+    row_counts_override: dict[str, int] | None = None,
+    training_splits_override: list[str] | None = None,
+    additional_run_manifest_fields: dict[str, object] | None = None,
 ) -> dict[str, str]:
     base_outputs_dir = resolve_surrogate_outputs_dir()
     split_root = base_outputs_dir if bundle.split_strategy == "recommended" else base_outputs_dir / bundle.split_strategy
@@ -56,11 +59,12 @@ def write_training_outputs(
         target_column=target_column,
         split_strategy=bundle.split_strategy,
         feature_columns=bundle.feature_columns,
-        training_splits=list(bundle.spec.training_splits),
+        training_splits=training_splits_override or list(bundle.spec.training_splits),
         weight_column=bundle.spec.weight_column,
-        row_counts={key: int(len(value)) for key, value in bundle.split_frames.items()},
+        row_counts=row_counts_override or {key: int(len(value)) for key, value in bundle.split_frames.items()},
         model_family=model_family,
         model_config=model_config,
+        **(additional_run_manifest_fields or {}),
     )
     write_json(config_path, run_config)
 
@@ -89,6 +93,7 @@ def build_suite_summary_rows(results: list[dict[str, object]]) -> list[dict[str,
             "predictions_path": result["outputs"]["predictions"],
             "feature_importance_path": result["outputs"]["feature_importance"],
             "model_path": result["outputs"]["model"],
+            "run_config_path": result["outputs"]["run_config"],
         }
         for split_name in ("train", "validation", "test"):
             split_metrics = result["metrics"].get(split_name, {})
@@ -96,16 +101,129 @@ def build_suite_summary_rows(results: list[dict[str, object]]) -> list[dict[str,
                 row[f"{split_name}_{metric_name}"] = split_metrics.get(metric_name)
         rows.append(row)
 
-    rows.sort(
-        key=lambda item: (
-            float("-inf") if item.get("test_r2") is None else float(item["test_r2"]),
-            item["model_key"],
-            item["dataset_key"],
-            item["target_column"],
-        ),
-        reverse=True,
+    ranked_frame = build_ranked_suite_summary_frame(rows)
+    return ranked_frame.to_dict(orient="records")
+
+
+def build_ranked_suite_summary_frame(rows: list[dict[str, object]]) -> pd.DataFrame:
+    frame = pd.DataFrame(rows)
+    if frame.empty:
+        return frame
+
+    frame["selection_metric_name"] = "validation_r2"
+    frame["selection_metric_value"] = pd.to_numeric(frame.get("validation_r2"), errors="coerce")
+    frame["reporting_test_r2"] = pd.to_numeric(frame.get("test_r2"), errors="coerce")
+    frame["reporting_test_rmse"] = pd.to_numeric(frame.get("test_rmse"), errors="coerce")
+    frame["reporting_test_mae"] = pd.to_numeric(frame.get("test_mae"), errors="coerce")
+
+    ranked_groups: list[pd.DataFrame] = []
+    for _, subset in frame.groupby(["dataset_key", "target_column", "split_strategy"], dropna=False, sort=False):
+        working = subset.copy()
+        working["_validation_r2_sort"] = pd.to_numeric(working.get("validation_r2"), errors="coerce").fillna(float("-inf"))
+        working["_validation_rmse_sort"] = pd.to_numeric(working.get("validation_rmse"), errors="coerce").fillna(float("inf"))
+        working["_validation_mae_sort"] = pd.to_numeric(working.get("validation_mae"), errors="coerce").fillna(float("inf"))
+        working = working.sort_values(
+            ["_validation_r2_sort", "_validation_rmse_sort", "_validation_mae_sort", "model_key"],
+            ascending=[False, True, True, True],
+        ).reset_index(drop=True)
+        working["selection_rank_within_dataset_target"] = range(1, len(working) + 1)
+        working["is_selected_model"] = working["selection_rank_within_dataset_target"].eq(1)
+        ranked_groups.append(
+            working.drop(columns=["_validation_r2_sort", "_validation_rmse_sort", "_validation_mae_sort"])
+        )
+
+    ranked = pd.concat(ranked_groups, ignore_index=True)
+    return ranked.sort_values(
+        ["dataset_key", "target_column", "split_strategy", "selection_rank_within_dataset_target", "model_key"],
+        ascending=[True, True, True, True, True],
+    ).reset_index(drop=True)
+
+
+def build_selected_models_manifest(summary_frame: pd.DataFrame) -> pd.DataFrame:
+    if summary_frame.empty:
+        return pd.DataFrame()
+
+    selected = summary_frame[summary_frame["is_selected_model"].astype(bool)].copy()
+    if selected.empty:
+        return pd.DataFrame()
+
+    selected["selection_status"] = selected["selection_metric_value"].notna().map(
+        {True: "selected_on_validation", False: "selection_unavailable"}
     )
-    return rows
+    selected["artifact_role"] = "benchmark_selected_candidate"
+    selected["training_scope"] = "train_only"
+    selected = selected.rename(
+        columns={
+            "model_key": "selected_model_key",
+            "selection_metric_name": "selection_metric_name",
+            "selection_metric_value": "selection_metric_value",
+            "validation_r2": "selected_validation_r2",
+            "validation_rmse": "selected_validation_rmse",
+            "validation_mae": "selected_validation_mae",
+            "test_r2": "selected_test_r2",
+            "test_rmse": "selected_test_rmse",
+            "test_mae": "selected_test_mae",
+        }
+    )
+    selected["benchmark_model_path"] = selected["model_path"]
+    selected["benchmark_metrics_path"] = selected["metrics_path"]
+    selected["benchmark_predictions_path"] = selected["predictions_path"]
+    selected["benchmark_feature_importance_path"] = selected["feature_importance_path"]
+    selected["benchmark_run_config_path"] = selected["run_config_path"]
+    selected["benchmark_validation_r2"] = selected["selected_validation_r2"]
+    selected["benchmark_validation_rmse"] = selected["selected_validation_rmse"]
+    selected["benchmark_validation_mae"] = selected["selected_validation_mae"]
+    selected["benchmark_test_r2"] = selected["selected_test_r2"]
+    selected["benchmark_test_rmse"] = selected["selected_test_rmse"]
+    selected["benchmark_test_mae"] = selected["selected_test_mae"]
+    selected["benchmark_train_rows"] = selected["train_rows"]
+    selected["benchmark_validation_rows"] = selected["validation_rows"]
+    selected["benchmark_test_rows"] = selected["test_rows"]
+    ordered_columns = [
+        "dataset_key",
+        "target_column",
+        "split_strategy",
+        "selected_model_key",
+        "selection_status",
+        "artifact_role",
+        "training_scope",
+        "selection_metric_name",
+        "selection_metric_value",
+        "selected_validation_r2",
+        "selected_validation_rmse",
+        "selected_validation_mae",
+        "selected_test_r2",
+        "selected_test_rmse",
+        "selected_test_mae",
+        "feature_count",
+        "train_rows",
+        "validation_rows",
+        "test_rows",
+        "model_path",
+        "metrics_path",
+        "predictions_path",
+        "feature_importance_path",
+        "run_config_path",
+        "benchmark_validation_r2",
+        "benchmark_validation_rmse",
+        "benchmark_validation_mae",
+        "benchmark_test_r2",
+        "benchmark_test_rmse",
+        "benchmark_test_mae",
+        "benchmark_train_rows",
+        "benchmark_validation_rows",
+        "benchmark_test_rows",
+        "benchmark_model_path",
+        "benchmark_metrics_path",
+        "benchmark_predictions_path",
+        "benchmark_feature_importance_path",
+        "benchmark_run_config_path",
+    ]
+    available_columns = [column for column in ordered_columns if column in selected.columns]
+    return selected[available_columns].sort_values(
+        ["dataset_key", "target_column", "split_strategy"],
+        ascending=[True, True, True],
+    ).reset_index(drop=True)
 
 
 def write_suite_summary(
@@ -113,14 +231,16 @@ def write_suite_summary(
     results: list[dict[str, object]],
     output_root: str | None,
     split_strategy: str,
-) -> tuple[str, str]:
+) -> tuple[str, str, str]:
     summary_frame = pd.DataFrame(build_suite_summary_rows(results))
+    selected_manifest = build_selected_models_manifest(summary_frame)
     suite_dir = Path(output_root) if output_root else resolve_surrogate_outputs_dir()
     suite_dir.mkdir(parents=True, exist_ok=True)
     suffix = "" if split_strategy == "recommended" else f"_{split_strategy}"
     summary_csv = suite_dir / f"traditional_ml_suite_summary{suffix}.csv"
     summary_json = suite_dir / f"traditional_ml_suite_summary{suffix}.json"
+    selected_manifest_csv = suite_dir / f"selected_models_manifest{suffix}.csv"
     summary_frame.to_csv(summary_csv, index=False)
+    selected_manifest.to_csv(selected_manifest_csv, index=False)
     write_json(summary_json, results)
-    return str(summary_csv), str(summary_json)
-
+    return str(summary_csv), str(summary_json), str(selected_manifest_csv)
