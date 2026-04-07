@@ -19,6 +19,16 @@ def build_run_manifest(**fields: Any) -> dict[str, Any]:
     return payload
 
 
+def parse_manifest_timestamp(payload: dict[str, Any]) -> datetime | None:
+    raw_value = payload.get("generated_at_utc")
+    if not raw_value:
+        return None
+    try:
+        return datetime.fromisoformat(str(raw_value))
+    except ValueError:
+        return None
+
+
 def write_json(path: Path, payload: Any) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload, indent=2), encoding="utf-8")

@@ -48,13 +48,27 @@ def build_main_results_table(
         how="left",
     ).drop(columns=["optimization_case_id"])
 
+    case_pathways = scored_cases[
+        ["optimization_case_id", "scenario_name", "sample_id", "pathway"]
+    ].drop_duplicates(subset=["optimization_case_id"])
     decision_with_pathway = decision_stability.merge(
-        scored_cases[["scenario_name", "sample_id", "pathway"]].drop_duplicates(
-            subset=["scenario_name", "sample_id"]
-        ),
-        on=["scenario_name", "sample_id"],
+        case_pathways.rename(columns={"optimization_case_id": "representative_case_id"})[
+            ["representative_case_id", "pathway"]
+        ],
+        on="representative_case_id",
         how="left",
     )
+    unresolved_pathway = decision_with_pathway["pathway"].isna()
+    if unresolved_pathway.any():
+        decision_with_pathway.loc[unresolved_pathway, "pathway"] = decision_with_pathway.loc[
+            unresolved_pathway
+        ].merge(
+            case_pathways[["scenario_name", "sample_id", "pathway"]].drop_duplicates(
+                subset=["scenario_name", "sample_id"]
+            ),
+            on=["scenario_name", "sample_id"],
+            how="left",
+        )["pathway"].to_numpy()
     stress_summary = _aggregate_pathway_stress(decision_with_pathway)
     pathway_summary = pathway_summary.merge(
         stress_summary,

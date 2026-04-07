@@ -1,3 +1,5 @@
+# Ref: docs/spec/task.md (Task-ID: WTE-SPEC-2026-04-07-PLANNING-REFINE)
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -5,7 +7,7 @@ from pathlib import Path
 import pandas as pd
 
 from ..common import build_run_manifest, write_json
-from ..config import OUTPUTS_DIR
+from ..config import resolve_surrogate_outputs_dir
 
 
 def write_training_outputs(
@@ -24,7 +26,8 @@ def write_training_outputs(
     model_file_name: str,
     save_model_fn,
 ) -> dict[str, str]:
-    split_root = OUTPUTS_DIR if bundle.split_strategy == "recommended" else OUTPUTS_DIR / bundle.split_strategy
+    base_outputs_dir = resolve_surrogate_outputs_dir()
+    split_root = base_outputs_dir if bundle.split_strategy == "recommended" else base_outputs_dir / bundle.split_strategy
 
     if output_dir:
         target_dir = Path(output_dir)
@@ -112,7 +115,7 @@ def write_suite_summary(
     split_strategy: str,
 ) -> tuple[str, str]:
     summary_frame = pd.DataFrame(build_suite_summary_rows(results))
-    suite_dir = Path(output_root) if output_root else OUTPUTS_DIR
+    suite_dir = Path(output_root) if output_root else resolve_surrogate_outputs_dir()
     suite_dir.mkdir(parents=True, exist_ok=True)
     suffix = "" if split_strategy == "recommended" else f"_{split_strategy}"
     summary_csv = suite_dir / f"traditional_ml_suite_summary{suffix}.csv"
@@ -120,3 +123,4 @@ def write_suite_summary(
     summary_frame.to_csv(summary_csv, index=False)
     write_json(summary_json, results)
     return str(summary_csv), str(summary_json)
+

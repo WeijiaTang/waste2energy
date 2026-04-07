@@ -1,9 +1,12 @@
+# Ref: docs/spec/task.md (Task-ID: WTE-SPEC-2026-04-07-PLANNING-REFINE)
+
 from __future__ import annotations
 
 import argparse
 import json
 import sys
 
+from ..config import DEFAULT_OBJECTIVE_WEIGHT_PRESET, get_objective_weight_system
 from ..planning.solve import PlanningConfig
 from .run import run_scenario_robustness_baseline
 
@@ -14,11 +17,24 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--dataset-path", default="", help="Optional explicit planning dataset path.")
     parser.add_argument("--output-dir", default="", help="Optional explicit output directory.")
-    parser.add_argument("--energy-weight", type=float, default=0.40, help="Baseline energy objective weight.")
     parser.add_argument(
-        "--environment-weight", type=float, default=0.35, help="Baseline environmental objective weight."
+        "--planning-dir",
+        default="",
+        help="Optional explicit planning output directory used to refresh manuscript-facing planning tables.",
     )
-    parser.add_argument("--cost-weight", type=float, default=0.25, help="Baseline cost objective weight.")
+    parser.add_argument(
+        "--objective-weight-preset",
+        default=DEFAULT_OBJECTIVE_WEIGHT_PRESET,
+        help="Named objective-weight preset shared by planning and operation.",
+    )
+    parser.add_argument("--energy-weight", type=float, default=None, help="Optional energy objective weight override.")
+    parser.add_argument(
+        "--environment-weight",
+        type=float,
+        default=None,
+        help="Optional environmental objective weight override.",
+    )
+    parser.add_argument("--cost-weight", type=float, default=None, help="Optional cost objective weight override.")
     parser.add_argument(
         "--top-k-per-scenario",
         type=int,
@@ -55,6 +71,18 @@ def build_parser() -> argparse.ArgumentParser:
         default=0.85,
         help="Fraction of the scenario capacity gap treated as deployable in the baseline config.",
     )
+    parser.add_argument(
+        "--robustness-factor",
+        type=float,
+        default=0.35,
+        help="Penalty multiplier applied to surrogate uncertainty during planning.",
+    )
+    parser.add_argument(
+        "--carbon-budget-factor",
+        type=float,
+        default=1.0,
+        help="Fraction of baseline-treatment carbon budget allowed in the optimized portfolio.",
+    )
     return parser
 
 
@@ -66,16 +94,23 @@ def main() -> int:
         result = run_scenario_robustness_baseline(
             dataset_path=args.dataset_path or None,
             output_dir=args.output_dir or None,
+            planning_dir=args.planning_dir or None,
             base_config=PlanningConfig(
-                energy_weight=args.energy_weight,
-                environment_weight=args.environment_weight,
-                cost_weight=args.cost_weight,
+                objective_weight_preset=args.objective_weight_preset,
+                objective_weight_system=get_objective_weight_system(
+                    preset_name=args.objective_weight_preset,
+                    energy=args.energy_weight,
+                    environment=args.environment_weight,
+                    cost=args.cost_weight,
+                ),
                 top_k_per_scenario=args.top_k_per_scenario,
                 max_portfolio_candidates=args.max_portfolio_candidates,
                 max_candidate_share=args.max_candidate_share,
                 max_subtype_share=args.max_subtype_share,
                 min_distinct_subtypes=args.min_distinct_subtypes,
                 deployable_capacity_fraction=args.deployable_capacity_fraction,
+                robustness_factor=args.robustness_factor,
+                carbon_budget_factor=args.carbon_budget_factor,
             ),
         )
     except Exception as exc:

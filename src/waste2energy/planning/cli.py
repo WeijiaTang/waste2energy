@@ -1,23 +1,34 @@
+# Ref: docs/spec/task.md (Task-ID: WTE-SPEC-2026-04-07-PLANNING-REFINE)
+
 from __future__ import annotations
 
 import argparse
 import json
 import sys
 
+from ..config import DEFAULT_OBJECTIVE_WEIGHT_PRESET, get_objective_weight_system
 from .solve import PlanningConfig, run_planning_baseline
 
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Run the Waste2Energy constraint-aware planning-layer baseline."
+        description="Run the Waste2Energy surrogate-driven robust planning baseline."
     )
     parser.add_argument("--dataset-path", default="", help="Optional explicit planning dataset path.")
     parser.add_argument("--output-dir", default="", help="Optional explicit output directory.")
-    parser.add_argument("--energy-weight", type=float, default=0.40, help="Energy objective weight.")
     parser.add_argument(
-        "--environment-weight", type=float, default=0.35, help="Environmental objective weight."
+        "--objective-weight-preset",
+        default=DEFAULT_OBJECTIVE_WEIGHT_PRESET,
+        help="Named objective-weight preset shared by planning and operation.",
     )
-    parser.add_argument("--cost-weight", type=float, default=0.25, help="Cost objective weight.")
+    parser.add_argument("--energy-weight", type=float, default=None, help="Optional energy objective weight override.")
+    parser.add_argument(
+        "--environment-weight",
+        type=float,
+        default=None,
+        help="Optional environmental objective weight override.",
+    )
+    parser.add_argument("--cost-weight", type=float, default=None, help="Optional cost objective weight override.")
     parser.add_argument(
         "--top-k-per-scenario",
         type=int,
@@ -46,13 +57,43 @@ def build_parser() -> argparse.ArgumentParser:
         "--min-distinct-subtypes",
         type=int,
         default=2,
-        help="Minimum number of manure subtypes targeted during the portfolio diversity pass.",
+        help="Minimum number of manure subtypes targeted during optimization.",
     )
     parser.add_argument(
         "--deployable-capacity-fraction",
         type=float,
         default=0.85,
         help="Fraction of the scenario capacity gap treated as deployable in the planning baseline.",
+    )
+    parser.add_argument(
+        "--robustness-factor",
+        type=float,
+        default=0.35,
+        help="Penalty multiplier applied to surrogate uncertainty during planning.",
+    )
+    parser.add_argument(
+        "--carbon-budget-factor",
+        type=float,
+        default=1.0,
+        help="Fraction of baseline-treatment carbon budget allowed in the optimized portfolio.",
+    )
+    parser.add_argument(
+        "--optimization-method",
+        choices=["auto", "pyomo", "scipy"],
+        default="auto",
+        help="Optimization backend preference.",
+    )
+    parser.add_argument(
+        "--pyomo-solver",
+        choices=["auto", "appsi_highs", "highs", "glpk", "cbc"],
+        default="auto",
+        help="Preferred Pyomo solver backend when Pyomo optimization is enabled.",
+    )
+    parser.add_argument(
+        "--pareto-point-count",
+        type=int,
+        default=12,
+        help="Approximate number of portfolio points sampled for Pareto analysis.",
     )
     return parser
 
@@ -66,15 +107,24 @@ def main() -> int:
             dataset_path=args.dataset_path or None,
             output_dir=args.output_dir or None,
             config=PlanningConfig(
-                energy_weight=args.energy_weight,
-                environment_weight=args.environment_weight,
-                cost_weight=args.cost_weight,
+                objective_weight_preset=args.objective_weight_preset,
+                objective_weight_system=get_objective_weight_system(
+                    preset_name=args.objective_weight_preset,
+                    energy=args.energy_weight,
+                    environment=args.environment_weight,
+                    cost=args.cost_weight,
+                ),
                 top_k_per_scenario=args.top_k_per_scenario,
                 max_portfolio_candidates=args.max_portfolio_candidates,
                 max_candidate_share=args.max_candidate_share,
                 max_subtype_share=args.max_subtype_share,
                 min_distinct_subtypes=args.min_distinct_subtypes,
                 deployable_capacity_fraction=args.deployable_capacity_fraction,
+                robustness_factor=args.robustness_factor,
+                carbon_budget_factor=args.carbon_budget_factor,
+                optimization_method=args.optimization_method,
+                pyomo_solver_preference=args.pyomo_solver,
+                pareto_point_count=args.pareto_point_count,
             ),
         )
     except Exception as exc:

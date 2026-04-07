@@ -1,26 +1,90 @@
+# Ref: docs/spec/task.md (Task-ID: WTE-SPEC-2026-04-07-PLANNING-REFINE)
+
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import pandas as pd
 
+from ..config import (
+    DEFAULT_OBJECTIVE_WEIGHT_PRESET,
+    ObjectiveWeightSystem,
+    get_objective_weight_system,
+)
 from .artifacts import write_planning_outputs
 from .constraints import build_scenario_constraints
 from .inputs import load_planning_input_bundle
-from .objectives import enrich_with_objectives
+from .optimization import (
+    build_candidate_score_frame,
+    generate_pareto_front,
+    solve_scenario_optimization,
+)
+from .objectives import assemble_objective_frame
+from .surrogate_evaluator import build_surrogate_predictions
 
 
 @dataclass(frozen=True)
 class PlanningConfig:
-    energy_weight: float = 0.40
-    environment_weight: float = 0.35
-    cost_weight: float = 0.25
+    objective_weight_preset: str = DEFAULT_OBJECTIVE_WEIGHT_PRESET
+    objective_weight_system: ObjectiveWeightSystem = field(
+        default_factory=lambda: get_objective_weight_system()
+    )
     top_k_per_scenario: int = 5
     max_portfolio_candidates: int = 3
     max_candidate_share: float = 0.45
     max_subtype_share: float = 0.60
     min_distinct_subtypes: int = 2
     deployable_capacity_fraction: float = 0.85
+    robustness_factor: float = 0.35
+    carbon_budget_factor: float = 1.00
+    optimization_method: str = "auto"
+    pyomo_solver_preference: str = "auto"
+    pareto_point_count: int = 12
+    enable_pareto_export: bool = True
+    allow_surrogate_fallback: bool = True
+
+    @property
+    def energy_weight(self) -> float:
+        return self.objective_weight_system.energy
+
+    @property
+    def environment_weight(self) -> float:
+        return self.objective_weight_system.environment
+
+    @property
+    def cost_weight(self) -> float:
+        return self.objective_weight_system.cost
+
+    def copy_with_weights(
+        self,
+        *,
+        energy_weight: float | None = None,
+        environment_weight: float | None = None,
+        cost_weight: float | None = None,
+    ) -> "PlanningConfig":
+        updated_system = get_objective_weight_system(
+            preset_name=self.objective_weight_preset,
+            energy=self.energy_weight if energy_weight is None else energy_weight,
+            environment=self.environment_weight if environment_weight is None else environment_weight,
+            cost=self.cost_weight if cost_weight is None else cost_weight,
+        )
+        return PlanningConfig(
+            objective_weight_preset=self.objective_weight_preset,
+            objective_weight_system=updated_system,
+            top_k_per_scenario=self.top_k_per_scenario,
+            max_portfolio_candidates=self.max_portfolio_candidates,
+            max_candidate_share=self.max_candidate_share,
+            max_subtype_share=self.max_subtype_share,
+            min_distinct_subtypes=self.min_distinct_subtypes,
+            deployable_capacity_fraction=self.deployable_capacity_fraction,
+            robustness_factor=self.robustness_factor,
+            carbon_budget_factor=self.carbon_budget_factor,
+            optimization_method=self.optimization_method,
+            pyomo_solver_preference=self.pyomo_solver_preference,
+            pareto_point_count=self.pareto_point_count,
+            enable_pareto_export=self.enable_pareto_export,
+            allow_surrogate_fallback=self.allow_surrogate_fallback,
+        )
 
 
 def run_planning_baseline(
@@ -42,6 +106,8 @@ def run_planning_baseline(
         portfolio_summary=execution["portfolio_summary"],
         scenario_summary=execution["scenario_summary"],
         pathway_summary=execution["pathway_summary"],
+        surrogate_predictions=execution["surrogate_predictions"],
+        optimization_diagnostics=execution["optimization_diagnostics"],
         output_dir=output_dir,
         config=active_config,
         bundle=bundle,
@@ -53,7 +119,7 @@ def run_planning_baseline(
         "scenario_names": list(bundle.scenario_names),
         "pathways": list(bundle.pathways),
         "objective_readiness": execution["objective_readiness"],
-        "planner_variant": "constraint_aware_weighted_portfolio",
+        "planner_variant": "surrogate_driven_robust_multiobjective_optimizer",
         "row_count": int(len(execution["scored"])),
         "pareto_candidate_count": int(len(execution["pareto_candidates"])),
         "recommendation_count": int(len(execution["scenario_recommendations"])),
@@ -63,17 +129,24 @@ def run_planning_baseline(
 
 
 def execute_planning_pipeline(bundle, config: PlanningConfig) -> dict[str, object]:
-    objective_frame, readiness = enrich_with_objectives(bundle)
+    surrogate_predictions = build_surrogate_predictions(bundle.frame)
+    objective_frame, readiness = assemble_objective_frame(
+        base_frame=bundle.frame,
+        surrogate_predictions=surrogate_predictions,
+        robustness_factor=config.robustness_factor,
+        real_cost_columns=bundle.real_cost_columns,
+    )
     scenario_constraints = build_scenario_constraints(objective_frame, config)
     scored = score_cases(objective_frame, config)
     scenario_recommendations = build_scenario_recommendations(scored, config.top_k_per_scenario)
-    pareto_candidates = build_pareto_candidates(scored)
-    portfolio_allocations = build_scenario_portfolios(scored, scenario_constraints, config)
+    portfolio_allocations, diagnostics = build_scenario_portfolios(scored, scenario_constraints, config)
+    pareto_candidates = build_portfolio_pareto_candidates(scored, scenario_constraints, config)
     portfolio_summary = build_portfolio_summary(portfolio_allocations, scenario_constraints)
     scenario_summary = build_scenario_summary(
         scored=scored,
         recommendations=scenario_recommendations,
         portfolio_summary=portfolio_summary,
+        diagnostics=diagnostics,
     )
     pathway_summary = build_pathway_summary(
         scored=scored,
@@ -83,6 +156,7 @@ def execute_planning_pipeline(bundle, config: PlanningConfig) -> dict[str, objec
         "objective_frame": objective_frame,
         "objective_readiness": readiness,
         "scenario_constraints": scenario_constraints,
+        "surrogate_predictions": surrogate_predictions,
         "scored": scored,
         "scenario_recommendations": scenario_recommendations,
         "pareto_candidates": pareto_candidates,
@@ -90,21 +164,18 @@ def execute_planning_pipeline(bundle, config: PlanningConfig) -> dict[str, objec
         "portfolio_summary": portfolio_summary,
         "scenario_summary": scenario_summary,
         "pathway_summary": pathway_summary,
+        "optimization_diagnostics": diagnostics,
     }
 
 
 def score_cases(frame: pd.DataFrame, config: PlanningConfig) -> pd.DataFrame:
-    scored = frame.copy()
-    scored["energy_utility"] = _normalize(scored["planning_energy_objective"])
-    scored["environment_utility"] = _normalize(scored["planning_environment_objective"])
-    scored["cost_utility"] = 1.0 - _normalize(scored["planning_cost_objective"])
-    scored["planning_score"] = (
-        config.energy_weight * scored["energy_utility"]
-        + config.environment_weight * scored["environment_utility"]
-        + config.cost_weight * scored["cost_utility"]
-    )
-    return scored.sort_values(
-        ["scenario_name", "planning_score", "planning_energy_objective"],
+    scenario_frames: list[pd.DataFrame] = []
+    for _, scenario_frame in frame.groupby("scenario_name", dropna=False):
+        scenario_frames.append(build_candidate_score_frame(scenario_frame, config))
+    if not scenario_frames:
+        return frame.copy()
+    return pd.concat(scenario_frames, ignore_index=True).sort_values(
+        ["scenario_name", "planning_score", "planning_energy_intensity_mj_per_ton"],
         ascending=[True, False, False],
     ).reset_index(drop=True)
 
@@ -117,67 +188,53 @@ def build_scenario_recommendations(scored: pd.DataFrame, top_k: int) -> pd.DataF
     return ranked[ranked["scenario_rank"] <= top_k].reset_index(drop=True)
 
 
-def build_pareto_candidates(scored: pd.DataFrame) -> pd.DataFrame:
-    rows: list[dict[str, object]] = []
-    for scenario_name, scenario_frame in scored.groupby("scenario_name", dropna=False):
-        mask = _pareto_efficient_mask(
-            scenario_frame["planning_energy_objective"],
-            scenario_frame["planning_environment_objective"],
-            scenario_frame["planning_cost_objective"],
-        )
-        subset = scenario_frame.loc[mask].copy()
-        subset["pareto_scope"] = "scenario"
-        subset["pareto_scenario_name"] = scenario_name
-        rows.extend(subset.to_dict("records"))
-
-    global_mask = _pareto_efficient_mask(
-        scored["planning_energy_objective"],
-        scored["planning_environment_objective"],
-        scored["planning_cost_objective"],
-    )
-    global_subset = scored.loc[global_mask].copy()
-    global_subset["pareto_scope"] = "global"
-    global_subset["pareto_scenario_name"] = "all"
-    rows.extend(global_subset.to_dict("records"))
-    return pd.DataFrame(rows).drop_duplicates(subset=["optimization_case_id", "pareto_scope"]).reset_index(
-        drop=True
-    )
-
-
 def build_scenario_portfolios(
     scored: pd.DataFrame,
     scenario_constraints: pd.DataFrame,
     config: PlanningConfig,
-) -> pd.DataFrame:
+) -> tuple[pd.DataFrame, pd.DataFrame]:
     constraint_map = scenario_constraints.set_index("scenario_name").to_dict("index")
-    rows: list[dict[str, object]] = []
+    allocation_rows: list[pd.DataFrame] = []
+    diagnostics_rows: list[dict[str, object]] = []
 
     for scenario_name, scenario_frame in scored.groupby("scenario_name", dropna=False):
         constraint = constraint_map.get(scenario_name, {})
-        selected = _select_portfolio_candidates(scenario_frame, config)
-        if selected.empty:
-            continue
-
-        allocated = _allocate_budget_across_selected(selected, constraint, config)
-        if allocated.empty:
-            continue
-
-        rows.extend(allocated.to_dict("records"))
-
-    if not rows:
-        return pd.DataFrame(
-            columns=[
-                "scenario_name",
-                "optimization_case_id",
-                "allocated_feed_ton_per_year",
-                "allocated_feed_share",
-            ]
+        result = solve_scenario_optimization(scenario_frame, constraint, config)
+        allocations = result.allocations.copy()
+        if not allocations.empty:
+            allocations["scenario_name"] = scenario_name
+            allocation_rows.append(allocations)
+        diagnostics_rows.append(
+            {
+                "scenario_name": scenario_name,
+                **result.diagnostics,
+            }
         )
 
-    return pd.DataFrame(rows).sort_values(
-        ["scenario_name", "portfolio_rank", "planning_score"],
-        ascending=[True, True, False],
-    ).reset_index(drop=True)
+    portfolio_allocations = (
+        pd.concat(allocation_rows, ignore_index=True) if allocation_rows else pd.DataFrame()
+    )
+    diagnostics = pd.DataFrame(diagnostics_rows).sort_values("scenario_name").reset_index(drop=True)
+    return portfolio_allocations, diagnostics
+
+
+def build_portfolio_pareto_candidates(
+    scored: pd.DataFrame,
+    scenario_constraints: pd.DataFrame,
+    config: PlanningConfig,
+) -> pd.DataFrame:
+    if not config.enable_pareto_export or config.pareto_point_count <= 0:
+        return pd.DataFrame()
+    constraint_map = scenario_constraints.set_index("scenario_name").to_dict("index")
+    rows: list[pd.DataFrame] = []
+    for scenario_name, scenario_frame in scored.groupby("scenario_name", dropna=False):
+        pareto = generate_pareto_front(scenario_frame, constraint_map.get(scenario_name, {}), config)
+        if pareto.empty:
+            continue
+        rows.append(pareto)
+    if not rows:
+        return pd.DataFrame()
+    return pd.concat(rows, ignore_index=True).reset_index(drop=True)
 
 
 def build_portfolio_summary(
@@ -219,6 +276,7 @@ def build_portfolio_summary(
                 ),
                 "portfolio_cost_objective": _sum_column(allocation_frame, "allocated_cost_objective"),
                 "portfolio_score_mass": _sum_column(allocation_frame, "allocated_score_mass"),
+                "portfolio_carbon_load_kgco2e": _sum_column(allocation_frame, "allocated_carbon_load_kgco2e"),
                 "top_portfolio_case_id": _first_value(allocation_frame, "optimization_case_id"),
                 "top_portfolio_manure_subtype": _first_value(allocation_frame, "manure_subtype"),
                 "top_portfolio_temperature_c": _first_value(allocation_frame, "process_temperature_c"),
@@ -234,6 +292,7 @@ def build_scenario_summary(
     scored: pd.DataFrame,
     recommendations: pd.DataFrame,
     portfolio_summary: pd.DataFrame,
+    diagnostics: pd.DataFrame,
 ) -> pd.DataFrame:
     top1 = recommendations[recommendations["scenario_rank"] == 1].copy()
     top1_columns = [
@@ -243,6 +302,7 @@ def build_scenario_summary(
         "planning_energy_objective",
         "planning_environment_objective",
         "planning_cost_objective",
+        "combined_uncertainty_ratio",
         "blend_manure_ratio",
         "blend_wet_waste_ratio",
         "process_temperature_c",
@@ -256,6 +316,7 @@ def build_scenario_summary(
             "planning_energy_objective": "top_ranked_energy_objective",
             "planning_environment_objective": "top_ranked_environment_objective",
             "planning_cost_objective": "top_ranked_cost_objective",
+            "combined_uncertainty_ratio": "top_ranked_uncertainty_ratio",
             "process_temperature_c": "top_ranked_temperature_c",
             "residence_time_min": "top_ranked_residence_time_min",
             "manure_subtype": "top_ranked_manure_subtype",
@@ -265,6 +326,7 @@ def build_scenario_summary(
     return (
         counts.merge(top1, on="scenario_name", how="left")
         .merge(portfolio_summary, on="scenario_name", how="left")
+        .merge(diagnostics, on="scenario_name", how="left")
         .sort_values("scenario_name")
         .reset_index(drop=True)
     )
@@ -301,6 +363,7 @@ def build_pathway_summary(
                 "best_case_energy_objective": float(best_case["planning_energy_objective"]),
                 "best_case_environment_objective": float(best_case["planning_environment_objective"]),
                 "best_case_cost_objective": float(best_case["planning_cost_objective"]),
+                "best_case_uncertainty_ratio": float(best_case.get("combined_uncertainty_ratio", 0.0)),
                 "best_case_manure_subtype": best_case.get("manure_subtype"),
                 "best_case_blend_manure_ratio": best_case.get("blend_manure_ratio"),
                 "best_case_blend_wet_waste_ratio": best_case.get("blend_wet_waste_ratio"),
@@ -314,6 +377,9 @@ def build_pathway_summary(
                     allocation_frame, "allocated_environment_objective"
                 ),
                 "portfolio_cost_objective": _sum_column(allocation_frame, "allocated_cost_objective"),
+                "portfolio_carbon_load_kgco2e": _sum_column(
+                    allocation_frame, "allocated_carbon_load_kgco2e"
+                ),
                 "portfolio_top_case_id": _first_value(allocation_frame, "optimization_case_id"),
             }
         )
@@ -321,132 +387,6 @@ def build_pathway_summary(
     return pd.DataFrame(rows).sort_values(
         ["scenario_name", "best_case_score"], ascending=[True, False]
     ).reset_index(drop=True)
-
-
-def _select_portfolio_candidates(scenario_frame: pd.DataFrame, config: PlanningConfig) -> pd.DataFrame:
-    ordered = scenario_frame.sort_values(
-        ["planning_score", "planning_energy_objective"],
-        ascending=[False, False],
-    ).copy()
-
-    selected_indices: list[int] = []
-    selection_stage: dict[int, str] = {}
-    subtype_keys: set[str] = set()
-    target_diversity = min(config.min_distinct_subtypes, config.max_portfolio_candidates)
-
-    for idx, row in ordered.iterrows():
-        subtype_key = _candidate_subtype_key(row)
-        if len(subtype_keys) >= target_diversity:
-            break
-        if subtype_key in subtype_keys:
-            continue
-        selected_indices.append(idx)
-        selection_stage[idx] = "diversity_pass"
-        subtype_keys.add(subtype_key)
-
-    for idx, _ in ordered.iterrows():
-        if len(selected_indices) >= config.max_portfolio_candidates:
-            break
-        if idx in selection_stage:
-            continue
-        selected_indices.append(idx)
-        selection_stage[idx] = "score_pass"
-
-    selected = ordered.loc[selected_indices].copy()
-    selected["portfolio_selection_stage"] = [selection_stage[idx] for idx in selected.index]
-    return selected.reset_index(drop=True)
-
-
-def _allocate_budget_across_selected(
-    selected: pd.DataFrame,
-    constraint: dict[str, object],
-    config: PlanningConfig,
-) -> pd.DataFrame:
-    total_budget = float(constraint.get("effective_processing_budget_ton_per_year", 0.0) or 0.0)
-    if total_budget <= 0.0:
-        return pd.DataFrame()
-
-    candidate_cap = total_budget * config.max_candidate_share
-    subtype_cap = total_budget * config.max_subtype_share
-    allocation = pd.Series(0.0, index=selected.index, dtype=float)
-    subtype_allocation: dict[str, float] = {}
-    weights = _coerce_positive_weights(selected["planning_score"])
-
-    for _ in range(max(1, len(selected) * 12)):
-        remaining = total_budget - float(allocation.sum())
-        if remaining <= 1e-6:
-            break
-
-        active_indices: list[int] = []
-        for idx, row in selected.iterrows():
-            subtype_key = _candidate_subtype_key(row)
-            if allocation.loc[idx] + 1e-9 >= candidate_cap:
-                continue
-            if subtype_allocation.get(subtype_key, 0.0) + 1e-9 >= subtype_cap:
-                continue
-            active_indices.append(idx)
-
-        if not active_indices:
-            break
-
-        active_weights = _coerce_positive_weights(weights.loc[active_indices])
-        weight_sum = float(active_weights.sum())
-        progress = 0.0
-
-        for idx in active_indices:
-            row = selected.loc[idx]
-            subtype_key = _candidate_subtype_key(row)
-            desired = remaining * float(active_weights.loc[idx] / weight_sum)
-            remaining_candidate_cap = candidate_cap - float(allocation.loc[idx])
-            remaining_subtype_cap = subtype_cap - float(subtype_allocation.get(subtype_key, 0.0))
-            delta = min(desired, remaining_candidate_cap, remaining_subtype_cap)
-            if delta <= 1e-9:
-                continue
-            allocation.loc[idx] += delta
-            subtype_allocation[subtype_key] = float(subtype_allocation.get(subtype_key, 0.0) + delta)
-            progress += delta
-
-        if progress <= 1e-9:
-            break
-
-    result = selected.copy()
-    result["allocated_feed_ton_per_year"] = allocation
-    result["allocated_feed_share"] = result["allocated_feed_ton_per_year"] / total_budget
-    result["candidate_capacity_cap_ton_per_year"] = candidate_cap
-    result["subtype_capacity_cap_ton_per_year"] = subtype_cap
-    result["scenario_feed_budget_ton_per_year"] = float(constraint.get("scenario_feed_budget_ton_per_year", 0.0))
-    result["effective_processing_budget_ton_per_year"] = total_budget
-    result["allocated_energy_objective"] = (
-        result["allocated_feed_ton_per_year"] * result["planning_energy_intensity_mj_per_ton"]
-    )
-    result["allocated_environment_objective"] = (
-        result["allocated_feed_ton_per_year"] * result["planning_environment_intensity_kgco2e_per_ton"]
-    )
-    result["allocated_cost_objective"] = (
-        result["allocated_feed_ton_per_year"] * result["planning_cost_intensity_proxy_or_real_per_ton"]
-    )
-    result["allocated_score_mass"] = result["allocated_feed_ton_per_year"] * result["planning_score"]
-    result = result[result["allocated_feed_ton_per_year"] > 1e-6].copy()
-    result = result.sort_values(
-        ["allocated_feed_ton_per_year", "planning_score"],
-        ascending=[False, False],
-    ).reset_index(drop=True)
-    result["portfolio_rank"] = range(1, len(result) + 1)
-    return result
-
-
-def _coerce_positive_weights(series: pd.Series) -> pd.Series:
-    weights = pd.to_numeric(series, errors="coerce").fillna(0.0).clip(lower=0.0)
-    if float(weights.sum()) > 0.0:
-        return weights
-    return pd.Series(1.0, index=series.index, dtype=float)
-
-
-def _candidate_subtype_key(row: pd.Series) -> str:
-    manure_subtype = str(row.get("manure_subtype", "") or "").strip()
-    if manure_subtype:
-        return manure_subtype
-    return str(row.get("sample_id", "unknown_candidate"))
 
 
 def _sum_column(frame: pd.DataFrame, column: str) -> float:
@@ -465,44 +405,6 @@ def _safe_ratio(numerator: float, denominator: float) -> float:
     if denominator <= 0.0:
         return 0.0
     return numerator / denominator
-
-
-def _normalize(series: pd.Series) -> pd.Series:
-    values = pd.to_numeric(series, errors="coerce").fillna(0.0)
-    minimum = float(values.min())
-    maximum = float(values.max())
-    if maximum <= minimum:
-        return pd.Series(0.0, index=values.index)
-    return (values - minimum) / (maximum - minimum)
-
-
-def _pareto_efficient_mask(
-    energy: pd.Series,
-    environment: pd.Series,
-    cost: pd.Series,
-) -> pd.Series:
-    frame = pd.DataFrame(
-        {
-            "energy": pd.to_numeric(energy, errors="coerce").fillna(0.0),
-            "environment": pd.to_numeric(environment, errors="coerce").fillna(0.0),
-            "cost": pd.to_numeric(cost, errors="coerce").fillna(0.0),
-        }
-    ).reset_index(drop=True)
-
-    efficient = []
-    for _, row in frame.iterrows():
-        dominated = (
-            (frame["energy"] >= row["energy"])
-            & (frame["environment"] >= row["environment"])
-            & (frame["cost"] <= row["cost"])
-            & (
-                (frame["energy"] > row["energy"])
-                | (frame["environment"] > row["environment"])
-                | (frame["cost"] < row["cost"])
-            )
-        )
-        efficient.append(not bool(dominated.any()))
-    return pd.Series(efficient, index=energy.index)
 
 
 def _validate_config(config: PlanningConfig) -> None:
@@ -525,3 +427,9 @@ def _validate_config(config: PlanningConfig) -> None:
         raise ValueError("min_distinct_subtypes must be at least 1.")
     if not 0.0 < config.deployable_capacity_fraction <= 1.0:
         raise ValueError("deployable_capacity_fraction must be within (0, 1].")
+    if not 0.0 <= config.robustness_factor <= 1.0:
+        raise ValueError("robustness_factor must be within [0, 1].")
+    if config.carbon_budget_factor <= 0.0:
+        raise ValueError("carbon_budget_factor must be positive.")
+    if config.pyomo_solver_preference not in {"auto", "appsi_highs", "highs", "glpk", "cbc"}:
+        raise ValueError("pyomo_solver_preference must be one of: auto, appsi_highs, highs, glpk, cbc.")

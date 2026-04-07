@@ -1,8 +1,12 @@
+# Ref: docs/spec/task.md (Task-ID: WTE-SPEC-2026-04-07-PLANNING-REFINE)
+
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
 from math import cos, pi, sin
 from typing import Any
+
+from ..config import get_objective_weight_system
 
 
 @dataclass(frozen=True)
@@ -37,6 +41,10 @@ class OperationEnvironmentSpec:
     cross_scenario_selection_rate: float
     selected_in_all_scenarios: bool
     capacity_binding_reason: str
+    objective_weight_preset: str = "balanced_cleaner_production"
+    reward_energy_weight: float = 0.40
+    reward_environment_weight: float = 0.35
+    reward_cost_weight: float = 0.25
 
 
 class OperationEnvironment:
@@ -56,6 +64,12 @@ class OperationEnvironment:
         self.max_abs_severity_offset = max(1, int(max_abs_severity_offset))
         self._state: dict[str, float] = {}
         self._time_index = 0
+        self._weights = get_objective_weight_system(
+            preset_name=spec.objective_weight_preset,
+            energy=spec.reward_energy_weight,
+            environment=spec.reward_environment_weight,
+            cost=spec.reward_cost_weight,
+        )
 
     def reset(self) -> dict[str, float]:
         self._time_index = 0
@@ -197,9 +211,9 @@ class OperationEnvironment:
         switching_penalty = 0.03 * (abs(throughput_signal) + abs(severity_signal))
 
         reward = (
-            0.45 * energy_term
-            + 0.35 * environment_term
-            - 0.20 * cost_term
+            self._weights.energy * energy_term
+            + self._weights.environment * environment_term
+            - self._weights.cost * cost_term
             - violation_penalty
             - switching_penalty
         )
@@ -210,6 +224,9 @@ class OperationEnvironment:
             "energy_term": energy_term,
             "environment_term": environment_term,
             "cost_term": cost_term,
+            "reward_energy_weight": self._weights.energy,
+            "reward_environment_weight": self._weights.environment,
+            "reward_cost_weight": self._weights.cost,
             "violation_penalty": violation_penalty,
             "switching_penalty": switching_penalty,
             "reward": reward,
@@ -235,3 +252,4 @@ def _safe_ratio(numerator: float, denominator: float) -> float:
     if denominator <= 0.0:
         return 0.0
     return numerator / denominator
+

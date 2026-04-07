@@ -1,11 +1,16 @@
+# Ref: docs/spec/task.md (Task-ID: WTE-SPEC-2026-04-07-PLANNING-REFINE)
+
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
+from datetime import timedelta
 from pathlib import Path
 
 import pandas as pd
 
-from ..config import PLANNING_OUTPUTS_DIR, SCENARIO_OUTPUTS_DIR
+from ..common import parse_manifest_timestamp
+from ..config import PLANNING_OUTPUTS_DIR, SCENARIO_OUTPUTS_DIR, get_objective_weight_system
 
 
 @dataclass(frozen=True)
@@ -15,6 +20,8 @@ class OperationInputBundle:
     scenario_decision_stability: pd.DataFrame
     scenario_uncertainty_summary: pd.DataFrame
     scenario_cross_stability: pd.DataFrame
+    planning_run_config: dict[str, object]
+    scenario_run_config: dict[str, object]
 
 
 def load_operation_input_bundle(
@@ -27,9 +34,11 @@ def load_operation_input_bundle(
     files = {
         "planning_portfolio_allocations": planning_root / "portfolio_allocations.csv",
         "planning_constraints": planning_root / "scenario_constraints.csv",
+        "planning_run_config": planning_root / "run_config.json",
         "scenario_decision_stability": scenario_root / "decision_stability.csv",
         "scenario_uncertainty_summary": scenario_root / "uncertainty_summary.csv",
         "scenario_cross_stability": scenario_root / "cross_scenario_stability.csv",
+        "scenario_run_config": scenario_root / "run_config.json",
     }
     for name, path in files.items():
         if not path.exists():
@@ -41,6 +50,8 @@ def load_operation_input_bundle(
         scenario_decision_stability=pd.read_csv(files["scenario_decision_stability"]),
         scenario_uncertainty_summary=pd.read_csv(files["scenario_uncertainty_summary"]),
         scenario_cross_stability=pd.read_csv(files["scenario_cross_stability"]),
+        planning_run_config=json.loads(files["planning_run_config"].read_text(encoding="utf-8")),
+        scenario_run_config=json.loads(files["scenario_run_config"].read_text(encoding="utf-8")),
     )
 
 
@@ -49,12 +60,14 @@ def build_operation_environment_specs(
     scenario_dir: str | Path | None = None,
 ) -> pd.DataFrame:
     bundle = load_operation_input_bundle(planning_dir=planning_dir, scenario_dir=scenario_dir)
+    _validate_operation_input_freshness(bundle)
 
     uncertainty = bundle.scenario_uncertainty_summary.copy()
     decision = bundle.scenario_decision_stability.copy()
     allocations = bundle.planning_portfolio_allocations.copy()
     constraints = bundle.planning_constraints.copy()
     cross_stability = bundle.scenario_cross_stability.copy()
+    weight_system = _extract_weight_system(bundle.planning_run_config)
 
     decision_map = decision.set_index(["scenario_name", "sample_id"]).to_dict("index")
     constraint_map = constraints.set_index("scenario_name").to_dict("index")
@@ -134,13 +147,26 @@ def build_operation_environment_specs(
                 "selected_in_all_scenarios": bool(
                     _value_from_mapping(cross_row, "selected_in_all_scenarios", False)
                 ),
-                "capacity_binding_reason": str(
-                    constraint_row.get("capacity_binding_reason", "")
-                ),
+                "capacity_binding_reason": str(constraint_row.get("capacity_binding_reason", "")),
+                "objective_weight_preset": weight_system.preset_name,
+                "reward_energy_weight": weight_system.energy,
+                "reward_environment_weight": weight_system.environment,
+                "reward_cost_weight": weight_system.cost,
             }
         )
 
     return pd.DataFrame(rows).sort_values("scenario_name").reset_index(drop=True)
+
+
+def _extract_weight_system(run_config: dict[str, object]):
+    payload = run_config.get("objective_weights") or {}
+    weights = payload.get("weights") or {}
+    return get_objective_weight_system(
+        preset_name=str(payload.get("preset_name", "balanced_cleaner_production")),
+        energy=_coerce_float(weights.get("energy"), default=None),
+        environment=_coerce_float(weights.get("environment"), default=None),
+        cost=_coerce_float(weights.get("cost"), default=None),
+    )
 
 
 def _clip(value: float, minimum: float, maximum: float) -> float:
@@ -164,3 +190,26 @@ def _value_from_mapping(mapping: dict[str, object], key: str, default: float | b
     if isinstance(default, bool):
         return bool(value)
     return float(pd.to_numeric(pd.Series([value]), errors="coerce").fillna(default).iloc[0])
+
+
+def _coerce_float(value: object, default: float | None = 0.0) -> float | None:
+    if value is None and default is None:
+        return None
+    try:
+        if pd.isna(value):
+            return default
+        return float(value)
+    except Exception:
+        return default
+
+
+def _validate_operation_input_freshness(bundle: OperationInputBundle) -> None:
+    planning_timestamp = parse_manifest_timestamp(bundle.planning_run_config)
+    scenario_timestamp = parse_manifest_timestamp(bundle.scenario_run_config)
+    if planning_timestamp is None or scenario_timestamp is None:
+        return
+    if scenario_timestamp + timedelta(seconds=1) < planning_timestamp:
+        raise ValueError(
+            "Scenario outputs are older than the planning outputs used by the operation layer. "
+            "Re-run 'waste2energy-scenario' after regenerating planning outputs."
+        )

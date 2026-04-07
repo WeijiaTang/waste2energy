@@ -1,3 +1,5 @@
+# Ref: docs/spec/task.md (Task-ID: WTE-SPEC-2026-04-07-PLANNING-REFINE)
+
 from __future__ import annotations
 
 import json
@@ -5,43 +7,78 @@ from pathlib import Path
 
 import pandas as pd
 
-from .config import OUTPUTS_ROOT
+from .config import OUTPUTS_ROOT, resolve_surrogate_outputs_dir
 from .data import DATASET_KEYS, TARGET_COLUMNS
 from .models import MODEL_KEYS
 
 
-DEFAULT_SPLIT_SUMMARY_PATHS = {
-    "recommended": OUTPUTS_ROOT / "xgboost" / "traditional_ml_suite_summary.csv",
-    "strict_group": OUTPUTS_ROOT / "xgboost" / "traditional_ml_suite_summary_strict_group.csv",
-    "leave_study_out": OUTPUTS_ROOT / "xgboost" / "traditional_ml_suite_summary_leave_study_out.csv",
-}
+def _default_split_summary_paths() -> dict[str, Path]:
+    surrogate_root = resolve_surrogate_outputs_dir()
+    return {
+        "recommended": surrogate_root / "traditional_ml_suite_summary.csv",
+        "strict_group": surrogate_root / "traditional_ml_suite_summary_strict_group.csv",
+        "leave_study_out": surrogate_root / "traditional_ml_suite_summary_leave_study_out.csv",
+    }
+
 
 DEFAULT_OPERATION_COMPARISON_DIR = OUTPUTS_ROOT / "operation" / "comparison"
+DEFAULT_PLANNING_DIR = OUTPUTS_ROOT / "planning" / "baseline"
+DEFAULT_SCENARIO_DIR = OUTPUTS_ROOT / "scenarios" / "baseline"
 
 
 def build_confirmatory_audit(
     *,
     outputs_root: str | Path | None = None,
+    planning_dir: str | Path | None = None,
+    scenario_dir: str | Path | None = None,
+    operation_dir: str | Path | None = None,
 ) -> dict[str, pd.DataFrame | dict[str, object] | list[dict[str, object]]]:
     active_outputs_root = Path(outputs_root) if outputs_root else OUTPUTS_ROOT
+    default_paths = _default_split_summary_paths()
     ml_paths = {
         key: (active_outputs_root / path.relative_to(OUTPUTS_ROOT))
-        for key, path in DEFAULT_SPLIT_SUMMARY_PATHS.items()
+        for key, path in default_paths.items()
     }
-    operation_dir = active_outputs_root / DEFAULT_OPERATION_COMPARISON_DIR.relative_to(OUTPUTS_ROOT)
+    active_planning_dir = (
+        Path(planning_dir)
+        if planning_dir
+        else active_outputs_root / DEFAULT_PLANNING_DIR.relative_to(OUTPUTS_ROOT)
+    )
+    active_scenario_dir = (
+        Path(scenario_dir)
+        if scenario_dir
+        else active_outputs_root / DEFAULT_SCENARIO_DIR.relative_to(OUTPUTS_ROOT)
+    )
+    active_operation_dir = (
+        Path(operation_dir)
+        if operation_dir
+        else active_outputs_root / DEFAULT_OPERATION_COMPARISON_DIR.relative_to(OUTPUTS_ROOT)
+    )
 
     ml_summary = build_ml_split_coverage_summary(ml_paths)
     ml_best = build_ml_best_result_summary(ml_paths)
     ml_flags = build_ml_claim_flag_table(ml_paths)
-    operation_table = build_operation_comparison_summary(operation_dir)
-    operation_flags = build_operation_claim_flag_table(operation_dir)
-    artifact_inventory = build_artifact_inventory(ml_paths, operation_dir)
-    audit_manifest = build_audit_manifest(ml_paths, operation_dir)
+    planning_flags = build_planning_claim_flag_table(active_planning_dir, active_scenario_dir)
+    operation_table = build_operation_comparison_summary(active_operation_dir)
+    operation_flags = build_operation_claim_flag_table(active_operation_dir)
+    artifact_inventory = build_artifact_inventory(
+        ml_paths,
+        active_operation_dir,
+        active_planning_dir,
+        active_scenario_dir,
+    )
+    audit_manifest = build_audit_manifest(
+        ml_paths,
+        active_operation_dir,
+        active_planning_dir,
+        active_scenario_dir,
+    )
 
     return {
         "ml_split_coverage_summary": ml_summary,
         "ml_best_result_summary": ml_best,
         "ml_claim_flag_table": ml_flags,
+        "planning_claim_flag_table": planning_flags,
         "operation_comparison_summary": operation_table,
         "operation_claim_flag_table": operation_flags,
         "artifact_inventory": artifact_inventory,
@@ -231,13 +268,109 @@ def build_operation_claim_flag_table(operation_dir: Path) -> pd.DataFrame:
     return pd.DataFrame(rows).sort_values(["scenario_name", "method_type", "method_name"]).reset_index(drop=True)
 
 
-def build_artifact_inventory(summary_paths: dict[str, Path], operation_dir: Path) -> pd.DataFrame:
+def build_planning_claim_flag_table(planning_dir: Path, scenario_dir: Path) -> pd.DataFrame:
+    main_results = _read_csv_if_exists(planning_dir / "main_results_table.csv")
+    pathway_summary = _read_csv_if_exists(planning_dir / "pathway_summary.csv")
+    stress_summary = _read_csv_if_exists(scenario_dir / "stress_test_summary.csv")
+    if main_results.empty:
+        return pd.DataFrame()
+
+    planning_flags = main_results.copy()
+    if not pathway_summary.empty:
+        planning_flags = planning_flags.merge(
+            pathway_summary[
+                [
+                    "scenario_name",
+                    "pathway",
+                    "portfolio_selected_count",
+                    "portfolio_allocated_feed_share",
+                    "portfolio_top_case_id",
+                ]
+            ],
+            on=["scenario_name", "pathway"],
+            how="left",
+        )
+    if not stress_summary.empty:
+        top_case_counts = (
+            stress_summary.groupby(["scenario_name", "top_portfolio_case_id"], dropna=False)
+            .size()
+            .rename("top_case_stress_support_count")
+            .reset_index()
+        )
+        planning_flags = planning_flags.merge(
+            top_case_counts,
+            left_on=["scenario_name", "portfolio_top_case_id"],
+            right_on=["scenario_name", "top_portfolio_case_id"],
+            how="left",
+        ).drop(columns=["top_portfolio_case_id"], errors="ignore")
+
+    planning_flags["claim_status"] = planning_flags.apply(_classify_planning_claim_status, axis=1)
+    planning_flags["claim_rule"] = planning_flags.apply(_describe_planning_claim_rule, axis=1)
+    selected_columns = [
+        "scenario_name",
+        "pathway",
+        "writing_label",
+        "claim_status",
+        "claim_rule",
+        "selected_in_baseline_portfolio",
+        "baseline_portfolio_share_pct",
+        "max_stress_selection_rate",
+        "stress_tests_supporting_pathway",
+        "best_case_score_index",
+        "claim_boundary",
+        "results_sentence",
+    ]
+    available = [column for column in selected_columns if column in planning_flags.columns]
+    return planning_flags[available].sort_values(
+        ["scenario_name", "selected_in_baseline_portfolio", "max_stress_selection_rate", "best_case_score_index"],
+        ascending=[True, False, False, False],
+    ).reset_index(drop=True)
+
+
+def build_artifact_inventory(
+    summary_paths: dict[str, Path],
+    operation_dir: Path,
+    planning_dir: Path,
+    scenario_dir: Path,
+) -> pd.DataFrame:
     records: list[dict[str, object]] = []
     for label, path in summary_paths.items():
         records.append(
             {
                 "artifact_group": "ml_summary",
                 "artifact_label": label,
+                "path": str(path),
+                "exists": path.exists(),
+            }
+        )
+    for file_name in [
+        "main_results_table.csv",
+        "main_results_table_manifest.json",
+        "pathway_summary.csv",
+        "portfolio_allocations.csv",
+        "run_config.json",
+    ]:
+        path = planning_dir / file_name
+        records.append(
+            {
+                "artifact_group": "planning",
+                "artifact_label": file_name,
+                "path": str(path),
+                "exists": path.exists(),
+            }
+        )
+    for file_name in [
+        "stress_test_summary.csv",
+        "decision_stability.csv",
+        "cross_scenario_stability.csv",
+        "uncertainty_summary.csv",
+        "run_config.json",
+    ]:
+        path = scenario_dir / file_name
+        records.append(
+            {
+                "artifact_group": "scenario",
+                "artifact_label": file_name,
                 "path": str(path),
                 "exists": path.exists(),
             }
@@ -269,16 +402,24 @@ def build_artifact_inventory(summary_paths: dict[str, Path], operation_dir: Path
     return pd.DataFrame(records)
 
 
-def build_audit_manifest(summary_paths: dict[str, Path], operation_dir: Path) -> dict[str, object]:
+def build_audit_manifest(
+    summary_paths: dict[str, Path],
+    operation_dir: Path,
+    planning_dir: Path,
+    scenario_dir: Path,
+) -> dict[str, object]:
     return {
         "expected_models": list(MODEL_KEYS),
         "expected_datasets": list(DATASET_KEYS),
         "expected_targets": list(TARGET_COLUMNS),
         "ml_summary_paths": {key: str(value) for key, value in summary_paths.items()},
+        "planning_dir": str(planning_dir),
+        "scenario_dir": str(scenario_dir),
         "operation_comparison_dir": str(operation_dir),
         "confirmation_rules": [
             "strict_group is the main-table benchmark evidence tier",
             "leave_study_out is the stronger cross-study stress test",
+            "planning_claim_flag_table is the manuscript-facing planning claim inventory",
             "pyrolysis may retain partial cross-study generalization on some targets",
             "HTC and Paper 1 HTC scope should not be written as uniformly strong cross-study generalization",
             "SAC matching hold_plan should be written as conservative behavior, not superior control",
@@ -330,3 +471,30 @@ def _read_csv_if_exists(path: Path) -> pd.DataFrame:
     if not path.exists():
         return pd.DataFrame()
     return pd.read_csv(path)
+
+
+def _classify_planning_claim_status(row: pd.Series) -> str:
+    selected = bool(row.get("selected_in_baseline_portfolio", False))
+    stress_rate = float(pd.to_numeric(pd.Series([row.get("max_stress_selection_rate")]), errors="coerce").fillna(0.0).iloc[0])
+    writing_label = str(row.get("writing_label", ""))
+    if selected:
+        return "supportive"
+    if stress_rate > 0.0 and "environment-sensitive" in writing_label:
+        return "conditional_support"
+    if stress_rate > 0.0:
+        return "stress_sensitive"
+    if "comparison anchor" in writing_label:
+        return "anchor_only"
+    return "comparison_only"
+
+
+def _describe_planning_claim_rule(row: pd.Series) -> str:
+    selected = bool(row.get("selected_in_baseline_portfolio", False))
+    stress_rate = float(pd.to_numeric(pd.Series([row.get("max_stress_selection_rate")]), errors="coerce").fillna(0.0).iloc[0])
+    if selected:
+        return "Selected in the baseline optimized portfolio under the current planning configuration."
+    if stress_rate > 0.0:
+        return "Not selected in the baseline portfolio but supported in at least one planning stress test."
+    if str(row.get("writing_label", "")) == "comparison anchor":
+        return "Retained as the manuscript comparison anchor rather than as a selected pathway."
+    return "Available for pathway comparison but not currently supported as a selected planning recommendation."

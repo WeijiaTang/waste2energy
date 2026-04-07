@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
 import pandas as pd
 
+from ..audit import build_confirmatory_audit, write_confirmatory_audit
+from ..planning.reporting import build_main_results_table, write_main_results_table
 from ..planning.inputs import load_planning_input_bundle
 from ..planning.solve import PlanningConfig, execute_planning_pipeline
 from .artifacts import write_scenario_outputs
@@ -19,9 +22,26 @@ from .uncertainty import build_uncertainty_summary
 def run_scenario_robustness_baseline(
     dataset_path: str | None = None,
     output_dir: str | None = None,
+    planning_dir: str | None = None,
     base_config: PlanningConfig | None = None,
 ) -> dict[str, Any]:
-    baseline_config = base_config or PlanningConfig()
+    baseline_seed = base_config or PlanningConfig()
+    baseline_config = PlanningConfig(
+        objective_weight_preset=baseline_seed.objective_weight_preset,
+        objective_weight_system=baseline_seed.objective_weight_system,
+        top_k_per_scenario=baseline_seed.top_k_per_scenario,
+        max_portfolio_candidates=baseline_seed.max_portfolio_candidates,
+        max_candidate_share=baseline_seed.max_candidate_share,
+        max_subtype_share=baseline_seed.max_subtype_share,
+        min_distinct_subtypes=baseline_seed.min_distinct_subtypes,
+        deployable_capacity_fraction=baseline_seed.deployable_capacity_fraction,
+        robustness_factor=baseline_seed.robustness_factor,
+        carbon_budget_factor=baseline_seed.carbon_budget_factor,
+        optimization_method=baseline_seed.optimization_method,
+        pareto_point_count=baseline_seed.pareto_point_count,
+        enable_pareto_export=False,
+        allow_surrogate_fallback=baseline_seed.allow_surrogate_fallback,
+    )
     bundle = load_planning_input_bundle(dataset_path=dataset_path)
     stress_registry = build_default_stress_registry(baseline_config)
     registry_frame = registry_to_frame(stress_registry)
@@ -31,7 +51,7 @@ def run_scenario_robustness_baseline(
     constraint_frames: list[pd.DataFrame] = []
     summary_frames: list[pd.DataFrame] = []
     objective_readiness: dict[str, str] | None = None
-    planner_variant = "constraint_aware_weighted_portfolio"
+    planner_variant = "surrogate_driven_robust_multiobjective_optimizer"
 
     for stress in stress_registry:
         execution = execute_planning_pipeline(bundle=bundle, config=stress.planning_config)
@@ -86,6 +106,44 @@ def run_scenario_robustness_baseline(
         planner_variant=planner_variant,
         objective_readiness=objective_readiness or {},
     )
+    reporting_outputs: dict[str, str] = {}
+    audit_outputs: dict[str, str] = {}
+    scenario_output_root = Path(output_dir) if output_dir else None
+    planning_output_root = Path(planning_dir) if planning_dir else None
+    audit_output_dir = None
+    if scenario_output_root is not None:
+        if scenario_output_root.parent.name == "scenarios":
+            audit_output_dir = scenario_output_root.parent.parent / "audit"
+        else:
+            audit_output_dir = scenario_output_root.parent / "audit"
+    elif planning_output_root is not None:
+        if planning_output_root.parent.name == "planning":
+            audit_output_dir = planning_output_root.parent.parent / "audit"
+        else:
+            audit_output_dir = planning_output_root.parent / "audit"
+    try:
+        table, manifest = build_main_results_table(
+            planning_dir=planning_dir,
+            scenario_dir=output_dir,
+        )
+        reporting_outputs = write_main_results_table(
+            table,
+            manifest,
+            planning_dir=planning_dir,
+        )
+    except FileNotFoundError:
+        reporting_outputs = {}
+    try:
+        audit_payload = build_confirmatory_audit(
+            planning_dir=planning_dir,
+            scenario_dir=output_dir,
+        )
+        audit_outputs = write_confirmatory_audit(
+            audit_payload,
+            output_dir=audit_output_dir,
+        )
+    except FileNotFoundError:
+        audit_outputs = {}
     return {
         "dataset_path": str(bundle.dataset_path),
         "stress_test_count": int(len(stress_registry)),
@@ -93,4 +151,6 @@ def run_scenario_robustness_baseline(
         "planner_variant": planner_variant,
         "objective_readiness": objective_readiness or {},
         "outputs": outputs,
+        "reporting_outputs": reporting_outputs,
+        "audit_outputs": audit_outputs,
     }

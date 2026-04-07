@@ -1,7 +1,10 @@
+# Ref: docs/spec/task.md (Task-ID: WTE-SPEC-2026-04-07-PLANNING-REFINE)
+
 from __future__ import annotations
 
 from dataclasses import dataclass
 
+from ..config import get_objective_weight_system
 from ..planning.solve import PlanningConfig
 
 
@@ -25,9 +28,12 @@ def build_default_stress_registry(base_config: PlanningConfig | None = None) -> 
             description="Higher energy emphasis with slightly softer environment and cost weighting.",
             planning_config=_replace(
                 baseline,
-                energy_weight=0.55,
-                environment_weight=0.25,
-                cost_weight=0.20,
+                objective_weight_system=get_objective_weight_system(
+                    preset_name=baseline.objective_weight_preset,
+                    energy=0.55,
+                    environment=0.25,
+                    cost=0.20,
+                ),
             ),
         ),
         ScenarioStressConfig(
@@ -35,9 +41,12 @@ def build_default_stress_registry(base_config: PlanningConfig | None = None) -> 
             description="Higher environment emphasis to test carbon-benefit sensitivity.",
             planning_config=_replace(
                 baseline,
-                energy_weight=0.30,
-                environment_weight=0.50,
-                cost_weight=0.20,
+                objective_weight_system=get_objective_weight_system(
+                    preset_name=baseline.objective_weight_preset,
+                    energy=0.30,
+                    environment=0.50,
+                    cost=0.20,
+                ),
             ),
         ),
         ScenarioStressConfig(
@@ -45,9 +54,12 @@ def build_default_stress_registry(base_config: PlanningConfig | None = None) -> 
             description="Higher cost aversion to expose proxy-cost sensitivity.",
             planning_config=_replace(
                 baseline,
-                energy_weight=0.30,
-                environment_weight=0.25,
-                cost_weight=0.45,
+                objective_weight_system=get_objective_weight_system(
+                    preset_name=baseline.objective_weight_preset,
+                    energy=0.30,
+                    environment=0.25,
+                    cost=0.45,
+                ),
             ),
         ),
         ScenarioStressConfig(
@@ -76,7 +88,10 @@ def build_default_stress_registry(base_config: PlanningConfig | None = None) -> 
             planning_config=_replace(
                 baseline,
                 max_portfolio_candidates=max(3, baseline.max_portfolio_candidates),
-                min_distinct_subtypes=min(max(3, baseline.min_distinct_subtypes), max(3, baseline.max_portfolio_candidates)),
+                min_distinct_subtypes=min(
+                    max(3, baseline.min_distinct_subtypes),
+                    max(3, baseline.max_portfolio_candidates),
+                ),
                 max_candidate_share=0.40,
                 max_subtype_share=0.50,
             ),
@@ -94,6 +109,7 @@ def registry_to_frame(registry: list[ScenarioStressConfig]):
             {
                 "stress_test_name": item.name,
                 "stress_test_description": item.description,
+                "objective_weight_preset": config.objective_weight_preset,
                 "energy_weight": config.energy_weight,
                 "environment_weight": config.environment_weight,
                 "cost_weight": config.cost_weight,
@@ -103,6 +119,9 @@ def registry_to_frame(registry: list[ScenarioStressConfig]):
                 "max_subtype_share": config.max_subtype_share,
                 "min_distinct_subtypes": config.min_distinct_subtypes,
                 "deployable_capacity_fraction": config.deployable_capacity_fraction,
+                "robustness_factor": config.robustness_factor,
+                "carbon_budget_factor": config.carbon_budget_factor,
+                "pyomo_solver_preference": config.pyomo_solver_preference,
             }
         )
     return pd.DataFrame(rows)
@@ -110,15 +129,21 @@ def registry_to_frame(registry: list[ScenarioStressConfig]):
 
 def _replace(config: PlanningConfig, **overrides) -> PlanningConfig:
     payload = {
-        "energy_weight": config.energy_weight,
-        "environment_weight": config.environment_weight,
-        "cost_weight": config.cost_weight,
+        "objective_weight_preset": config.objective_weight_preset,
+        "objective_weight_system": config.objective_weight_system,
         "top_k_per_scenario": config.top_k_per_scenario,
         "max_portfolio_candidates": config.max_portfolio_candidates,
         "max_candidate_share": config.max_candidate_share,
         "max_subtype_share": config.max_subtype_share,
         "min_distinct_subtypes": config.min_distinct_subtypes,
         "deployable_capacity_fraction": config.deployable_capacity_fraction,
+        "robustness_factor": config.robustness_factor,
+        "carbon_budget_factor": config.carbon_budget_factor,
+        "optimization_method": config.optimization_method,
+        "pyomo_solver_preference": config.pyomo_solver_preference,
+        "pareto_point_count": config.pareto_point_count,
+        "enable_pareto_export": config.enable_pareto_export,
+        "allow_surrogate_fallback": config.allow_surrogate_fallback,
     }
     payload.update(overrides)
     return PlanningConfig(**payload)
