@@ -27,7 +27,7 @@ def test_planning_baseline_smoke(tmp_path):
     scored_cases = pd.read_csv(output_dir / "scored_cases.csv")
     scenario_constraints = pd.read_csv(output_dir / "scenario_constraints.csv")
     planning_data_quality_summary = pd.read_csv(output_dir / "planning_data_quality_summary.csv")
-    scenario_metric_adjustments = pd.read_csv(output_dir / "scenario_metric_adjustments.csv")
+    scenario_external_evidence = pd.read_csv(output_dir / "scenario_external_evidence.csv")
     run_config = json.loads((output_dir / "run_config.json").read_text(encoding="utf-8"))
 
     assert "combined_uncertainty_ratio" in surrogate_predictions.columns
@@ -38,12 +38,14 @@ def test_planning_baseline_smoke(tmp_path):
     assert "constraint_relaxation_ratio" in optimization_diagnostics.columns
     assert "planning_score_scope" in scored_cases.columns
     assert set(scored_cases["planning_score_scope"]) == {"scenario_local_optimizer"}
-    assert "scenario_metric_adjustment_source" in scored_cases.columns
+    assert "scenario_external_evidence_source" in scored_cases.columns
+    assert "surrogate_support_level" in scored_cases.columns
+    assert "evidence_based_weight" in scored_cases.columns
     assert "planning_imputation_flag" in scored_cases.columns
     assert "scenario_baseline_waste_treatment_emission_factor_kgco2e_per_metric_ton" in scored_cases.columns
     assert "planning_carbon_unit_basis" in scored_cases.columns
     assert set(scored_cases["planning_carbon_unit_basis"]) == {"kgco2e_per_metric_ton"}
-    assert scenario_metric_adjustments["adjustment_source"].astype(str).str.len().gt(0).all()
+    assert scenario_external_evidence["evidence_source"].astype(str).str.len().gt(0).all()
     assert planning_data_quality_summary["evaluated_candidate_count"].gt(0).all()
     assert "baseline_emission_factor_kgco2e_per_metric_ton" in scenario_constraints.columns
     assert "baseline_emission_factor_source_unit" in scenario_constraints.columns
@@ -51,7 +53,7 @@ def test_planning_baseline_smoke(tmp_path):
     assert scenario_constraints["baseline_emission_factor_kgco2e_per_metric_ton"].gt(
         scenario_constraints["baseline_emission_factor_kgco2e_per_short_ton_source"]
     ).all()
-    assert run_config["scenario_metric_adjustment_table_path"]
+    assert run_config["scenario_external_evidence_table_path"]
     assert run_config["unit_registry"]["planning_mass_unit_basis"] == "metric_ton"
     assert portfolio_allocations["allocated_feed_ton_per_year"].gt(0.0).all()
 
@@ -77,6 +79,7 @@ def test_planning_solver_falls_back_after_pyomo_exception(monkeypatch):
         "effective_processing_budget_ton_per_year": 1.0,
         "candidate_share_cap_ton_per_year": 1.0,
         "subtype_share_cap_ton_per_year": 1.0,
+        "scenario_feed_budget_ton_per_year": 1.0,
         "baseline_emission_factor_kgco2e_per_metric_ton": 11.023113109243878,
     }
 

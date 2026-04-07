@@ -8,16 +8,18 @@ import pytest
 from waste2energy.common import METRIC_TON_TO_SHORT_TON
 from waste2energy.planning.constraints import build_scenario_constraints
 from waste2energy.planning.inputs import (
+    DEFAULT_SCENARIO_EXTERNAL_EVIDENCE_TABLE,
     DEFAULT_SCENARIO_METRIC_ADJUSTMENT_TABLE,
     REQUIRED_PLANNING_COLUMNS,
     load_planning_input_bundle,
+    load_scenario_external_evidence_table,
     load_scenario_metric_adjustment_table,
     normalize_planning_units,
     validate_planning_frame,
 )
 from waste2energy.planning.objectives import _build_carbon_load, assemble_objective_frame
 from waste2energy.planning.optimization import _carbon_budget, build_candidate_score_frame
-from waste2energy.planning.solve import PlanningConfig
+from waste2energy.planning.solve import PlanningConfig, build_pathway_summary
 
 
 def test_planning_input_bundle_normalizes_baseline_emission_factor_units():
@@ -194,15 +196,19 @@ def test_planning_input_validation_rejects_missing_required_baseline_emission_fa
         validate_planning_frame(frame, load_planning_input_bundle().dataset_path)
 
 
-def test_scenario_metric_adjustment_table_is_traceable_and_complete():
-    frame, path = load_scenario_metric_adjustment_table()
+def test_scenario_external_evidence_table_is_traceable_and_complete():
+    frame, path = load_scenario_external_evidence_table()
 
+    assert path == DEFAULT_SCENARIO_EXTERNAL_EVIDENCE_TABLE
     assert path == DEFAULT_SCENARIO_METRIC_ADJUSTMENT_TABLE
-    assert len(frame) == 12
-    assert frame[["scenario_name", "pathway"]].drop_duplicates().shape[0] == len(frame)
-    assert frame["adjustment_source"].astype(str).str.len().gt(0).all()
-    assert frame["adjustment_reference"].astype(str).str.len().gt(0).all()
-    assert frame["adjustment_rationale"].astype(str).str.len().gt(0).all()
+    assert len(frame) == 3
+    assert frame[["scenario_name"]].drop_duplicates().shape[0] == len(frame)
+    assert frame["feedstock_scale_factor"].gt(0.0).all()
+    assert frame["feedstock_cost_elasticity"].ge(0.0).all()
+    assert frame["carbon_tax_usd_per_ton_co2e"].ge(0.0).all()
+    assert frame["evidence_source"].astype(str).str.len().gt(0).all()
+    assert frame["evidence_reference"].astype(str).str.len().gt(0).all()
+    assert frame["evidence_rationale"].astype(str).str.len().gt(0).all()
 
 
 def test_assemble_objective_frame_excludes_candidate_with_missing_critical_cost_term():
@@ -288,3 +294,68 @@ def test_assemble_objective_frame_flags_noncritical_imputations():
     ]
     assert "policy_multiplier:default_policy_multiplier_one" in retained.loc[0, "planning_imputation_notes"]
     assert "combined_uncertainty_ratio:default_uncertainty_zero" in retained.loc[0, "planning_imputation_notes"]
+    assert retained.loc[0, "scenario_total_mixed_feed_source"] == "fallback_to_wet_waste_feed_allocation"
+    assert retained.loc[0, "policy_multiplier_source"] == "default_policy_multiplier_one"
+    assert retained.loc[0, "combined_uncertainty_ratio_source"] == "default_uncertainty_zero"
+
+
+def test_pathway_summary_preserves_missing_best_case_uncertainty_ratio():
+    scored = pd.DataFrame(
+        [
+            {
+                "scenario_name": "baseline_region_case",
+                "pathway": "pyrolysis",
+                "optimization_case_id": "case-1",
+                "planning_score": 1.0,
+                "planning_energy_objective": 100.0,
+                "planning_environment_objective": 50.0,
+                "planning_cost_objective": 10.0,
+                "combined_uncertainty_ratio": pd.NA,
+                "manure_subtype": "beef",
+                "blend_manure_ratio": 0.3,
+                "blend_wet_waste_ratio": 0.7,
+            }
+        ]
+    )
+
+    summary = build_pathway_summary(scored=scored, portfolio_allocations=pd.DataFrame())
+
+    assert pd.isna(summary.loc[0, "best_case_uncertainty_ratio"])
+
+
+def test_pathway_summary_fails_fast_on_missing_allocated_feed_value():
+    scored = pd.DataFrame(
+        [
+            {
+                "scenario_name": "baseline_region_case",
+                "pathway": "pyrolysis",
+                "optimization_case_id": "case-1",
+                "planning_score": 1.0,
+                "planning_energy_objective": 100.0,
+                "planning_environment_objective": 50.0,
+                "planning_cost_objective": 10.0,
+                "combined_uncertainty_ratio": 0.1,
+                "manure_subtype": "beef",
+                "blend_manure_ratio": 0.3,
+                "blend_wet_waste_ratio": 0.7,
+            }
+        ]
+    )
+    allocations = pd.DataFrame(
+        [
+            {
+                "scenario_name": "baseline_region_case",
+                "pathway": "pyrolysis",
+                "optimization_case_id": "case-1",
+                "allocated_feed_ton_per_year": pd.NA,
+                "allocated_feed_share": 0.5,
+                "allocated_energy_objective": 50.0,
+                "allocated_environment_objective": 25.0,
+                "allocated_cost_objective": 5.0,
+                "allocated_carbon_load_kgco2e": 3.0,
+            }
+        ]
+    )
+
+    with pytest.raises(ValueError, match="allocated_feed_ton_per_year"):
+        build_pathway_summary(scored=scored, portfolio_allocations=allocations)

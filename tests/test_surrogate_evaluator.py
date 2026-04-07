@@ -82,3 +82,46 @@ def test_surrogate_evaluator_uses_documented_fallback_when_required_feature_is_m
     for target in SURROGATE_TARGETS:
         assert "missing_required_feature" in predictions.loc[0, f"{target}_prediction_source"]
     assert predictions.loc[0, "predicted_product_char_yield_pct"] == 30.0
+
+
+def test_surrogate_evaluator_missing_target_value_keeps_uncertainty_fields_missing(monkeypatch):
+    frame = pd.DataFrame(
+        [
+            {
+                "optimization_case_id": "case-1",
+                "pathway": "pyrolysis",
+                "feedstock_hhv_mj_per_kg": pd.NA,
+                "feedstock_moisture_pct": 72.0,
+                "product_char_yield_pct": pd.NA,
+                "product_char_hhv_mj_per_kg": 20.0,
+                "energy_recovery_pct": 55.0,
+                "carbon_retention_pct": 40.0,
+                "source_dataset_kind": "planning_candidate",
+                "sample_id": "planning::001",
+            }
+        ]
+    )
+
+    evaluator = SurrogateEvaluator()
+
+    artifact = type(
+        "Artifact",
+        (),
+        {
+            "model_key": "rf",
+            "dataset_key": "pyrolysis_direct",
+            "split_strategy": "strict_group",
+            "feature_columns": ("feedstock_hhv_mj_per_kg", "feedstock_moisture_pct"),
+            "model_path": None,
+            "metrics_path": None,
+        },
+    )()
+
+    monkeypatch.setattr(evaluator, "_resolve_artifact", lambda **kwargs: artifact)
+
+    predictions = evaluator.evaluate(frame)
+
+    assert predictions.loc[0, "surrogate_prediction_status"] == "documented_fallback_missing_target_value"
+    assert pd.isna(predictions.loc[0, "product_char_yield_pct_prediction_std"])
+    assert pd.isna(predictions.loc[0, "product_char_yield_pct_ci_lower"])
+    assert pd.isna(predictions.loc[0, "product_char_yield_pct_ci_upper"])
