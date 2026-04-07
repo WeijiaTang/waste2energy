@@ -384,7 +384,7 @@ def test_planning_claim_flag_table_adds_support_level_and_evidence_gap(tmp_path)
     row = flags.iloc[0]
 
     assert row["Surrogate_Support_Level"] == "unsupported_pathway"
-    assert row["evidence_gap_flag"] == "Evidence Gap: Manual Calibration Involved"
+    assert row["evidence_gap_flag"] == "Evidence Gap: Unsupported Pathway"
 
 
 def test_planning_claim_flag_table_backfills_support_level_from_scored_cases(tmp_path):

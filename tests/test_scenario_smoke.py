@@ -11,7 +11,7 @@ from waste2energy.planning.reporting import (
     _format_blend_label,
     build_main_results_table,
 )
-from waste2energy.scenarios.run import run_scenario_robustness_baseline
+from waste2energy.scenarios.run import resolve_audit_output_dir, run_scenario_robustness_baseline
 
 
 def test_scenario_robustness_smoke(tmp_path):
@@ -42,6 +42,14 @@ def test_scenario_robustness_smoke(tmp_path):
     assert not uncertainty_summary.empty
     assert not planning_claim_flags.empty
     assert "claim_status" in planning_claim_flags.columns
+
+
+def test_scenario_run_requires_explicit_planning_dir(tmp_path):
+    output_dir = tmp_path / "scenarios"
+    output_dir.mkdir()
+
+    with pytest.raises(ValueError, match="requires an explicit planning_dir"):
+        run_scenario_robustness_baseline(output_dir=str(output_dir))
 
 
 def test_reporting_preserves_environment_priority_ad_support(workflow_dirs):
@@ -209,3 +217,37 @@ def test_scenario_run_refreshes_audit_outputs(workflow_dirs):
 
     assert not planning_claim_flags.empty
     assert planning_claim_flags["pathway"].isin(["pyrolysis", "htc", "ad", "baseline"]).all()
+    assert (workflow_dirs["planning_dir"] / "main_results_table.csv").exists()
+
+
+def test_scenario_run_reporting_outputs_stay_with_explicit_planning_dir(tmp_path):
+    planning_dir = tmp_path / "planning"
+    scenario_dir = tmp_path / "scenarios"
+
+    from waste2energy.planning.solve import PlanningConfig, run_planning_baseline
+
+    run_planning_baseline(output_dir=str(planning_dir), config=PlanningConfig(pareto_point_count=4))
+    result = run_scenario_robustness_baseline(
+        output_dir=str(scenario_dir),
+        planning_dir=str(planning_dir),
+        base_config=PlanningConfig(pareto_point_count=4),
+    )
+
+    assert result["reporting_outputs"]["planning_results_table"] == str(planning_dir / "main_results_table.csv")
+    assert result["audit_outputs"]["planning_claim_flag_table"] == str(tmp_path / "audit" / "planning_claim_flag_table.csv")
+
+
+def test_resolve_audit_output_dir_prefers_shared_outputs_root_shape(tmp_path):
+    planning_dir = tmp_path / "outputs" / "planning" / "baseline"
+    scenario_dir = tmp_path / "outputs" / "scenarios" / "baseline"
+
+    assert resolve_audit_output_dir(planning_dir=planning_dir) == tmp_path / "outputs" / "audit"
+    assert resolve_audit_output_dir(scenario_dir=scenario_dir) == tmp_path / "outputs" / "audit"
+
+
+def test_resolve_audit_output_dir_falls_back_to_parent_audit_dir(tmp_path):
+    planning_dir = tmp_path / "custom-planning-run"
+    scenario_dir = tmp_path / "custom-scenarios-run"
+
+    assert resolve_audit_output_dir(planning_dir=planning_dir) == tmp_path / "audit"
+    assert resolve_audit_output_dir(scenario_dir=scenario_dir) == tmp_path / "audit"
