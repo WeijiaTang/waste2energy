@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pandas as pd
 
 from waste2energy.planning.inputs import load_planning_input_bundle
@@ -125,3 +127,115 @@ def test_surrogate_evaluator_missing_target_value_keeps_uncertainty_fields_missi
     assert pd.isna(predictions.loc[0, "product_char_yield_pct_prediction_std"])
     assert pd.isna(predictions.loc[0, "product_char_yield_pct_ci_lower"])
     assert pd.isna(predictions.loc[0, "product_char_yield_pct_ci_upper"])
+
+
+def test_surrogate_evaluator_prefers_selected_manifest_over_raw_test_ranking(tmp_path, monkeypatch):
+    outputs_root = Path(tmp_path)
+    manifest = pd.DataFrame(
+        [
+            {
+                "dataset_key": "pyrolysis_direct",
+                "target_column": "product_char_yield_pct",
+                "split_strategy": "strict_group",
+                "selected_model_key": "rf",
+                "selection_status": "selected_on_validation",
+                "selection_metric_name": "validation_r2",
+                "selection_metric_value": 0.8,
+                "selected_validation_r2": 0.8,
+                "selected_validation_rmse": 2.0,
+                "selected_validation_mae": 1.0,
+                "selected_test_r2": 0.5,
+                "selected_test_rmse": 3.0,
+                "selected_test_mae": 2.0,
+                "model_path": "dummy",
+                "metrics_path": "dummy",
+                "predictions_path": "dummy",
+                "feature_importance_path": "dummy",
+                "run_config_path": "dummy",
+            }
+        ]
+    )
+    manifest.to_csv(outputs_root / "selected_models_manifest_strict_group.csv", index=False)
+
+    legacy = pd.DataFrame(
+        [
+            {
+                "dataset_key": "pyrolysis_direct",
+                "target_column": "product_char_yield_pct",
+                "split_strategy": "strict_group",
+                "model_key": "xgboost",
+                "test_r2": 0.95,
+                "validation_r2": 0.1,
+            }
+        ]
+    )
+    legacy.to_csv(outputs_root / "traditional_ml_suite_summary_strict_group.csv", index=False)
+
+    evaluator = SurrogateEvaluator(outputs_root=outputs_root)
+
+    monkeypatch.setattr(
+        evaluator,
+        "_build_artifact_from_selected_manifest",
+        lambda row: row["selected_model_key"],
+    )
+    monkeypatch.setattr(
+        evaluator,
+        "_build_artifact_from_summary",
+        lambda row: row["model_key"],
+    )
+
+    selected = evaluator._resolve_artifact(pathway="pyrolysis", target_column="product_char_yield_pct")
+
+    assert selected == "rf"
+
+
+def test_surrogate_evaluator_reads_refit_artifact_paths_from_selected_manifest(tmp_path):
+    outputs_root = Path(tmp_path)
+    artifact_dir = outputs_root / "selected_models" / "strict_group" / "pyrolysis_direct" / "product_char_yield_pct"
+    artifact_dir.mkdir(parents=True, exist_ok=True)
+    run_config_path = artifact_dir / "run_config.json"
+    run_config_path.write_text(
+        '{"feature_columns": ["feedstock_hhv_mj_per_kg", "feedstock_moisture_pct"]}',
+        encoding="utf-8",
+    )
+    model_path = artifact_dir / "model.joblib"
+    model_path.write_text("placeholder", encoding="utf-8")
+    metrics_path = artifact_dir / "metrics.json"
+    metrics_path.write_text("{}", encoding="utf-8")
+
+    manifest = pd.DataFrame(
+        [
+            {
+                "dataset_key": "pyrolysis_direct",
+                "target_column": "product_char_yield_pct",
+                "split_strategy": "strict_group",
+                "selected_model_key": "rf",
+                "selection_status": "selected_on_validation_refit_train_plus_validation",
+                "artifact_role": "selected_model_refit",
+                "training_scope": "train_plus_validation",
+                "selection_metric_name": "validation_r2",
+                "selection_metric_value": 0.8,
+                "selected_validation_r2": 0.8,
+                "selected_validation_rmse": 2.0,
+                "selected_validation_mae": 1.0,
+                "selected_test_r2": 0.5,
+                "selected_test_rmse": 3.0,
+                "selected_test_mae": 2.0,
+                "model_path": str(model_path),
+                "metrics_path": str(metrics_path),
+                "predictions_path": str(artifact_dir / "predictions.csv"),
+                "feature_importance_path": str(artifact_dir / "feature_importance.csv"),
+                "run_config_path": str(run_config_path),
+            }
+        ]
+    )
+    manifest.to_csv(outputs_root / "selected_models_manifest_strict_group.csv", index=False)
+
+    evaluator = SurrogateEvaluator(outputs_root=outputs_root)
+    artifact = evaluator._resolve_artifact(pathway="pyrolysis", target_column="product_char_yield_pct")
+
+    assert artifact is not None
+    assert artifact.model_key == "rf"
+    assert artifact.model_path == model_path
+    assert artifact.run_config_path == run_config_path
+    assert artifact.feature_columns == ("feedstock_hhv_mj_per_kg", "feedstock_moisture_pct")

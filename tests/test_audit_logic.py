@@ -8,6 +8,8 @@ import pandas as pd
 
 from waste2energy.audit import (
     InconsistencyWarning,
+    build_ml_best_result_summary,
+    build_ml_claim_flag_table,
     build_operation_claim_flag_table,
     build_pathway_reliability_summary,
     build_planning_claim_flag_table,
@@ -196,6 +198,195 @@ def test_pathway_reliability_summary_adds_htc_restriction():
 
     assert htc["reliability_tier"] == "auxiliary_only"
     assert "lack cross-study generalizability" in htc["reviewer_restriction_sentence"]
+
+
+def test_build_ml_best_result_summary_prefers_selected_manifest_identity(tmp_path):
+    summary = pd.DataFrame(
+        [
+            {
+                "dataset_key": "demo",
+                "target_column": "target_a",
+                "model_key": "xgboost",
+                "test_r2": 0.95,
+                "test_rmse": 1.0,
+                "test_mae": 0.8,
+            },
+            {
+                "dataset_key": "demo",
+                "target_column": "target_a",
+                "model_key": "rf",
+                "test_r2": 0.70,
+                "test_rmse": 2.0,
+                "test_mae": 1.5,
+            },
+        ]
+    )
+    summary_path = tmp_path / "strict_summary.csv"
+    summary.to_csv(summary_path, index=False)
+
+    selected_manifest = pd.DataFrame(
+        [
+            {
+                "dataset_key": "demo",
+                "target_column": "target_a",
+                "split_strategy": "strict_group",
+                "selected_model_key": "rf",
+                "selection_metric_name": "validation_r2",
+                "selection_metric_value": 0.82,
+                "selected_test_r2": 0.70,
+                "selected_test_rmse": 2.0,
+                "selected_test_mae": 1.5,
+            }
+        ]
+    )
+    selected_manifest_path = tmp_path / "strict_selected_manifest.csv"
+    selected_manifest.to_csv(selected_manifest_path, index=False)
+
+    result = build_ml_best_result_summary(
+        {"strict_group": summary_path},
+        {"strict_group": selected_manifest_path},
+    )
+
+    row = result.iloc[0]
+    assert row["best_model_key"] == "rf"
+    assert row["selection_metric_name"] == "validation_r2"
+    assert row["best_test_r2"] == 0.70
+
+
+def test_build_ml_claim_flag_table_uses_selected_manifest_identity_with_test_thresholds(tmp_path):
+    strict_summary = pd.DataFrame(
+        [
+            {"dataset_key": "demo", "target_column": "target_a", "model_key": "xgboost", "test_r2": 0.95},
+            {"dataset_key": "demo", "target_column": "target_a", "model_key": "rf", "test_r2": 0.40},
+        ]
+    )
+    strict_summary_path = tmp_path / "strict_summary.csv"
+    strict_summary.to_csv(strict_summary_path, index=False)
+
+    strict_manifest = pd.DataFrame(
+        [
+            {
+                "dataset_key": "demo",
+                "target_column": "target_a",
+                "split_strategy": "strict_group",
+                "selected_model_key": "rf",
+                "selection_metric_name": "validation_r2",
+                "selection_metric_value": 0.80,
+                "selected_test_r2": 0.40,
+                "selected_test_rmse": 2.0,
+                "selected_test_mae": 1.5,
+            }
+        ]
+    )
+    strict_manifest_path = tmp_path / "strict_selected_manifest.csv"
+    strict_manifest.to_csv(strict_manifest_path, index=False)
+
+    leave_summary_path = tmp_path / "leave_summary.csv"
+    pd.DataFrame(columns=["dataset_key", "target_column", "model_key", "test_r2"]).to_csv(
+        leave_summary_path, index=False
+    )
+    leave_manifest_path = tmp_path / "leave_selected_manifest.csv"
+    pd.DataFrame(
+        columns=[
+            "dataset_key",
+            "target_column",
+            "split_strategy",
+            "selected_model_key",
+            "selection_metric_name",
+            "selection_metric_value",
+            "selected_test_r2",
+        ]
+    ).to_csv(leave_manifest_path, index=False)
+
+    result = build_ml_claim_flag_table(
+        {"strict_group": strict_summary_path, "leave_study_out": leave_summary_path},
+        {"strict_group": strict_manifest_path, "leave_study_out": leave_manifest_path},
+    )
+
+    row = result.iloc[0]
+    assert row["best_model_key"] == "rf"
+    assert row["claim_status"] == "weak"
+    assert row["selection_metric_name"] == "validation_r2"
+
+
+def test_build_ml_best_result_summary_recovers_validation_selected_model_from_summary_when_manifest_missing(tmp_path):
+    summary = pd.DataFrame(
+        [
+            {
+                "dataset_key": "demo",
+                "target_column": "target_a",
+                "model_key": "xgboost",
+                "validation_r2": 0.81,
+                "validation_rmse": 1.1,
+                "validation_mae": 0.9,
+                "test_r2": 0.65,
+                "test_rmse": 1.8,
+                "test_mae": 1.4,
+            },
+            {
+                "dataset_key": "demo",
+                "target_column": "target_a",
+                "model_key": "rf",
+                "validation_r2": 0.92,
+                "validation_rmse": 0.9,
+                "validation_mae": 0.7,
+                "test_r2": 0.55,
+                "test_rmse": 2.1,
+                "test_mae": 1.6,
+            },
+        ]
+    )
+    summary_path = tmp_path / "strict_summary_no_manifest.csv"
+    summary.to_csv(summary_path, index=False)
+
+    result = build_ml_best_result_summary({"strict_group": summary_path})
+
+    row = result.iloc[0]
+    assert row["best_model_key"] == "rf"
+    assert row["selection_metric_name"] == "validation_r2"
+    assert row["selection_metric_value"] == 0.92
+    assert row["best_test_r2"] == 0.55
+
+
+def test_build_ml_claim_flag_table_recovers_validation_selected_model_from_summary_when_manifest_missing(tmp_path):
+    strict_summary = pd.DataFrame(
+        [
+            {
+                "dataset_key": "demo",
+                "target_column": "target_a",
+                "model_key": "xgboost",
+                "validation_r2": 0.75,
+                "validation_rmse": 1.1,
+                "validation_mae": 0.8,
+                "test_r2": 0.91,
+            },
+            {
+                "dataset_key": "demo",
+                "target_column": "target_a",
+                "model_key": "rf",
+                "validation_r2": 0.88,
+                "validation_rmse": 0.9,
+                "validation_mae": 0.7,
+                "test_r2": 0.40,
+            },
+        ]
+    )
+    strict_summary_path = tmp_path / "strict_summary_no_manifest.csv"
+    strict_summary.to_csv(strict_summary_path, index=False)
+
+    leave_summary_path = tmp_path / "leave_summary.csv"
+    pd.DataFrame(columns=["dataset_key", "target_column", "model_key", "test_r2"]).to_csv(
+        leave_summary_path, index=False
+    )
+
+    result = build_ml_claim_flag_table(
+        {"strict_group": strict_summary_path, "leave_study_out": leave_summary_path},
+    )
+
+    row = result.iloc[0]
+    assert row["best_model_key"] == "rf"
+    assert row["selection_metric_name"] == "validation_r2"
+    assert row["claim_status"] == "weak"
 
 
 def test_planning_ml_consistency_flags_high_risk(tmp_path):
