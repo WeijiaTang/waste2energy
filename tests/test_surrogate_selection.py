@@ -118,6 +118,26 @@ def test_selected_models_manifest_contains_one_selected_row_per_dataset_target()
 
 
 def test_freeze_selected_models_from_results_writes_refit_manifest_and_artifacts(tmp_path):
+    benchmark_run_config_path = tmp_path / "benchmark_run_config_rf.json"
+    benchmark_run_config_path.write_text(
+        """
+        {
+          "model_config": {
+            "n_estimators": 123,
+            "max_depth": 7,
+            "min_samples_split": 2,
+            "min_samples_leaf": 1,
+            "max_features": "sqrt",
+            "bootstrap": true,
+            "random_state": 77,
+            "n_jobs": -1
+          },
+          "dataset_version_label": "pyrolysis_direct:fixture.csv",
+          "dataset_fingerprint": "fixture_fingerprint"
+        }
+        """.strip(),
+        encoding="utf-8",
+    )
     results = [
         {
             "model_key": "rf",
@@ -136,7 +156,7 @@ def test_freeze_selected_models_from_results_writes_refit_manifest_and_artifacts
                 "predictions": "benchmark_predictions_rf.csv",
                 "feature_importance": "benchmark_feature_importance_rf.csv",
                 "model": "benchmark_model_rf.joblib",
-                "run_config": "benchmark_run_config_rf.json",
+                "run_config": str(benchmark_run_config_path),
             },
         },
         {
@@ -173,3 +193,71 @@ def test_freeze_selected_models_from_results_writes_refit_manifest_and_artifacts
     assert row["artifact_role"] == "selected_model_refit"
     assert row["training_scope"] == "train_plus_validation"
     assert "selected_models\\strict_group\\pyrolysis_direct\\product_char_yield_pct" in row["model_path"]
+    assert str(row["selection_evidence_source"]) == "validation_selected_benchmark_then_refit"
+    assert row["selection_benchmark_manifest_path"].endswith("selected_models_manifest_benchmark_strict_group.csv")
+    assert row["selection_data_version"] == "pyrolysis_direct:fixture.csv"
+    assert row["selection_data_fingerprint"] == "fixture_fingerprint"
+    assert float(row["selection_random_state"]) == 77.0
+    assert row["benchmark_data_version"] == "pyrolysis_direct:fixture.csv"
+    assert row["benchmark_data_fingerprint"] == "fixture_fingerprint"
+    assert float(row["benchmark_random_state"]) == 77.0
+    assert str(row["refit_data_version"]).startswith("pyrolysis_direct:")
+    assert len(str(row["refit_data_fingerprint"])) >= 32
+    assert len(str(row["refit_test_data_fingerprint"])) >= 32
+    assert float(row["refit_random_state"]) == 77.0
+
+
+def test_write_suite_summary_uses_distinct_benchmark_manifest_name(tmp_path):
+    rows = [
+        {
+            "model_key": "rf",
+            "dataset_key": "demo",
+            "target_column": "target_a",
+            "split_strategy": "strict_group",
+            "feature_count": 4,
+            "train_rows": 10,
+            "validation_rows": 4,
+            "test_rows": 4,
+            "metrics_path": "m2",
+            "predictions_path": "p2",
+            "feature_importance_path": "f2",
+            "model_path": "model2",
+            "run_config_path": "cfg2",
+            "validation_r2": 0.82,
+            "validation_rmse": 2.2,
+            "validation_mae": 1.1,
+            "test_r2": 0.75,
+            "test_rmse": 2.5,
+            "test_mae": 1.8,
+        },
+    ]
+    from waste2energy.surrogates.artifacts import write_suite_summary
+
+    summary_csv, summary_json, manifest_csv = write_suite_summary(
+        results=[
+            {
+                "model_key": "rf",
+                "dataset_key": "demo",
+                "target_column": "target_a",
+                "split_strategy": "strict_group",
+                "feature_count": 4,
+                "row_counts": {"train": 10, "validation": 4, "test": 4},
+                "metrics": {
+                    "validation": {"r2": 0.82, "rmse": 2.2, "mae": 1.1},
+                    "test": {"r2": 0.75, "rmse": 2.5, "mae": 1.8},
+                },
+                "outputs": {
+                    "metrics": "m2",
+                    "predictions": "p2",
+                    "feature_importance": "f2",
+                    "model": "model2",
+                    "run_config": "cfg2",
+                },
+            }
+        ],
+        output_root=str(tmp_path),
+        split_strategy="strict_group",
+    )
+    assert summary_csv.endswith("traditional_ml_suite_summary_strict_group.csv")
+    assert summary_json.endswith("traditional_ml_suite_summary_strict_group.json")
+    assert manifest_csv.endswith("selected_models_manifest_benchmark_strict_group.csv")

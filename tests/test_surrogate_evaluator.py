@@ -239,3 +239,47 @@ def test_surrogate_evaluator_reads_refit_artifact_paths_from_selected_manifest(t
     assert artifact.model_path == model_path
     assert artifact.run_config_path == run_config_path
     assert artifact.feature_columns == ("feedstock_hhv_mj_per_kg", "feedstock_moisture_pct")
+
+
+def test_surrogate_evaluator_honors_dataset_preference_order_before_metric_ranking(tmp_path, monkeypatch):
+    outputs_root = Path(tmp_path)
+    manifest = pd.DataFrame(
+        [
+            {
+                "dataset_key": "htc_direct",
+                "target_column": "product_char_yield_pct",
+                "split_strategy": "strict_group",
+                "selected_model_key": "xgboost",
+                "artifact_role": "selected_model_refit",
+                "selection_status": "selected_on_validation_refit_train_plus_validation",
+                "selected_validation_r2": 0.95,
+                "model_path": "dummy1",
+                "run_config_path": "dummy1",
+                "metrics_path": "dummy1",
+            },
+            {
+                "dataset_key": "paper1_htc_scope",
+                "target_column": "product_char_yield_pct",
+                "split_strategy": "strict_group",
+                "selected_model_key": "rf",
+                "artifact_role": "selected_model_refit",
+                "selection_status": "selected_on_validation_refit_train_plus_validation",
+                "selected_validation_r2": 0.70,
+                "model_path": "dummy2",
+                "run_config_path": "dummy2",
+                "metrics_path": "dummy2",
+            },
+        ]
+    )
+    manifest.to_csv(outputs_root / "selected_models_manifest_strict_group.csv", index=False)
+
+    evaluator = SurrogateEvaluator(outputs_root=outputs_root)
+    monkeypatch.setattr(
+        evaluator,
+        "_build_artifact_from_selected_manifest",
+        lambda row: f"{row['dataset_key']}::{row['selected_model_key']}",
+    )
+
+    selected = evaluator._resolve_artifact(pathway="htc", target_column="product_char_yield_pct")
+
+    assert selected == "paper1_htc_scope::rf"

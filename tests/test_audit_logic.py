@@ -10,6 +10,7 @@ from waste2energy.audit import (
     InconsistencyWarning,
     build_ml_best_result_summary,
     build_ml_claim_flag_table,
+    build_ml_refit_provenance_summary,
     build_operation_claim_flag_table,
     build_pathway_reliability_summary,
     build_planning_claim_flag_table,
@@ -387,6 +388,56 @@ def test_build_ml_claim_flag_table_recovers_validation_selected_model_from_summa
     assert row["best_model_key"] == "rf"
     assert row["selection_metric_name"] == "validation_r2"
     assert row["claim_status"] == "weak"
+
+
+def test_build_ml_refit_provenance_summary_reports_complete_trace(tmp_path):
+    run_config_path = tmp_path / "run_config.json"
+    run_config_path.write_text(
+        """
+        {
+          "model_config": {"random_state": 42},
+          "dataset_version_label": "demo:demo.csv",
+          "dataset_fingerprint": "abc123",
+          "refit_config_source": "selected_benchmark_run_config"
+        }
+        """.strip(),
+        encoding="utf-8",
+    )
+    manifest = pd.DataFrame(
+        [
+            {
+                "dataset_key": "demo",
+                "target_column": "target_a",
+                "selected_model_key": "rf",
+                "artifact_role": "selected_model_refit",
+                "training_scope": "train_plus_validation",
+                "selection_trace_id": "demo::target_a::strict_group::rf",
+                "selection_evidence_source": "validation_selected_benchmark_then_refit",
+                "selection_benchmark_manifest_path": "selected_models_manifest_benchmark_strict_group.csv",
+                "selection_data_version": "demo:demo.csv",
+                "selection_data_fingerprint": "abc123",
+                "selection_random_state": 42,
+                "benchmark_data_version": "demo:demo.csv",
+                "benchmark_data_fingerprint": "abc123",
+                "benchmark_random_state": 42,
+                "refit_data_version": "demo:demo.csv",
+                "refit_data_fingerprint": "def456",
+                "refit_test_data_fingerprint": "ghi789",
+                "refit_random_state": 42,
+                "run_config_path": str(run_config_path),
+            }
+        ]
+    )
+    manifest_path = tmp_path / "selected_models_manifest_strict_group.csv"
+    manifest.to_csv(manifest_path, index=False)
+
+    summary = build_ml_refit_provenance_summary({"strict_group": manifest_path})
+    row = summary.iloc[0]
+
+    assert bool(row["provenance_complete"])
+    assert row["missing_provenance_fields"] == ""
+    assert row["selection_evidence_source"] == "validation_selected_benchmark_then_refit"
+    assert row["run_config_random_state"] == 42
 
 
 def test_planning_ml_consistency_flags_high_risk(tmp_path):

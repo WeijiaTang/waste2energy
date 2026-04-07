@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+import hashlib
 from pathlib import Path
 
 import pandas as pd
@@ -175,7 +177,7 @@ def run_regression_baseline_suite(
         "split_strategy": split_strategy,
         "summary_csv": summary_csv,
         "summary_json": summary_json,
-        "selected_manifest_csv": selected_manifest_csv,
+        "selected_benchmark_manifest_csv": selected_manifest_csv,
         "final_selected_manifest_csv": final_selected_manifest_csv,
         "results": results,
     }
@@ -221,6 +223,10 @@ def freeze_selected_models_from_results(
         return ""
 
     base_outputs_root = Path(output_root) if output_root else _resolve_output_root_for_split(split_strategy)
+    suffix = "" if split_strategy == "recommended" else f"_{split_strategy}"
+    benchmark_manifest_path = base_outputs_root / f"selected_models_manifest_benchmark{suffix}.csv"
+    selected_manifest = selected_manifest.copy()
+    selected_manifest["selection_benchmark_manifest_path"] = str(benchmark_manifest_path)
     selected_models_root = base_outputs_root / "selected_models" / split_strategy
     selected_models_root.mkdir(parents=True, exist_ok=True)
 
@@ -237,7 +243,6 @@ def freeze_selected_models_from_results(
         ["dataset_key", "target_column", "split_strategy"],
         ascending=[True, True, True],
     ).reset_index(drop=True)
-    suffix = "" if split_strategy == "recommended" else f"_{split_strategy}"
     final_manifest_path = base_outputs_root / f"selected_models_manifest{suffix}.csv"
     final_manifest.to_csv(final_manifest_path, index=False)
     return str(final_manifest_path)
@@ -254,6 +259,19 @@ def _freeze_selected_model(
     split_strategy = str(selected_row["split_strategy"])
     bundle = load_dataset_bundle(dataset_key, split_strategy=split_strategy)
     model_ops = get_model_ops(model_key)
+    benchmark_run_config_path = Path(
+        str(selected_row.get("benchmark_run_config_path") or selected_row.get("run_config_path", ""))
+    )
+    benchmark_run_config = _read_json_if_exists(benchmark_run_config_path)
+    dataset_version_label = benchmark_run_config.get("dataset_version_label", f"{dataset_key}:{bundle.spec.file_name}")
+    dataset_fingerprint = benchmark_run_config.get("dataset_fingerprint", _frame_fingerprint(bundle.frame))
+    benchmark_random_state = _extract_random_state(benchmark_run_config.get("model_config"))
+    if benchmark_random_state is None:
+        benchmark_random_state = _extract_random_state(model_ops["default_config"])
+    selected_model_config = _resolve_selected_model_config(
+        benchmark_run_config=benchmark_run_config,
+        model_ops=model_ops,
+    )
 
     refit_frame = pd.concat(
         [
@@ -275,7 +293,7 @@ def _freeze_selected_model(
         x_refit,
         y_refit,
         sample_weight=refit_weight,
-        config=model_ops["default_config"],
+        config=selected_model_config,
     )
 
     predictions_payload, metrics_payload = _build_refit_reporting_payload(
@@ -298,28 +316,43 @@ def _freeze_selected_model(
         predictions=predictions_payload,
         metrics_payload=metrics_payload,
         bundle=bundle,
-        model_config=model_ops["default_config"],
+        model_config=selected_model_config,
         model_family=model_ops["model_family"],
         model_file_name=model_ops["model_file_name"],
         save_model_fn=model_ops["save_model"],
         row_counts_override={
-            "refit_train": int(len(refit_frame)),
+            "refit_train_plus_validation": int(len(refit_frame)),
+            "refit_test_holdout": int(len(bundle.split_frames.get("test", pd.DataFrame()))),
             "benchmark_train": int(len(bundle.split_frames.get("train", pd.DataFrame()))),
             "benchmark_validation": int(len(bundle.split_frames.get("validation", pd.DataFrame()))),
             "benchmark_test": int(len(bundle.split_frames.get("test", pd.DataFrame()))),
         },
-        training_splits_override=["train", "validation"],
+        training_splits_override=["train_plus_validation"],
         additional_run_manifest_fields={
             "artifact_role": "selected_model_refit",
             "training_scope": "train_plus_validation",
+            "selection_trace_id": selected_row.get("selection_trace_id"),
+            "selection_evidence_source": "validation_selected_benchmark_then_refit",
             "selection_metric_name": selected_row.get("selection_metric_name", "validation_r2"),
             "selection_metric_value": selected_row.get("selection_metric_value"),
             "selected_model_key": model_key,
+            "selection_data_version": dataset_version_label,
+            "selection_data_fingerprint": dataset_fingerprint,
+            "selection_random_state": benchmark_random_state,
+            "selection_benchmark_manifest_path": selected_row.get("selection_benchmark_manifest_path"),
             "benchmark_model_path": selected_row.get("benchmark_model_path") or selected_row.get("model_path"),
             "benchmark_metrics_path": selected_row.get("benchmark_metrics_path") or selected_row.get("metrics_path"),
             "benchmark_predictions_path": selected_row.get("benchmark_predictions_path") or selected_row.get("predictions_path"),
             "benchmark_feature_importance_path": selected_row.get("benchmark_feature_importance_path") or selected_row.get("feature_importance_path"),
             "benchmark_run_config_path": selected_row.get("benchmark_run_config_path") or selected_row.get("run_config_path"),
+            "benchmark_data_version": dataset_version_label,
+            "benchmark_data_fingerprint": dataset_fingerprint,
+            "benchmark_random_state": benchmark_random_state,
+            "refit_data_version": f"{dataset_key}:{bundle.spec.file_name}",
+            "refit_data_fingerprint": _frame_fingerprint(refit_frame),
+            "refit_test_data_fingerprint": _frame_fingerprint(bundle.split_frames.get("test", pd.DataFrame())),
+            "refit_random_state": _extract_random_state(selected_model_config),
+            "refit_config_source": "selected_benchmark_run_config",
         },
     )
 
@@ -329,6 +362,7 @@ def _freeze_selected_model(
             "artifact_role": "selected_model_refit",
             "training_scope": "train_plus_validation",
             "selection_status": "selected_on_validation_refit_train_plus_validation",
+            "selection_evidence_source": "validation_selected_benchmark_then_refit",
             "model_path": outputs["model"],
             "metrics_path": outputs["metrics"],
             "predictions_path": outputs["predictions"],
@@ -337,6 +371,18 @@ def _freeze_selected_model(
             "refit_train_rows": int(len(refit_frame)),
             "refit_validation_rows": 0,
             "refit_test_rows": int(len(bundle.split_frames.get("test", pd.DataFrame()))),
+            "selection_data_version": dataset_version_label,
+            "selection_data_fingerprint": dataset_fingerprint,
+            "selection_random_state": benchmark_random_state,
+            "selection_benchmark_manifest_path": selected_row.get("selection_benchmark_manifest_path"),
+            "benchmark_data_version": dataset_version_label,
+            "benchmark_data_fingerprint": dataset_fingerprint,
+            "benchmark_random_state": benchmark_random_state,
+            "refit_data_version": f"{dataset_key}:{bundle.spec.file_name}",
+            "refit_data_fingerprint": _frame_fingerprint(refit_frame),
+            "refit_test_data_fingerprint": _frame_fingerprint(bundle.split_frames.get("test", pd.DataFrame())),
+            "refit_random_state": _extract_random_state(selected_model_config),
+            "refit_config_source": "selected_benchmark_run_config",
         }
     )
     if "selected_test_r2" in metrics_payload.get("test", {}):
@@ -400,3 +446,43 @@ def _resolve_output_root_for_split(split_strategy: str) -> Path:
     from ..config import resolve_surrogate_outputs_dir
 
     return resolve_surrogate_outputs_dir()
+
+
+def _resolve_selected_model_config(
+    *,
+    benchmark_run_config: dict[str, object],
+    model_ops: dict[str, object],
+):
+    serialized_config = benchmark_run_config.get("model_config")
+    default_config = model_ops["default_config"]
+    if not isinstance(serialized_config, dict):
+        return default_config
+    config_type = type(default_config)
+    try:
+        return config_type(**serialized_config)
+    except TypeError:
+        return default_config
+
+
+def _extract_random_state(config: object) -> int | object:
+    if config is None:
+        return None
+    if isinstance(config, dict):
+        value = config.get("random_state")
+        return value if value is not None else None
+    value = getattr(config, "random_state", None)
+    return value if value is not None else None
+
+
+def _frame_fingerprint(frame: pd.DataFrame) -> str:
+    if frame.empty:
+        return "empty_frame"
+    normalized = frame.sort_values("sample_id").reset_index(drop=True)
+    csv_payload = normalized.to_csv(index=False)
+    return hashlib.sha256(csv_payload.encode("utf-8")).hexdigest()
+
+
+def _read_json_if_exists(path: Path) -> dict[str, object]:
+    if not path.exists():
+        return {}
+    return json.loads(path.read_text(encoding="utf-8"))

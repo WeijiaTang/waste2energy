@@ -213,6 +213,9 @@ class SurrogateEvaluator:
             ].copy()
             if subset.empty:
                 continue
+            subset = self._apply_dataset_preference_order(subset, datasets)
+            if subset.empty:
+                continue
             preferred_subset = subset[
                 subset.get("artifact_role", pd.Series([""] * len(subset), index=subset.index)).astype(str)
                 == "selected_model_refit"
@@ -242,6 +245,9 @@ class SurrogateEvaluator:
             subset = summary[
                 summary["dataset_key"].isin(datasets) & summary["target_column"].eq(target_column)
             ].copy()
+            if subset.empty:
+                continue
+            subset = self._apply_dataset_preference_order(subset, datasets)
             if subset.empty:
                 continue
             subset["test_r2_rank"] = pd.to_numeric(subset.get("test_r2"), errors="coerce").fillna(-np.inf)
@@ -502,6 +508,20 @@ class SurrogateEvaluator:
         if "htc" in dataset_key:
             return "htc"
         return dataset_key
+
+    def _apply_dataset_preference_order(
+        self,
+        frame: pd.DataFrame,
+        datasets: tuple[str, ...],
+    ) -> pd.DataFrame:
+        if frame.empty or not datasets:
+            return frame
+        ordered = frame.copy()
+        for preferred_dataset in datasets:
+            subset = ordered[ordered["dataset_key"].astype(str) == preferred_dataset].copy()
+            if not subset.empty:
+                return subset
+        return pd.DataFrame(columns=frame.columns)
 
 
 def build_surrogate_predictions(frame: pd.DataFrame) -> pd.DataFrame:

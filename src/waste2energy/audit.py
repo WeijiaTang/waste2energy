@@ -78,6 +78,7 @@ def build_confirmatory_audit(
     ml_summary = build_ml_split_coverage_summary(ml_paths)
     ml_best = build_ml_best_result_summary(ml_paths, selected_manifest_paths)
     ml_flags = build_ml_claim_flag_table(ml_paths, selected_manifest_paths)
+    ml_provenance = build_ml_refit_provenance_summary(selected_manifest_paths)
     pathway_reliability = build_pathway_reliability_summary(ml_flags)
     planning_flags = build_planning_claim_flag_table(active_planning_dir, active_scenario_dir)
     planning_ml_consistency = build_planning_ml_consistency_summary(active_planning_dir, pathway_reliability)
@@ -102,6 +103,7 @@ def build_confirmatory_audit(
         "ml_split_coverage_summary": ml_summary,
         "ml_best_result_summary": ml_best,
         "ml_claim_flag_table": ml_flags,
+        "ml_refit_provenance_summary": ml_provenance,
         "pathway_reliability_summary": pathway_reliability,
         "planning_claim_flag_table": planning_flags,
         "planning_ml_consistency_summary": planning_ml_consistency,
@@ -221,6 +223,71 @@ def build_ml_claim_flag_table(
             positive_threshold=0.50,
         )
     )
+    if not rows:
+        return pd.DataFrame()
+    return pd.DataFrame(rows).sort_values(["summary_label", "dataset_key", "target_column"]).reset_index(drop=True)
+
+
+def build_ml_refit_provenance_summary(
+    selected_manifest_paths: dict[str, Path] | None = None,
+) -> pd.DataFrame:
+    rows: list[dict[str, object]] = []
+    if not selected_manifest_paths:
+        return pd.DataFrame()
+
+    for summary_label, manifest_path in selected_manifest_paths.items():
+        manifest = _read_csv_if_exists(manifest_path)
+        if manifest.empty:
+            continue
+        for _, row in manifest.iterrows():
+            run_config_path = Path(str(row.get("run_config_path", "")))
+            run_config = _read_json_if_exists(run_config_path)
+            required_columns = [
+                "selection_trace_id",
+                "selection_evidence_source",
+                "selection_data_version",
+                "selection_data_fingerprint",
+                "selection_random_state",
+                "benchmark_data_version",
+                "benchmark_data_fingerprint",
+                "benchmark_random_state",
+                "refit_data_version",
+                "refit_data_fingerprint",
+                "refit_test_data_fingerprint",
+                "refit_random_state",
+            ]
+            missing_fields = [
+                column
+                for column in required_columns
+                if pd.isna(row.get(column)) or str(row.get(column)).strip() == ""
+            ]
+            model_config = run_config.get("model_config", {})
+            rows.append(
+                {
+                    "summary_label": summary_label,
+                    "dataset_key": row.get("dataset_key"),
+                    "target_column": row.get("target_column"),
+                    "selected_model_key": row.get("selected_model_key"),
+                    "artifact_role": row.get("artifact_role", pd.NA),
+                    "training_scope": row.get("training_scope", pd.NA),
+                    "selection_trace_id": row.get("selection_trace_id", pd.NA),
+                    "selection_evidence_source": row.get("selection_evidence_source", pd.NA),
+                    "selection_data_version": row.get("selection_data_version", pd.NA),
+                    "selection_data_fingerprint": row.get("selection_data_fingerprint", pd.NA),
+                    "selection_random_state": row.get("selection_random_state", pd.NA),
+                    "benchmark_data_version": row.get("benchmark_data_version", pd.NA),
+                    "benchmark_data_fingerprint": row.get("benchmark_data_fingerprint", pd.NA),
+                    "benchmark_random_state": row.get("benchmark_random_state", pd.NA),
+                    "refit_data_version": row.get("refit_data_version", pd.NA),
+                    "refit_data_fingerprint": row.get("refit_data_fingerprint", pd.NA),
+                    "refit_test_data_fingerprint": row.get("refit_test_data_fingerprint", pd.NA),
+                    "refit_random_state": row.get("refit_random_state", pd.NA),
+                    "run_config_exists": run_config_path.exists(),
+                    "run_config_random_state": model_config.get("random_state", pd.NA),
+                    "provenance_complete": len(missing_fields) == 0,
+                    "missing_provenance_fields": ";".join(missing_fields),
+                }
+            )
     if not rows:
         return pd.DataFrame()
     return pd.DataFrame(rows).sort_values(["summary_label", "dataset_key", "target_column"]).reset_index(drop=True)
@@ -884,6 +951,12 @@ def _read_csv_if_exists(path: Path) -> pd.DataFrame:
         return pd.read_csv(path)
     except pd.errors.EmptyDataError:
         return pd.DataFrame()
+
+
+def _read_json_if_exists(path: Path) -> dict[str, object]:
+    if not path.exists():
+        return {}
+    return json.loads(path.read_text(encoding="utf-8"))
 
 
 def _classify_planning_claim_status(row: pd.Series) -> str:
