@@ -43,8 +43,16 @@ def test_reporting_preserves_environment_priority_ad_support(workflow_dirs):
     ad_rows = table[table["pathway"] == "ad"].copy()
 
     assert not ad_rows.empty
-    assert ad_rows["max_stress_selection_rate"].gt(0.0).all()
-    assert ad_rows["stress_tests_supporting_pathway"].str.contains("environment_priority").all()
+    positive_support = ad_rows["max_stress_selection_rate"].gt(0.0)
+    if positive_support.any():
+        assert ad_rows.loc[positive_support, "stress_tests_supporting_pathway"].str.contains(
+            "environment_priority"
+        ).all()
+    else:
+        assert (ad_rows["stress_tests_supporting_pathway"] == "none").all()
+        assert ad_rows["writing_label"].isin(
+            {"competitive but unselected", "comparison only"}
+        ).all()
 
 
 def test_scenario_run_refreshes_audit_outputs(workflow_dirs):

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+
 import pandas as pd
 
 from waste2energy.planning import optimization as planning_optimization
@@ -23,12 +25,24 @@ def test_planning_baseline_smoke(tmp_path):
     optimization_diagnostics = pd.read_csv(output_dir / "optimization_diagnostics.csv")
     portfolio_allocations = pd.read_csv(output_dir / "portfolio_allocations.csv")
     scored_cases = pd.read_csv(output_dir / "scored_cases.csv")
+    scenario_constraints = pd.read_csv(output_dir / "scenario_constraints.csv")
+    run_config = json.loads((output_dir / "run_config.json").read_text(encoding="utf-8"))
 
     assert "combined_uncertainty_ratio" in surrogate_predictions.columns
     assert surrogate_predictions["combined_uncertainty_ratio"].ge(0.0).all()
     assert set(optimization_diagnostics["solver_status"]) == {"optimal"}
     assert "planning_score_scope" in scored_cases.columns
     assert set(scored_cases["planning_score_scope"]) == {"scenario_local_optimizer"}
+    assert "scenario_baseline_waste_treatment_emission_factor_kgco2e_per_metric_ton" in scored_cases.columns
+    assert "planning_carbon_unit_basis" in scored_cases.columns
+    assert set(scored_cases["planning_carbon_unit_basis"]) == {"kgco2e_per_metric_ton"}
+    assert "baseline_emission_factor_kgco2e_per_metric_ton" in scenario_constraints.columns
+    assert "baseline_emission_factor_source_unit" in scenario_constraints.columns
+    assert "carbon_budget_basis_note" in scenario_constraints.columns
+    assert scenario_constraints["baseline_emission_factor_kgco2e_per_metric_ton"].gt(
+        scenario_constraints["baseline_emission_factor_kgco2e_per_short_ton_source"]
+    ).all()
+    assert run_config["unit_registry"]["planning_mass_unit_basis"] == "metric_ton"
     assert portfolio_allocations["allocated_feed_ton_per_year"].gt(0.0).all()
 
 
@@ -53,7 +67,7 @@ def test_planning_solver_falls_back_after_pyomo_exception(monkeypatch):
         "effective_processing_budget_ton_per_year": 1.0,
         "candidate_share_cap_ton_per_year": 1.0,
         "subtype_share_cap_ton_per_year": 1.0,
-        "scenario_baseline_waste_treatment_emission_factor_kgco2e_per_short_ton": 10.0,
+        "baseline_emission_factor_kgco2e_per_metric_ton": 11.023113109243878,
     }
 
     def fake_pyomo(*args, **kwargs):

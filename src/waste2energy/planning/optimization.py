@@ -492,11 +492,20 @@ def _carbon_budget(
     scenario_constraint: dict[str, object],
     config: "PlanningConfig",
 ) -> float:
-    baseline_emission = pd.to_numeric(
-        scored["scenario_baseline_waste_treatment_emission_factor_kgco2e_per_short_ton"],
-        errors="coerce",
-    ).fillna(0.0)
-    baseline_reference = float(baseline_emission.mean()) if not baseline_emission.empty else 0.0
+    constraint_reference = float(
+        pd.to_numeric(
+            pd.Series([scenario_constraint.get("baseline_emission_factor_kgco2e_per_metric_ton")]),
+            errors="coerce",
+        ).fillna(0.0).iloc[0]
+    )
+    if constraint_reference > 0.0:
+        baseline_reference = constraint_reference
+    else:
+        baseline_emission = pd.to_numeric(
+            scored["scenario_baseline_waste_treatment_emission_factor_kgco2e_per_metric_ton"],
+            errors="coerce",
+        ).fillna(0.0)
+        baseline_reference = float(baseline_emission.mean()) if not baseline_emission.empty else 0.0
     effective_budget = float(scenario_constraint.get("effective_processing_budget_ton_per_year", 0.0) or 0.0)
     return max(0.0, baseline_reference * effective_budget * config.carbon_budget_factor)
 

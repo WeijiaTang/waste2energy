@@ -62,6 +62,7 @@ def write_planning_outputs(
         scenario_names=list(bundle.scenario_names),
         pathways=list(bundle.pathways),
         real_cost_columns=list(bundle.real_cost_columns),
+        unit_registry=bundle.unit_registry,
         planning_config=config,
         objective_weights=config.objective_weight_system,
         objective_readiness=readiness,
@@ -71,4 +72,3 @@ def write_planning_outputs(
     )
     write_json(outputs["run_config"], run_config)
     return {key: str(path) for key, path in outputs.items()}
-

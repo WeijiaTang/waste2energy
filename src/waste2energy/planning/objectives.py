@@ -55,7 +55,7 @@ def assemble_objective_frame(
     carbon_retention = pd.to_numeric(merged["carbon_retention_pct"], errors="coerce").fillna(0.0) / 100.0
     carbon_fraction = pd.to_numeric(merged["feedstock_carbon_pct"], errors="coerce").fillna(0.0) / 100.0
     baseline_emission = pd.to_numeric(
-        merged["scenario_baseline_waste_treatment_emission_factor_kgco2e_per_short_ton"],
+        merged["scenario_baseline_waste_treatment_emission_factor_kgco2e_per_metric_ton"],
         errors="coerce",
     ).fillna(0.0)
     policy_multiplier = pd.to_numeric(merged["policy_multiplier"], errors="coerce").fillna(1.0)
@@ -129,6 +129,10 @@ def assemble_objective_frame(
     )
     merged["planning_mass_balance_feed_ton_per_year"] = total_mixed_feed_ton
     merged["planning_cost_balance_usd_per_year"] = merged["planning_cost_objective"]
+    merged["planning_carbon_unit_basis"] = merged.get(
+        "baseline_emission_factor_internal_unit",
+        "kgco2e_per_metric_ton",
+    )
 
     readiness = {
         "energy_objective_status": "surrogate_or_direct_energy_intensity_with_robust_adjustment",
@@ -170,7 +174,7 @@ def _build_cost_terms(
 
 
 def _build_carbon_load(frame: pd.DataFrame, baseline_emission: pd.Series) -> pd.Series:
-    explicit = _optional_numeric_column(frame, "pathway_emission_factor_kgco2e_per_short_ton_scenario_proxy")
+    explicit = _optional_numeric_column(frame, "pathway_emission_factor_kgco2e_per_metric_ton_scenario_proxy")
     if explicit.notna().any():
         return explicit.fillna((baseline_emission - frame["planning_environment_intensity_kgco2e_per_ton"]).clip(lower=0.0))
     return (baseline_emission - frame["planning_environment_intensity_kgco2e_per_ton"]).clip(lower=0.0)
@@ -180,4 +184,3 @@ def _optional_numeric_column(frame: pd.DataFrame, column: str) -> pd.Series:
     if column not in frame.columns:
         return pd.Series(np.nan, index=frame.index, dtype=float)
     return pd.to_numeric(frame[column], errors="coerce")
-

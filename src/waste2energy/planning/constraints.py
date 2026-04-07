@@ -20,8 +20,18 @@ def build_scenario_constraints(frame: pd.DataFrame, config: "PlanningConfig") ->
         required_new_capacity = _value(anchor, "organic_waste_recycling_capacity_needed_ton_per_year_reference")
         baseline_emission_factor = _value(
             anchor,
+            "scenario_baseline_waste_treatment_emission_factor_kgco2e_per_metric_ton",
+        )
+        baseline_emission_source_factor = _value(
+            anchor,
             "scenario_baseline_waste_treatment_emission_factor_kgco2e_per_short_ton",
         )
+        source_unit = str(anchor.get("baseline_emission_factor_source_unit", "") or "")
+        mass_unit_basis = str(anchor.get("planning_mass_unit_basis", "metric_ton") or "metric_ton")
+        internal_unit = str(
+            anchor.get("baseline_emission_factor_internal_unit", "kgco2e_per_metric_ton") or "kgco2e_per_metric_ton"
+        )
+        short_ton_to_metric_ton_factor = _value(anchor, "short_ton_to_metric_ton_factor")
 
         deployable_new_capacity = required_new_capacity * config.deployable_capacity_fraction
         positive_bounds = [value for value in [feed_budget, deployable_new_capacity, available_capacity] if value > 0.0]
@@ -51,9 +61,18 @@ def build_scenario_constraints(frame: pd.DataFrame, config: "PlanningConfig") ->
                 "max_portfolio_candidates": int(config.max_portfolio_candidates),
                 "min_distinct_subtypes": int(min(config.min_distinct_subtypes, config.max_portfolio_candidates)),
                 "deployable_capacity_fraction": float(config.deployable_capacity_fraction),
-                "baseline_emission_factor_kgco2e_per_short_ton": baseline_emission_factor,
+                "planning_mass_unit_basis": mass_unit_basis,
+                "baseline_emission_factor_source_unit": source_unit,
+                "baseline_emission_factor_internal_unit": internal_unit,
+                "baseline_emission_factor_kgco2e_per_metric_ton": baseline_emission_factor,
+                "baseline_emission_factor_kgco2e_per_short_ton_source": baseline_emission_source_factor,
+                "short_ton_to_metric_ton_factor": short_ton_to_metric_ton_factor,
                 "carbon_budget_factor": float(config.carbon_budget_factor),
                 "carbon_budget_kgco2e": effective_budget * baseline_emission_factor * config.carbon_budget_factor,
+                "carbon_budget_basis_note": (
+                    "Computed from the scenario baseline emission factor converted to kgCO2e per metric ton "
+                    "and multiplied by the effective processing budget in metric tons per year."
+                ),
             }
         )
 
@@ -88,4 +107,3 @@ def _value(row: pd.Series, column: str) -> float:
     if column not in row.index:
         return 0.0
     return float(pd.to_numeric(pd.Series([row[column]]), errors="coerce").fillna(0.0).iloc[0])
-
