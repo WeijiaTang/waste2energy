@@ -85,16 +85,28 @@ def narrative_background(ax, *, facecolor: str = "#F7F9FC") -> None:
 
 
 def style_polar_axis(ax) -> None:
-    ax.set_facecolor("#FBFCFE")
+    ax.set_facecolor("#FCFDFE")
     ax.spines["polar"].set_visible(False)
-    ax.grid(color="#E2E8F0", linewidth=0.6)
+    ax.grid(color="#DFE7F0", linewidth=0.7)
     ax.set_theta_offset(3.141592653589793 / 2)
     ax.set_theta_direction(-1)
-    ax.tick_params(pad=1)
+    ax.tick_params(pad=4)
+
+
+def add_polar_backdrop(ax) -> None:
+    theta = [0, 2 * 3.141592653589793]
+    for radius, color, alpha in [
+        (1.0, "#F8FBFF", 1.0),
+        (0.78, "#F3F7FC", 0.95),
+        (0.52, "#FBFDFF", 1.0),
+    ]:
+        ax.fill_between(theta, 0, radius, color=color, alpha=alpha, zorder=0)
 
 
 def add_landscape_zones(ax) -> None:
-    ax.axvspan(0, 8, color="#F8FAFC", zorder=0)
-    ax.axvspan(8, 55, color="#F1F5F9", zorder=0)
-    ax.axvspan(55, 105, color="#ECFDF5", zorder=0)
-    ax.axhspan(0, 20, color="#FFF7ED", zorder=0)
+    ax.axvspan(-2, 8, color="#F8FBFE", zorder=0)
+    ax.axvspan(8, 55, color="#F3F7FC", zorder=0)
+    ax.axvspan(55, 105, color="#EEF9F4", zorder=0)
+    ax.axhspan(-2, 20, color="#FFF8EF", zorder=0)
+    ax.axhline(20, color="#E7DCCB", linewidth=0.8, zorder=1)
+    ax.axvline(55, color="#D9E7DF", linewidth=0.8, zorder=1)

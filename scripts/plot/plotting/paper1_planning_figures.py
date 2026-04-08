@@ -6,9 +6,10 @@ import pandas as pd
 
 from scripts.plot.common import scenario_label
 
-from .annotations import add_caption_note, add_header_block, add_panel_label, add_zone_label
+from .annotations import add_badge, add_caption_note, add_header_block, add_panel_label, add_zone_label
 from .layout import create_main_figure, create_three_panel_polar_figure, create_three_panel_supporting_figure
 from .theme import (
+    add_polar_backdrop,
     add_landscape_zones,
     claim_color,
     configure_publication_theme,
@@ -76,8 +77,8 @@ def build_figure1_main(frame: pd.DataFrame):
     add_header_block(
         header_ax,
         title="Figure 1. Planning decision narrative",
-        subtitle="Score leadership and portfolio leadership diverge after evidence-aware constraints are applied.",
-        takeaway="Pyrolysis leads selected share; HTC leads score.",
+        subtitle="Current evidence-aware outputs separate score leadership from portfolio leadership.",
+        takeaway="Pyrolysis leads selected share; HTC retains stronger best-case score leadership.",
     )
 
     narrative_background(score_ax, facecolor="#FBFCFE")
@@ -262,7 +263,7 @@ def build_figure3_robustness(frame: pd.DataFrame):
 
 def build_sup_figure_s1_scenario_fingerprint(frame: pd.DataFrame):
     plt = configure_publication_theme()
-    fig, axes = create_three_panel_polar_figure(plt, figsize=(11.0, 4.2))
+    fig, axes = create_three_panel_polar_figure(plt, figsize=(11.4, 4.9))
     ordered = _prepare_frame(frame).sort_values(["scenario_order", "pathway_order", "metric_order"]).reset_index(drop=True)
 
     metric_order = (
@@ -278,29 +279,49 @@ def build_sup_figure_s1_scenario_fingerprint(frame: pd.DataFrame):
         ax = axes[index]
         scenario_frame = ordered.loc[ordered["scenario_name"] == scenario_name]
         style_polar_axis(ax)
+        add_polar_backdrop(ax)
         for pathway in ["pyrolysis", "htc", "ad", "baseline"]:
             path_frame = scenario_frame.loc[scenario_frame["pathway"] == pathway].sort_values("metric_order")
             if path_frame.empty:
                 continue
             values = _close_polar(path_frame["normalized_value"].astype(float).tolist())
             color = pathway_color(pathway)
-            fill_color = soften_hex(color, weight=0.18 if pathway in {"pyrolysis", "htc"} else 0.55)
-            linewidth = 2.1 if pathway == "pyrolysis" else 1.6 if pathway == "htc" else 1.0
-            ax.plot(closed_angles, values, color=color, linewidth=linewidth, zorder=4)
+            fill_color = soften_hex(color, weight=0.24 if pathway in {"pyrolysis", "htc"} else 0.72)
+            linewidth = 2.3 if pathway == "htc" else 2.0 if pathway == "pyrolysis" else 1.1
+            alpha = 1.0 if pathway in {"pyrolysis", "htc"} else 0.88
+            ax.plot(closed_angles, values, color=color, linewidth=linewidth, alpha=alpha, zorder=4)
             if pathway in {"pyrolysis", "htc"}:
-                ax.fill(closed_angles, values, color=fill_color, zorder=2)
+                ax.fill(closed_angles, values, color=fill_color, zorder=2, alpha=0.9)
             else:
-                ax.fill(closed_angles, values, color=fill_color, zorder=1, alpha=0.58)
-        ax.fill(closed_angles, [0.12] * len(closed_angles), color="white", zorder=3)
+                ax.fill(closed_angles, values, color=fill_color, zorder=1, alpha=0.48)
+        ax.fill(closed_angles, [0.15] * len(closed_angles), color="white", zorder=3)
+        ax.plot(closed_angles, [0.15] * len(closed_angles), color="#D5E0EC", linewidth=0.8, zorder=3)
         ax.set_ylim(0, 1.0)
         ax.set_yticks([0.25, 0.5, 0.75, 1.0])
         ax.set_yticklabels([])
         ax.set_xticks(angles)
-        ax.set_xticklabels(labels, fontsize=6.6, color="#475569")
-        ax.set_title(scenario_label(scenario_name), fontsize=9.0, pad=14)
+        ax.set_xticklabels(labels, fontsize=6.2, color="#516074")
+        ax.set_title(scenario_label(scenario_name), fontsize=9.3, pad=24, color="#233248")
         add_panel_label(ax, chr(ord("A") + index))
+        dominant = (
+            scenario_frame.sort_values("normalized_value", ascending=False).iloc[0]["pathway_display"]
+            if not scenario_frame.empty
+            else "No signal"
+        )
+        add_badge(
+            ax,
+            0.5,
+            1.08,
+            f"Lead contour: {dominant}",
+            transform=ax.transAxes,
+            ha="center",
+            fontsize=6.1,
+            facecolor="#FFFFFF",
+            edgecolor="#E2EAF2",
+            textcolor="#64748B",
+        )
 
-    fig.suptitle("Supplementary Figure S1. Scenario fingerprint", y=0.99, fontsize=11.5)
+    fig.suptitle("Supplementary Figure S1. Scenario fingerprint", y=0.975, fontsize=12.0, color="#1E293B")
     fig.legend(
         handles=[
             Line2D([0], [0], color=pathway_color("pyrolysis"), linewidth=2.2, label="Pyrolysis"),
@@ -309,30 +330,30 @@ def build_sup_figure_s1_scenario_fingerprint(frame: pd.DataFrame):
             Line2D([0], [0], color=pathway_color("baseline"), linewidth=1.2, label="Baseline"),
         ],
         loc="lower center",
-        bbox_to_anchor=(0.5, -0.01),
+        bbox_to_anchor=(0.5, 0.02),
         ncol=4,
         frameon=False,
         handlelength=1.8,
-        columnspacing=1.2,
+        columnspacing=1.4,
     )
-    add_caption_note(axes[0], "Metric spokes are normalized for cross-metric comparison.")
-    fig.subplots_adjust(top=0.82, bottom=0.18, left=0.04, right=0.98, wspace=0.38)
+    add_caption_note(axes[0], "Normalized spokes reveal pathway signatures without changing metric scales.")
+    fig.subplots_adjust(top=0.77, bottom=0.19, left=0.04, right=0.98, wspace=0.40)
     return fig
 
 
 def build_sup_figure_s2_dominance_evidence_landscape(frame: pd.DataFrame):
     plt = configure_publication_theme()
-    fig, ax = plt.subplots(1, 1, figsize=(9.6, 5.2))
+    fig, ax = plt.subplots(1, 1, figsize=(9.8, 5.5))
     ordered = _prepare_frame(frame).sort_values(["scenario_order", "pathway_order"]).reset_index(drop=True)
 
     add_landscape_zones(ax)
-    narrative_background(ax, facecolor="white")
+    narrative_background(ax, facecolor="#FCFDFE")
     ax.set_title("Supplementary Figure S2. Dominance / evidence landscape", loc="left", pad=10)
 
     zone_labels = [
-        (4.2, 76, "Evidence-limited"),
+        (4.5, 76, "Evidence-limited"),
         (31, 76, "Latent competitor"),
-        (80, 76, "Selected core"),
+        (81, 76, "Selected core"),
     ]
     for x, y, text in zone_labels:
         add_zone_label(ax, x, y, text)
@@ -341,14 +362,15 @@ def build_sup_figure_s2_dominance_evidence_landscape(frame: pd.DataFrame):
         x = float(row["portfolio_share_pct"])
         y = float(row["stress_support_pct"])
         color = pathway_color(row["pathway"])
-        halo_color = soften_hex(color, weight=0.42)
+        halo_color = soften_hex(color, weight=0.45)
         score_size = float(row["score_value"]) * 780.0
-        ax.scatter(x, y, s=score_size * 1.55, facecolors="none", edgecolors=halo_color, linewidths=1.0, zorder=2)
-        ax.scatter(x, y, s=score_size * 0.92, color=soften_hex(color, weight=0.16), edgecolors="white", linewidths=0.7, zorder=3)
+        ax.scatter(x, y, s=score_size * 1.95, color=soften_hex(color, weight=0.76), alpha=0.18, edgecolors="none", zorder=1.8)
+        ax.scatter(x, y, s=score_size * 1.48, facecolors="none", edgecolors=halo_color, linewidths=1.0, zorder=2)
+        ax.scatter(x, y, s=score_size * 0.88, color=soften_hex(color, weight=0.18), edgecolors="white", linewidths=0.7, zorder=3)
         ax.scatter(
             x,
             y,
-            s=42,
+            s=46,
             color=claim_color(row["claim_color_group"]),
             edgecolors="white",
             linewidths=0.6,
@@ -362,13 +384,22 @@ def build_sup_figure_s2_dominance_evidence_landscape(frame: pd.DataFrame):
         .agg({"portfolio_share_pct": "max", "stress_support_pct": "max"})
     )
     for _, row in label_rows.iterrows():
-        ax.text(
-            float(row["portfolio_share_pct"]) + 2.2,
-            float(row["stress_support_pct"]) + 1.8,
-            {"pyrolysis": "Pyrolysis", "htc": "HTC", "ad": "AD"}.get(str(row["pathway"]), str(row["pathway"])),
-            fontsize=8.4,
-            color="#0F172A",
-            zorder=5,
+        pathway_name = str(row["pathway"])
+        x = float(row["portfolio_share_pct"])
+        y = float(row["stress_support_pct"])
+        label = {"pyrolysis": "Pyrolysis", "htc": "HTC", "ad": "AD"}.get(pathway_name, pathway_name)
+        x_shift = 2.2 if pathway_name != "htc" else 2.0
+        y_shift = 1.8 if pathway_name != "ad" else 2.2
+        add_badge(
+            ax,
+            x + x_shift,
+            y + y_shift,
+            label,
+            transform=ax.transData,
+            fontsize=7.3,
+            facecolor="#FFFFFF",
+            edgecolor="#DBE5EF",
+            textcolor="#0F172A",
         )
 
     ax.set_xlim(-2, 108)
@@ -376,18 +407,31 @@ def build_sup_figure_s2_dominance_evidence_landscape(frame: pd.DataFrame):
     ax.set_xlabel("Portfolio dominance (%)")
     ax.set_ylabel("Robustness support (%)")
     style_axis(ax, grid_axis="both")
-    ax.legend(
+    evidence_legend = ax.legend(
         handles=[
             Line2D([0], [0], marker="o", color="none", markerfacecolor=claim_color("planning_ready"), markeredgecolor="none", markersize=6, label="planning-ready"),
             Line2D([0], [0], marker="o", color="none", markerfacecolor=claim_color("comparison_only"), markeredgecolor="none", markersize=6, label="comparison-only"),
             Line2D([0], [0], marker="o", color="none", markerfacecolor="white", markeredgecolor="#64748B", markersize=9, label="score halo"),
         ],
-        loc="upper right",
-        bbox_to_anchor=(0.98, 0.23),
+        loc="upper left",
+        bbox_to_anchor=(1.01, 0.42),
         frameon=False,
         ncol=1,
         handletextpad=0.5,
     )
-    add_caption_note(ax, "Ring size scales with best-case score; marker color preserves evidence tier.")
-    fig.subplots_adjust(top=0.90, bottom=0.16, left=0.10, right=0.97)
+    ax.add_artist(evidence_legend)
+    ax.legend(
+        handles=[
+            Line2D([0], [0], marker="o", color="#64748B", linestyle="none", markersize=5, label="baseline"),
+            Line2D([0], [0], marker="s", color="#64748B", linestyle="none", markersize=5, label="high supply"),
+            Line2D([0], [0], marker="D", color="#64748B", linestyle="none", markersize=5, label="policy"),
+        ],
+        loc="upper left",
+        bbox_to_anchor=(1.01, 0.17),
+        frameon=False,
+        ncol=1,
+        handletextpad=0.5,
+    )
+    add_caption_note(ax, "Halo size tracks best-case score; inner marker preserves evidence tier and scenario identity.")
+    fig.subplots_adjust(top=0.90, bottom=0.16, left=0.10, right=0.83)
     return fig

@@ -2,7 +2,15 @@ from __future__ import annotations
 
 import argparse
 import json
+import sys
 from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[2]
+SRC_DIR = ROOT / "src"
+for candidate in (ROOT, SRC_DIR):
+    candidate_str = str(candidate)
+    if candidate_str not in sys.path:
+        sys.path.insert(0, candidate_str)
 
 from scripts.plot.common import RESULTS_PLOT_DIR, load_planning_visual_bundle
 from scripts.plot.plotting.data_pipeline import build_figure_ready_tables, write_figure_ready_tables

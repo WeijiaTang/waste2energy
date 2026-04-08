@@ -89,3 +89,35 @@ def add_zone_label(ax, x: float, y: float, text: str) -> None:
         },
         zorder=5,
     )
+
+
+def add_badge(
+    ax,
+    x: float,
+    y: float,
+    text: str,
+    *,
+    transform=None,
+    ha: str = "left",
+    fontsize: float = 6.5,
+    facecolor: str = "white",
+    edgecolor: str = "#D9E2EC",
+    textcolor: str = "#475569",
+) -> None:
+    ax.text(
+        x,
+        y,
+        text,
+        transform=transform if transform is not None else ax.transAxes,
+        fontsize=fontsize,
+        ha=ha,
+        va="center",
+        color=textcolor,
+        bbox={
+            "boxstyle": "round,pad=0.24,rounding_size=0.18",
+            "facecolor": facecolor,
+            "edgecolor": edgecolor,
+            "linewidth": 0.7,
+        },
+        zorder=6,
+    )
