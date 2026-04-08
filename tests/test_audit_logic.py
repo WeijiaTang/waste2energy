@@ -700,13 +700,49 @@ def test_manuscript_sync_writes_macros_and_relabels_ad_status(tmp_path):
     pd.DataFrame(
         [
             {"scenario_name": "baseline_region_case", "top_ranked_case_id": "case-1"},
+            {"scenario_name": "high_supply_case", "top_ranked_case_id": "case-2"},
+            {"scenario_name": "policy_support_case", "top_ranked_case_id": "case-3"},
         ]
     ).to_csv(planning_dir / "scenario_summary.csv", index=False)
     pd.DataFrame(
         [
-            {"pathway": "ad", "allocated_feed_share": 0.25},
+            {"scenario_name": "baseline_region_case", "pathway": "htc", "allocated_feed_ton_per_year": 75.0},
+            {"scenario_name": "baseline_region_case", "pathway": "ad", "allocated_feed_ton_per_year": 25.0},
         ]
     ).to_csv(planning_dir / "portfolio_allocations.csv", index=False)
+    pd.DataFrame(
+        [
+            {"scenario_name": "baseline_region_case", "scenario_feed_coverage_ratio": 1.0},
+            {"scenario_name": "high_supply_case", "scenario_feed_coverage_ratio": 0.9176628320631297},
+            {"scenario_name": "policy_support_case", "scenario_feed_coverage_ratio": 1.0},
+        ]
+    ).to_csv(planning_dir / "portfolio_summary.csv", index=False)
+    pd.DataFrame(
+        [
+            {"scenario_name": "baseline_region_case", "pathway": "htc", "portfolio_allocated_feed_share": 1.0, "best_case_score": 1.30},
+            {"scenario_name": "baseline_region_case", "pathway": "pyrolysis", "portfolio_allocated_feed_share": 0.0, "best_case_score": 0.80},
+            {"scenario_name": "baseline_region_case", "pathway": "ad", "portfolio_allocated_feed_share": 0.0, "best_case_score": 0.10},
+            {"scenario_name": "high_supply_case", "pathway": "htc", "portfolio_allocated_feed_share": 1.0, "best_case_score": 1.31},
+            {"scenario_name": "high_supply_case", "pathway": "pyrolysis", "portfolio_allocated_feed_share": 0.0, "best_case_score": 0.79},
+            {"scenario_name": "high_supply_case", "pathway": "ad", "portfolio_allocated_feed_share": 0.0, "best_case_score": 0.08},
+            {"scenario_name": "policy_support_case", "pathway": "htc", "portfolio_allocated_feed_share": 1.0, "best_case_score": 1.32},
+            {"scenario_name": "policy_support_case", "pathway": "pyrolysis", "portfolio_allocated_feed_share": 0.0, "best_case_score": 0.78},
+            {"scenario_name": "policy_support_case", "pathway": "ad", "portfolio_allocated_feed_share": 0.0, "best_case_score": 0.09},
+        ]
+    ).to_csv(planning_dir / "pathway_summary.csv", index=False)
+    pd.DataFrame(
+        [
+            {"scenario_name": "baseline_region_case", "pathway": "htc", "baseline_portfolio_share_pct": 100.0, "max_stress_selection_rate": 100.0},
+            {"scenario_name": "baseline_region_case", "pathway": "pyrolysis", "baseline_portfolio_share_pct": 0.0, "max_stress_selection_rate": 12.5},
+            {"scenario_name": "baseline_region_case", "pathway": "ad", "baseline_portfolio_share_pct": 0.0, "max_stress_selection_rate": 0.0},
+            {"scenario_name": "high_supply_case", "pathway": "htc", "baseline_portfolio_share_pct": 100.0, "max_stress_selection_rate": 100.0},
+            {"scenario_name": "high_supply_case", "pathway": "pyrolysis", "baseline_portfolio_share_pct": 0.0, "max_stress_selection_rate": 12.5},
+            {"scenario_name": "high_supply_case", "pathway": "ad", "baseline_portfolio_share_pct": 0.0, "max_stress_selection_rate": 0.0},
+            {"scenario_name": "policy_support_case", "pathway": "htc", "baseline_portfolio_share_pct": 100.0, "max_stress_selection_rate": 87.5},
+            {"scenario_name": "policy_support_case", "pathway": "pyrolysis", "baseline_portfolio_share_pct": 0.0, "max_stress_selection_rate": 12.5},
+            {"scenario_name": "policy_support_case", "pathway": "ad", "baseline_portfolio_share_pct": 0.0, "max_stress_selection_rate": 0.0},
+        ]
+    ).to_csv(planning_dir / "main_results_table.csv", index=False)
     abstract_path = paper_dir / "00-abstract.tex"
     abstract_path.write_text("This abstract describes an AD-free portfolio.\n", encoding="utf-8")
     macros_path = paper_dir / "99-auto-macros.tex"
@@ -717,6 +753,164 @@ def test_manuscript_sync_writes_macros_and_relabels_ad_status(tmp_path):
         macros_path=macros_path,
     )
 
+    macros_text = macros_path.read_text(encoding="utf-8")
+
     assert result["ad_status_label"] == "AD-limited"
+    assert result["dominant_pathway"] == "htc"
+    assert result["dominance_pattern"] == "uniform"
     assert "AD-limited" in abstract_path.read_text(encoding="utf-8")
-    assert "\\newcommand{\\PlanningADStatus}{AD-limited}" in macros_path.read_text(encoding="utf-8")
+    assert "\\newcommand{\\PlanningDominantPathwayDisplay}{HTC}" in macros_text
+    assert "\\newcommand{\\PlanningDominancePattern}{uniform}" in macros_text
+    assert "\\newcommand{\\PlanningHighSupplyCoveragePct}{91.8\\%}" in macros_text
+    assert "\\newcommand{\\PlanningPyrolysisRole}{stress-sensitive alternative}" in macros_text
+    assert "AD remains a comparison-only pathway." in macros_text
+    assert (
+        "\\newcommand{\\PlanningHighlightsDominanceBullet}{All three main scenarios return an HTC-dominant "
+        "optimized baseline portfolio in the current exported planning runs, while pyrolysis remains a "
+        "stress-sensitive alternative.}"
+    ) in macros_text
+    assert (
+        "\\newcommand{\\PlanningResultsDominanceSentence}{Across the baseline, high-supply, and policy-support "
+        "scenarios, the constrained portfolio is now HTC-dominant in the current exported planning runs.}"
+    ) in macros_text
+    assert "\\newcommand{\\PlanningADStatus}{AD-limited}" in macros_text
+
+
+def test_manuscript_sync_writes_mixed_dominance_sentence_when_scenarios_diverge(tmp_path):
+    planning_dir = tmp_path / "planning_sync_mixed"
+    paper_dir = tmp_path / "paper"
+    planning_dir.mkdir()
+    paper_dir.mkdir()
+    pd.DataFrame(
+        [
+            {"scenario_name": "baseline_region_case", "top_ranked_case_id": "case-1"},
+            {"scenario_name": "high_supply_case", "top_ranked_case_id": "case-2"},
+            {"scenario_name": "policy_support_case", "top_ranked_case_id": "case-3"},
+        ]
+    ).to_csv(planning_dir / "scenario_summary.csv", index=False)
+    pd.DataFrame(
+        [
+            {"scenario_name": "baseline_region_case", "pathway": "htc", "allocated_feed_ton_per_year": 60.0},
+            {"scenario_name": "high_supply_case", "pathway": "pyrolysis", "allocated_feed_ton_per_year": 70.0},
+            {"scenario_name": "policy_support_case", "pathway": "htc", "allocated_feed_ton_per_year": 65.0},
+        ]
+    ).to_csv(planning_dir / "portfolio_allocations.csv", index=False)
+    pd.DataFrame(
+        [
+            {"scenario_name": "high_supply_case", "scenario_feed_coverage_ratio": 0.9},
+        ]
+    ).to_csv(planning_dir / "portfolio_summary.csv", index=False)
+    pd.DataFrame(
+        [
+            {"scenario_name": "baseline_region_case", "pathway": "htc", "portfolio_allocated_feed_share": 1.0},
+            {"scenario_name": "baseline_region_case", "pathway": "pyrolysis", "portfolio_allocated_feed_share": 0.0},
+            {"scenario_name": "high_supply_case", "pathway": "htc", "portfolio_allocated_feed_share": 0.4},
+            {"scenario_name": "high_supply_case", "pathway": "pyrolysis", "portfolio_allocated_feed_share": 0.6},
+            {"scenario_name": "policy_support_case", "pathway": "htc", "portfolio_allocated_feed_share": 1.0},
+            {"scenario_name": "policy_support_case", "pathway": "pyrolysis", "portfolio_allocated_feed_share": 0.0},
+        ]
+    ).to_csv(planning_dir / "pathway_summary.csv", index=False)
+    abstract_path = paper_dir / "00-abstract.tex"
+    abstract_path.write_text("AD-free.\n", encoding="utf-8")
+    macros_path = paper_dir / "99-auto-macros.tex"
+
+    result = sync_planning_summary_to_latex(
+        planning_dir=planning_dir,
+        abstract_path=abstract_path,
+        macros_path=macros_path,
+    )
+
+    macros_text = macros_path.read_text(encoding="utf-8")
+
+    assert result["dominance_pattern"] == "mixed"
+    assert result["dominant_pathway"] == "mixed"
+    assert "\\newcommand{\\PlanningDominantPathwayDisplay}{mixed}" in macros_text
+    assert (
+        "\\newcommand{\\PlanningHighlightsDominanceBullet}{The three main scenarios remain scenario-dependent in "
+        "the current exported planning runs (baseline-region is HTC-dominant; high-supply is "
+        "pyrolysis-dominant; policy-support is HTC-dominant), while pyrolysis remains the supporting baseline "
+        "portfolio pathway.}"
+    ) in macros_text
+    assert (
+        "\\newcommand{\\PlanningResultsDominanceSentence}{Across the baseline, high-supply, and policy-support "
+        "scenarios, the constrained portfolio remains scenario-dependent in the current exported planning runs "
+        "(baseline-region is HTC-dominant; high-supply is pyrolysis-dominant; policy-support is HTC-dominant).}"
+    ) in macros_text
+
+
+def test_manuscript_sync_uses_score_leader_clause_when_pyrolysis_dominates_allocations(tmp_path):
+    planning_dir = tmp_path / "planning_sync_pyrolysis"
+    paper_dir = tmp_path / "paper_pyrolysis"
+    planning_dir.mkdir()
+    paper_dir.mkdir()
+    pd.DataFrame(
+        [
+            {"scenario_name": "baseline_region_case", "top_ranked_case_id": "case-1"},
+            {"scenario_name": "high_supply_case", "top_ranked_case_id": "case-2"},
+            {"scenario_name": "policy_support_case", "top_ranked_case_id": "case-3"},
+        ]
+    ).to_csv(planning_dir / "scenario_summary.csv", index=False)
+    pd.DataFrame(
+        [
+            {"scenario_name": "baseline_region_case", "pathway": "pyrolysis", "allocated_feed_ton_per_year": 87.6},
+            {"scenario_name": "baseline_region_case", "pathway": "htc", "allocated_feed_ton_per_year": 12.4},
+            {"scenario_name": "high_supply_case", "pathway": "pyrolysis", "allocated_feed_ton_per_year": 87.9},
+            {"scenario_name": "high_supply_case", "pathway": "htc", "allocated_feed_ton_per_year": 12.1},
+            {"scenario_name": "policy_support_case", "pathway": "pyrolysis", "allocated_feed_ton_per_year": 100.0},
+        ]
+    ).to_csv(planning_dir / "portfolio_allocations.csv", index=False)
+    pd.DataFrame(
+        [
+            {"scenario_name": "baseline_region_case", "scenario_feed_coverage_ratio": 1.0},
+            {"scenario_name": "high_supply_case", "scenario_feed_coverage_ratio": 0.9176628320631297},
+            {"scenario_name": "policy_support_case", "scenario_feed_coverage_ratio": 1.0},
+        ]
+    ).to_csv(planning_dir / "portfolio_summary.csv", index=False)
+    pd.DataFrame(
+        [
+            {"scenario_name": "baseline_region_case", "pathway": "htc", "portfolio_allocated_feed_share": 0.124, "best_case_score": 1.226},
+            {"scenario_name": "baseline_region_case", "pathway": "pyrolysis", "portfolio_allocated_feed_share": 0.876, "best_case_score": 0.913},
+            {"scenario_name": "baseline_region_case", "pathway": "ad", "portfolio_allocated_feed_share": 0.0, "best_case_score": 0.081},
+            {"scenario_name": "high_supply_case", "pathway": "htc", "portfolio_allocated_feed_share": 0.121, "best_case_score": 1.226},
+            {"scenario_name": "high_supply_case", "pathway": "pyrolysis", "portfolio_allocated_feed_share": 0.879, "best_case_score": 0.913},
+            {"scenario_name": "high_supply_case", "pathway": "ad", "portfolio_allocated_feed_share": 0.0, "best_case_score": 0.080},
+            {"scenario_name": "policy_support_case", "pathway": "htc", "portfolio_allocated_feed_share": 0.0, "best_case_score": 1.227},
+            {"scenario_name": "policy_support_case", "pathway": "pyrolysis", "portfolio_allocated_feed_share": 1.0, "best_case_score": 0.913},
+            {"scenario_name": "policy_support_case", "pathway": "ad", "portfolio_allocated_feed_share": 0.0, "best_case_score": 0.084},
+        ]
+    ).to_csv(planning_dir / "pathway_summary.csv", index=False)
+    pd.DataFrame(
+        [
+            {"scenario_name": "baseline_region_case", "pathway": "htc", "baseline_portfolio_share_pct": 12.4, "max_stress_selection_rate": 75.0},
+            {"scenario_name": "baseline_region_case", "pathway": "pyrolysis", "baseline_portfolio_share_pct": 87.6, "max_stress_selection_rate": 37.5},
+            {"scenario_name": "baseline_region_case", "pathway": "ad", "baseline_portfolio_share_pct": 0.0, "max_stress_selection_rate": 0.0},
+            {"scenario_name": "high_supply_case", "pathway": "htc", "baseline_portfolio_share_pct": 12.1, "max_stress_selection_rate": 75.0},
+            {"scenario_name": "high_supply_case", "pathway": "pyrolysis", "baseline_portfolio_share_pct": 87.9, "max_stress_selection_rate": 37.5},
+            {"scenario_name": "high_supply_case", "pathway": "ad", "baseline_portfolio_share_pct": 0.0, "max_stress_selection_rate": 0.0},
+            {"scenario_name": "policy_support_case", "pathway": "htc", "baseline_portfolio_share_pct": 0.0, "max_stress_selection_rate": 0.0},
+            {"scenario_name": "policy_support_case", "pathway": "pyrolysis", "baseline_portfolio_share_pct": 100.0, "max_stress_selection_rate": 62.5},
+            {"scenario_name": "policy_support_case", "pathway": "ad", "baseline_portfolio_share_pct": 0.0, "max_stress_selection_rate": 0.0},
+        ]
+    ).to_csv(planning_dir / "main_results_table.csv", index=False)
+    abstract_path = paper_dir / "00-abstract.tex"
+    abstract_path.write_text("AD-free.\n", encoding="utf-8")
+    macros_path = paper_dir / "99-auto-macros.tex"
+
+    result = sync_planning_summary_to_latex(
+        planning_dir=planning_dir,
+        abstract_path=abstract_path,
+        macros_path=macros_path,
+    )
+
+    macros_text = macros_path.read_text(encoding="utf-8")
+
+    assert result["dominant_pathway"] == "pyrolysis"
+    assert result["dominance_pattern"] == "uniform"
+    assert "while HTC retains stronger best-case score leadership" in macros_text
+    assert "while pyrolysis remains the supporting baseline portfolio pathway" not in macros_text
+    assert (
+        "\\newcommand{\\PlanningConclusionDominanceSentence}{Pyrolysis carries the leading baseline allocated "
+        "share across the baseline-region, high-supply, and policy-support cases (baseline-region: pyrolysis "
+        "87.6\\%; high-supply: pyrolysis 87.9\\%; policy-support: pyrolysis 100.0\\%), while HTC retains stronger "
+        "case-level score leadership under the current evidence-qualified formulation.}"
+    ) in macros_text

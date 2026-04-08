@@ -3,8 +3,16 @@
 from __future__ import annotations
 
 from pathlib import Path
+import sys
 
 import pytest
+
+ROOT = Path(__file__).resolve().parents[1]
+SRC_DIR = ROOT / "src"
+for candidate in (ROOT, SRC_DIR):
+    candidate_str = str(candidate)
+    if candidate_str not in sys.path:
+        sys.path.insert(0, candidate_str)
 
 from waste2energy.planning.solve import PlanningConfig, run_planning_baseline
 from waste2energy.scenarios.run import run_scenario_robustness_baseline
