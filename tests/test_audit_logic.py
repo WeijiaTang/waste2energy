@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import json
 import warnings
 
 import pandas as pd
 
 from waste2energy.audit import (
     InconsistencyWarning,
+    build_artifact_inventory,
     build_ml_best_result_summary,
     build_ml_claim_flag_table,
     build_ml_refit_provenance_summary,
@@ -181,6 +183,63 @@ def test_operation_claim_flag_marks_missing_hold_plan_reference_as_not_evaluated
     assert pd.isna(td3["reward_improvement_vs_hold_plan_pct"])
     assert pd.isna(td3["reward_ratio_vs_hold_plan"])
     assert "missing_hold_plan_reference" in td3["notes"]
+
+
+def test_artifact_inventory_flags_stale_operation_comparison_outputs(tmp_path):
+    planning_dir = tmp_path / "planning"
+    scenario_dir = tmp_path / "scenario"
+    operation_dir = tmp_path / "operation"
+    for directory in (planning_dir, scenario_dir, operation_dir):
+        directory.mkdir()
+
+    (planning_dir / "main_results_table.csv").write_text("", encoding="utf-8")
+    (planning_dir / "main_results_table_manifest.json").write_text("{}", encoding="utf-8")
+    (planning_dir / "pathway_summary.csv").write_text("", encoding="utf-8")
+    (planning_dir / "portfolio_allocations.csv").write_text("", encoding="utf-8")
+    (scenario_dir / "stress_test_summary.csv").write_text("", encoding="utf-8")
+    (scenario_dir / "decision_stability.csv").write_text("", encoding="utf-8")
+    (scenario_dir / "cross_scenario_stability.csv").write_text("", encoding="utf-8")
+    (scenario_dir / "uncertainty_summary.csv").write_text("", encoding="utf-8")
+
+    (planning_dir / "run_config.json").write_text(
+        json.dumps({"generated_at_utc": "2026-04-08T00:29:16+00:00"}),
+        encoding="utf-8",
+    )
+    (scenario_dir / "run_config.json").write_text(
+        json.dumps({"generated_at_utc": "2026-04-08T00:29:25+00:00"}),
+        encoding="utf-8",
+    )
+    (operation_dir / "run_config.json").write_text(
+        json.dumps({"generated_at_utc": "2026-04-07T08:35:10+00:00"}),
+        encoding="utf-8",
+    )
+    for file_name in [
+        "baseline_policy_summary.csv",
+        "baseline_rollout_steps.csv",
+        "policy_behavior_comparison.csv",
+        "rl_vs_baseline_comparison.csv",
+        "sac_training_summary.csv",
+        "sac_evaluation_rollouts.csv",
+        "sac_evaluation_episode_summary.csv",
+        "sac_seed_aggregate_summary.csv",
+        "td3_training_summary.csv",
+        "td3_evaluation_rollouts.csv",
+        "td3_evaluation_episode_summary.csv",
+        "td3_seed_aggregate_summary.csv",
+    ]:
+        (operation_dir / file_name).write_text("", encoding="utf-8")
+
+    inventory = build_artifact_inventory(
+        summary_paths={"strict_group": tmp_path / "strict_group.csv"},
+        operation_dir=operation_dir,
+        planning_dir=planning_dir,
+        scenario_dir=scenario_dir,
+    )
+
+    operation_rows = inventory[inventory["artifact_group"] == "operation_comparison"]
+    assert not operation_rows.empty
+    assert set(operation_rows["freshness_status"]) == {"stale"}
+    assert operation_rows["freshness_note"].str.contains("should be regenerated").all()
 
 
 def test_pathway_reliability_summary_adds_htc_restriction():

@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import json
+
 import pandas as pd
 import pytest
 
 from waste2energy.operation.baselines import run_baseline_policies
+from waste2energy.operation.artifacts import write_operation_outputs
 from waste2energy.operation.comparison import build_baseline_policy_summary, build_comparison_table
 from waste2energy.operation import inputs as operation_inputs
 from waste2energy.operation.inputs import OperationInputBundle, build_operation_environment_specs
@@ -222,3 +225,25 @@ def test_uncertainty_summary_preserves_missing_ratio_when_mean_is_zero():
     assert pd.isna(summary.loc[0, "energy_range_ratio"])
     assert pd.isna(summary.loc[0, "coverage_range_ratio"])
     assert pd.isna(summary.loc[0, "dominant_selection_rate"])
+
+
+def test_write_operation_outputs_records_source_manifest_timestamps(tmp_path, workflow_dirs):
+    specs = build_operation_environment_specs(
+        planning_dir=workflow_dirs["planning_dir"],
+        scenario_dir=workflow_dirs["scenario_dir"],
+    )
+    rollout_steps, rollout_summary = run_baseline_policies(specs, horizon_steps=4)
+
+    outputs = write_operation_outputs(
+        environment_specs=specs,
+        rollout_steps=rollout_steps,
+        rollout_summary=rollout_summary,
+        output_dir=str(tmp_path / "operation_baseline"),
+        planning_run_config={"generated_at_utc": "2026-04-08T00:29:16+00:00"},
+        scenario_run_config={"generated_at_utc": "2026-04-08T00:29:25+00:00"},
+    )
+    run_config = json.loads((tmp_path / "operation_baseline" / "run_config.json").read_text(encoding="utf-8"))
+
+    assert outputs["run_config"] == str(tmp_path / "operation_baseline" / "run_config.json")
+    assert run_config["source_planning_generated_at_utc"] == "2026-04-08T00:29:16+00:00"
+    assert run_config["source_scenario_generated_at_utc"] == "2026-04-08T00:29:25+00:00"
