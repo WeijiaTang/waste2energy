@@ -7,7 +7,7 @@ baseline_region_case,1,Baseline region,htc,1,HTC,True,planning_ready,best_case_e
 baseline_region_case,1,Baseline region,htc,1,HTC,True,planning_ready,score_gap_to_scenario_best_pct,Score gap,5,0.0,0.92
 baseline_region_case,1,Baseline region,pyrolysis,2,Pyrolysis,True,planning_ready,best_case_score_index,Score,0,0.913,0.717921
 baseline_region_case,1,Baseline region,pyrolysis,2,Pyrolysis,True,planning_ready,baseline_portfolio_share_pct,Share,1,87.6,0.82328
-baseline_region_case,1,Baseline region,pyrolysis,2,Pyrolysis,True,planning_ready,max_stress_selection_rate,Support,2,50.0,0.66
+baseline_region_case,1,Baseline region,pyrolysis,2,Pyrolysis,True,planning_ready,max_stress_selection_rate,Support,2,37.5,0.53
 baseline_region_case,1,Baseline region,pyrolysis,2,Pyrolysis,True,planning_ready,best_case_energy_pj_per_year,Energy,3,9.65,0.791348
 baseline_region_case,1,Baseline region,pyrolysis,2,Pyrolysis,True,planning_ready,best_case_environment_ktco2e_per_year,Environment,4,214.8,0.619656
 baseline_region_case,1,Baseline region,pyrolysis,2,Pyrolysis,True,planning_ready,score_gap_to_scenario_best_pct,Score gap,5,25.5,0.718684
