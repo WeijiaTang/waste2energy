@@ -7,6 +7,7 @@ import json
 import pandas as pd
 import pytest
 
+from waste2energy.operation import cli as operation_cli
 from waste2energy.operation.baselines import run_baseline_policies
 from waste2energy.operation.artifacts import write_operation_outputs
 from waste2energy.operation.comparison import build_baseline_policy_summary, build_comparison_table
@@ -247,3 +248,72 @@ def test_write_operation_outputs_records_source_manifest_timestamps(tmp_path, wo
     assert outputs["run_config"] == str(tmp_path / "operation_baseline" / "run_config.json")
     assert run_config["source_planning_generated_at_utc"] == "2026-04-08T00:29:16+00:00"
     assert run_config["source_scenario_generated_at_utc"] == "2026-04-08T00:29:25+00:00"
+
+
+def test_load_or_train_rl_artifacts_reuses_fresh_cached_outputs(tmp_path, monkeypatch):
+    operation_root = tmp_path / "operation"
+    rl_dir = operation_root / "rl" / "sac"
+    rl_dir.mkdir(parents=True)
+
+    training_summary = pd.DataFrame([{"scenario_name": "baseline_region_case", "algorithm": "sac", "seed": 42}])
+    evaluation_rollouts = pd.DataFrame([{"scenario_name": "baseline_region_case", "algorithm": "sac", "seed": 42}])
+    evaluation_episode_summary = pd.DataFrame([{"scenario_name": "baseline_region_case", "algorithm": "sac", "seed": 42}])
+    seed_aggregate_summary = pd.DataFrame(
+        [{"scenario_name": "baseline_region_case", "algorithm": "sac", "seed_count": 1}]
+    )
+    policy_behavior_summary = pd.DataFrame(
+        [{"scenario_name": "baseline_region_case", "method_name": "sac", "method_type": "rl_agent"}]
+    )
+    training_summary.to_csv(rl_dir / "training_summary.csv", index=False)
+    evaluation_rollouts.to_csv(rl_dir / "evaluation_rollouts.csv", index=False)
+    evaluation_episode_summary.to_csv(rl_dir / "evaluation_episode_summary.csv", index=False)
+    seed_aggregate_summary.to_csv(rl_dir / "seed_aggregate_summary.csv", index=False)
+    policy_behavior_summary.to_csv(rl_dir / "policy_behavior_summary.csv", index=False)
+    (rl_dir / "run_config.json").write_text(
+        json.dumps(
+            {
+                "generated_at_utc": "2026-04-08T01:00:00+00:00",
+                "source_planning_generated_at_utc": "2026-04-08T00:29:16+00:00",
+                "source_scenario_generated_at_utc": "2026-04-08T00:29:25+00:00",
+                "total_timesteps": 512,
+                "evaluation_episodes": 5,
+                "horizon_steps": 8760,
+                "seeds": [42],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(operation_cli, "OPERATION_OUTPUTS_DIR", operation_root)
+    monkeypatch.setattr(
+        operation_cli,
+        "train_rl_agents",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("train_rl_agents should not be called")),
+    )
+
+    bundle = OperationInputBundle(
+        planning_portfolio_allocations=pd.DataFrame(),
+        planning_constraints=pd.DataFrame(),
+        scenario_decision_stability=pd.DataFrame(),
+        scenario_uncertainty_summary=pd.DataFrame(),
+        scenario_cross_stability=pd.DataFrame(),
+        planning_run_config={"generated_at_utc": "2026-04-08T00:29:16+00:00"},
+        scenario_run_config={"generated_at_utc": "2026-04-08T00:29:25+00:00"},
+    )
+
+    outputs = operation_cli._load_or_train_rl_artifacts(
+        environment_specs=pd.DataFrame(),
+        input_bundle=bundle,
+        algorithm="sac",
+        total_timesteps=512,
+        seeds=[42],
+        horizon_steps=8760,
+        evaluation_episodes=5,
+        force_retrain=False,
+    )
+
+    assert outputs[0].equals(training_summary)
+    assert outputs[1].equals(evaluation_rollouts)
+    assert outputs[2].equals(evaluation_episode_summary)
+    assert outputs[3].equals(seed_aggregate_summary)
+    assert outputs[4].equals(policy_behavior_summary)

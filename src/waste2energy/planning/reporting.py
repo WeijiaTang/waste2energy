@@ -1,3 +1,5 @@
+# Ref: docs/spec/task.md (Task-ID: WTE-SPEC-2026-04-07-PLANNING-REFINE)
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -7,6 +9,7 @@ import pandas as pd
 
 from ..common import build_run_manifest, write_json
 from ..config import FIGURES_TABLES_DIR, MODEL_READY_DIR, PLANNING_OUTPUTS_DIR, SCENARIO_OUTPUTS_DIR
+from .confidence import build_recommendation_confidence_summary
 
 
 def build_main_results_table(
@@ -14,12 +17,14 @@ def build_main_results_table(
     planning_dir: str | Path | None = None,
     scenario_dir: str | Path | None = None,
 ) -> tuple[pd.DataFrame, dict[str, object]]:
-    planning_root = Path(planning_dir) if planning_dir else PLANNING_OUTPUTS_DIR / "baseline"
-    scenario_root = Path(scenario_dir) if scenario_dir else SCENARIO_OUTPUTS_DIR / "baseline"
+    planning_root = Path(planning_dir) if planning_dir else PLANNING_OUTPUTS_DIR
+    scenario_root = Path(scenario_dir) if scenario_dir else SCENARIO_OUTPUTS_DIR
 
     pathway_summary = pd.read_csv(planning_root / "pathway_summary.csv")
     scored_cases = pd.read_csv(planning_root / "scored_cases.csv")
     decision_stability = pd.read_csv(scenario_root / "decision_stability.csv")
+    uncertainty_summary = _read_optional_csv(scenario_root / "uncertainty_summary.csv")
+    optimization_diagnostics = _read_optional_csv(planning_root / "optimization_diagnostics.csv")
     readiness_summary = pd.read_csv(MODEL_READY_DIR / "optimization_pathway_readiness_summary.csv")
 
     scenario_best = (
@@ -76,11 +81,73 @@ def build_main_results_table(
         on=["scenario_name", "pathway"],
         how="left",
     )
+    support_summary = _build_support_summary(scored_cases)
+    if not support_summary.empty:
+        pathway_summary = pathway_summary.merge(
+            support_summary,
+            on=["scenario_name", "pathway"],
+            how="left",
+        )
+    uncertainty_merge_columns = [
+        "scenario_name",
+        "uncertainty_mode_case_switch_count",
+        "uncertainty_mode_pathway_switch_count",
+        "max_interval_changes_case_vs_baseline",
+        "combined_only_changes_case_vs_baseline",
+        "max_interval_changes_pathway_vs_baseline",
+        "combined_only_changes_pathway_vs_baseline",
+    ]
+    if not uncertainty_summary.empty:
+        available_uncertainty_columns = [
+            column for column in uncertainty_merge_columns if column in uncertainty_summary.columns
+        ]
+        if available_uncertainty_columns:
+            pathway_summary = pathway_summary.merge(
+                uncertainty_summary[available_uncertainty_columns].drop_duplicates(subset=["scenario_name"]),
+                on="scenario_name",
+                how="left",
+            )
+    diagnostics_merge_columns = [
+        "scenario_name",
+        "active_uncertainty_penalty_mode",
+        "interval_mean_top_ranked_case_id",
+        "max_interval_top_ranked_case_id",
+        "combined_only_top_ranked_case_id",
+        "interval_mean_top_ranked_pathway",
+        "max_interval_top_ranked_pathway",
+        "combined_only_top_ranked_pathway",
+        "uncertainty_mode_case_map",
+        "uncertainty_mode_pathway_map",
+        "uncertainty_mode_ranking_summary",
+    ]
+    if not optimization_diagnostics.empty:
+        available_diagnostics_columns = [
+            column for column in diagnostics_merge_columns if column in optimization_diagnostics.columns
+        ]
+        if available_diagnostics_columns:
+            pathway_summary = pathway_summary.merge(
+                optimization_diagnostics[available_diagnostics_columns].drop_duplicates(subset=["scenario_name"]),
+                on="scenario_name",
+                how="left",
+            )
     pathway_summary = pathway_summary.merge(
         readiness_summary[["pathway", "process_basis", "performance_basis", "claim_boundary"]],
         on="pathway",
         how="left",
     )
+    for column, default in {
+        "uncertainty_mode_case_map": "",
+        "uncertainty_mode_pathway_map": "",
+        "uncertainty_mode_ranking_summary": "",
+        "best_case_uncertainty_rank_span": pd.NA,
+        "best_case_uncertainty_best_mode": pd.NA,
+        "best_case_uncertainty_worst_mode": pd.NA,
+        "best_case_rank_interval_mean": pd.NA,
+        "best_case_rank_max_interval": pd.NA,
+        "best_case_rank_combined_only": pd.NA,
+    }.items():
+        if column not in pathway_summary.columns:
+            pathway_summary[column] = default
 
     pathway_summary["stress_test_tags"] = pathway_summary["stress_test_tags"].fillna("none")
     pathway_summary = _require_numeric_columns(
@@ -119,6 +186,16 @@ def build_main_results_table(
     pathway_summary["process_basis_label"] = pathway_summary.apply(_format_process_basis_label, axis=1)
     pathway_summary["performance_basis_label"] = pathway_summary.apply(_format_performance_basis_label, axis=1)
     pathway_summary["claim_boundary_label"] = pathway_summary.apply(_format_claim_boundary_label, axis=1)
+    pathway_summary["uncertainty_mode_sensitivity"] = pathway_summary.apply(
+        _format_uncertainty_mode_sensitivity,
+        axis=1,
+    )
+    pathway_summary["best_case_uq_ranking_note"] = pathway_summary.apply(_build_best_case_uq_ranking_note, axis=1)
+    pathway_summary["best_case_uq_rank_profile"] = pathway_summary.apply(_build_best_case_uq_rank_profile, axis=1)
+    pathway_summary["uq_mode_comparison_sentence"] = pathway_summary.apply(
+        _build_uq_mode_comparison_sentence,
+        axis=1,
+    )
     pathway_summary["results_sentence"] = pathway_summary.apply(_build_results_sentence, axis=1)
 
     final_table = pathway_summary[
@@ -137,9 +214,29 @@ def build_main_results_table(
             "baseline_portfolio_share_pct",
             "max_stress_selection_rate",
             "stress_test_tags",
+            "uncertainty_stress_support",
+            "max_uncertainty_stress_selection_rate",
+            "selected_under_max_interval_uncertainty",
+            "selected_under_combined_only_uncertainty",
+            "uncertainty_mode_sensitivity",
+            "uncertainty_mode_case_switch_count",
+            "uncertainty_mode_pathway_switch_count",
+            "uncertainty_mode_case_map",
+            "uncertainty_mode_pathway_map",
+            "uncertainty_mode_ranking_summary",
+            "best_case_uncertainty_rank_span",
+            "best_case_uncertainty_best_mode",
+            "best_case_uncertainty_worst_mode",
+            "best_case_rank_interval_mean",
+            "best_case_rank_max_interval",
+            "best_case_rank_combined_only",
+            "best_case_uq_ranking_note",
+            "best_case_uq_rank_profile",
+            "uq_mode_comparison_sentence",
             "process_basis_label",
             "performance_basis_label",
             "claim_boundary_label",
+            "Surrogate_Support_Level",
             "results_sentence",
         ]
     ].copy()
@@ -152,9 +249,12 @@ def build_main_results_table(
             "selected_in_baseline_portfolio": "selected_in_baseline_portfolio",
             "max_stress_selection_rate": "max_stress_selection_rate",
             "stress_test_tags": "stress_tests_supporting_pathway",
+            "uncertainty_stress_support": "uq_stress_support",
+            "max_uncertainty_stress_selection_rate": "max_uq_stress_selection_rate",
             "process_basis_label": "process_basis",
             "performance_basis_label": "performance_basis",
             "claim_boundary_label": "claim_boundary",
+            "Surrogate_Support_Level": "surrogate_support_level",
         }
     )
     final_table["score_gap_to_scenario_best_pct"] = (
@@ -171,6 +271,32 @@ def build_main_results_table(
     ].round(1)
     final_table["baseline_portfolio_share_pct"] = final_table["baseline_portfolio_share_pct"].round(1)
     final_table["max_stress_selection_rate"] = final_table["max_stress_selection_rate"].round(1)
+    final_table["max_uq_stress_selection_rate"] = (
+        pd.to_numeric(final_table["max_uq_stress_selection_rate"], errors="coerce") * 100.0
+    ).round(1)
+    for column in [
+        "best_case_uncertainty_rank_span",
+        "best_case_rank_interval_mean",
+        "best_case_rank_max_interval",
+        "best_case_rank_combined_only",
+    ]:
+        if column in final_table.columns:
+            final_table[column] = pd.to_numeric(final_table[column], errors="coerce").round(0)
+    confidence_summary = build_recommendation_confidence_summary(final_table)
+    if not confidence_summary.empty:
+        final_table = final_table.merge(
+            confidence_summary[
+                [
+                    "scenario_name",
+                    "pathway",
+                    "recommendation_confidence_score",
+                    "recommendation_confidence_tier",
+                    "recommendation_confidence_note",
+                ]
+            ],
+            on=["scenario_name", "pathway"],
+            how="left",
+        )
     final_table = final_table.sort_values(
         ["scenario_name", "selected_in_baseline_portfolio", "best_case_score_index"],
         ascending=[True, False, False],
@@ -183,6 +309,8 @@ def build_main_results_table(
             str(planning_root / "pathway_summary.csv"),
             str(planning_root / "scored_cases.csv"),
             str(scenario_root / "decision_stability.csv"),
+            str(scenario_root / "uncertainty_summary.csv"),
+            str(planning_root / "optimization_diagnostics.csv"),
             str(MODEL_READY_DIR / "optimization_pathway_readiness_summary.csv"),
         ],
         row_count=int(len(final_table)),
@@ -199,16 +327,18 @@ def write_main_results_table(
     planning_dir: str | Path | None = None,
     figures_dir: str | Path | None = None,
 ) -> dict[str, str]:
-    planning_root = Path(planning_dir) if planning_dir else PLANNING_OUTPUTS_DIR / "baseline"
+    planning_root = Path(planning_dir) if planning_dir else PLANNING_OUTPUTS_DIR
     figures_root = Path(figures_dir) if figures_dir else FIGURES_TABLES_DIR
     planning_root.mkdir(parents=True, exist_ok=True)
     figures_root.mkdir(parents=True, exist_ok=True)
     visualization_bundle = build_main_results_visualization_bundle(table)
+    confidence_summary = build_recommendation_confidence_summary(table)
     visualization_manifest = build_run_manifest(
         based_on_table="main_results_table.csv",
         row_count=int(len(table)),
         metric_long_row_count=int(len(visualization_bundle["metric_long"])),
         annotation_row_count=int(len(visualization_bundle["annotations"])),
+        recommendation_confidence_row_count=int(len(confidence_summary)),
         figure_specs=visualization_bundle["figure_specs"],
         purpose="Visualization-ready Paper 1 planning bundle for manuscript-grade plotting.",
     )
@@ -223,6 +353,8 @@ def write_main_results_table(
         "figures_visual_metrics_long": figures_root / "paper1_planning_visual_metrics_long.csv",
         "figures_visual_annotations": figures_root / "paper1_planning_visual_annotations.csv",
         "figures_visual_manifest": figures_root / "paper1_planning_visual_manifest.json",
+        "planning_recommendation_confidence_summary": planning_root / "recommendation_confidence_summary.csv",
+        "figures_recommendation_confidence_summary": figures_root / "paper1_recommendation_confidence_summary.csv",
     }
     table.to_csv(outputs["planning_results_table"], index=False)
     table.to_csv(outputs["figures_results_table"], index=False)
@@ -230,6 +362,8 @@ def write_main_results_table(
     visualization_bundle["annotations"].to_csv(outputs["planning_visual_annotations"], index=False)
     visualization_bundle["metric_long"].to_csv(outputs["figures_visual_metrics_long"], index=False)
     visualization_bundle["annotations"].to_csv(outputs["figures_visual_annotations"], index=False)
+    confidence_summary.to_csv(outputs["planning_recommendation_confidence_summary"], index=False)
+    confidence_summary.to_csv(outputs["figures_recommendation_confidence_summary"], index=False)
     write_json(outputs["planning_results_manifest"], manifest)
     write_json(outputs["planning_visual_manifest"], visualization_manifest)
     write_json(outputs["figures_visual_manifest"], visualization_manifest)
@@ -308,6 +442,23 @@ def build_main_results_visualization_bundle(table: pd.DataFrame) -> dict[str, ob
             "selected_in_baseline_portfolio",
             "selected_flag",
             "stress_tests_supporting_pathway",
+            "uq_stress_support",
+            "max_uq_stress_selection_rate",
+            "uncertainty_mode_sensitivity",
+            "uncertainty_mode_case_switch_count",
+            "uncertainty_mode_pathway_switch_count",
+            "uncertainty_mode_case_map",
+            "uncertainty_mode_pathway_map",
+            "uncertainty_mode_ranking_summary",
+            "best_case_uncertainty_rank_span",
+            "best_case_uncertainty_best_mode",
+            "best_case_uncertainty_worst_mode",
+            "best_case_rank_interval_mean",
+            "best_case_rank_max_interval",
+            "best_case_rank_combined_only",
+            "best_case_uq_ranking_note",
+            "best_case_uq_rank_profile",
+            "uq_mode_comparison_sentence",
             "process_basis",
             "performance_basis",
             "claim_boundary",
@@ -372,9 +523,13 @@ def _aggregate_pathway_stress(frame: pd.DataFrame) -> pd.DataFrame:
                 "scenario_name",
                 "pathway",
                 "max_stress_selection_rate",
+                "max_uncertainty_stress_selection_rate",
                 "stable_case_count",
                 "consensus_case_count",
                 "stress_test_tags",
+                "uncertainty_stress_support",
+                "selected_under_max_interval_uncertainty",
+                "selected_under_combined_only_uncertainty",
             ]
         )
 
@@ -391,12 +546,51 @@ def _aggregate_pathway_stress(frame: pd.DataFrame) -> pd.DataFrame:
                 "max_stress_selection_rate": float(
                     pd.to_numeric(subset["selection_rate"], errors="coerce").max()
                 ),
+                "max_uncertainty_stress_selection_rate": float(
+                    pd.to_numeric(
+                        subset.get(
+                            "uncertainty_stress_selection_rate",
+                            pd.Series([0.0] * len(subset), index=subset.index),
+                        ),
+                        errors="coerce",
+                    ).fillna(0.0).max()
+                ),
                 "stable_case_count": int(subset["stable_under_majority_rule"].fillna(False).astype(bool).sum()),
                 "consensus_case_count": int(subset["stable_under_consensus_rule"].fillna(False).astype(bool).sum()),
                 "stress_test_tags": "|".join(sorted(tags)) if tags else "none",
+                "uncertainty_stress_support": _format_uncertainty_stress_support(subset),
+                "selected_under_max_interval_uncertainty": bool(
+                    subset.get(
+                        "selected_under_max_interval_uncertainty",
+                        pd.Series([False] * len(subset), index=subset.index),
+                    ).fillna(False).astype(bool).any()
+                ),
+                "selected_under_combined_only_uncertainty": bool(
+                    subset.get(
+                        "selected_under_combined_only_uncertainty",
+                        pd.Series([False] * len(subset), index=subset.index),
+                    ).fillna(False).astype(bool).any()
+                ),
             }
         )
     return pd.DataFrame(rows)
+
+
+def _build_support_summary(scored_cases: pd.DataFrame) -> pd.DataFrame:
+    if scored_cases.empty or "surrogate_support_level" not in scored_cases.columns:
+        return pd.DataFrame(columns=["scenario_name", "pathway", "Surrogate_Support_Level"])
+    working = scored_cases.copy()
+    working["surrogate_support_level"] = working["surrogate_support_level"].fillna("unknown").astype(str)
+    return (
+        working.groupby(["scenario_name", "pathway"], dropna=False)
+        .agg(
+            Surrogate_Support_Level=(
+                "surrogate_support_level",
+                lambda series: _mode_or_default(series, "unknown"),
+            )
+        )
+        .reset_index()
+    )
 
 
 def _format_operating_window(row: pd.Series) -> str:
@@ -455,22 +649,38 @@ def _build_results_sentence(row: pd.Series) -> str:
     stress_tags = str(row.get("stress_test_tags", "none"))
 
     if label == "dominant_baseline_portfolio":
-        return f"In {scenario}, {pathway} is the dominant baseline portfolio pathway with full allocated-share coverage."
+        base = f"In {scenario}, {pathway} is the dominant baseline portfolio pathway with full allocated-share coverage."
+        return _append_uncertainty_sentence_clause(base, row)
     if label == "supporting_baseline_portfolio":
         if pd.isna(share):
-            return f"In {scenario}, {pathway} enters the baseline portfolio, but the allocated-share value is not available in the current outputs."
-        return f"In {scenario}, {pathway} enters the baseline portfolio with {share * 100.0:.1f}% allocated share."
+            base = f"In {scenario}, {pathway} enters the baseline portfolio, but the allocated-share value is not available in the current outputs."
+            return _append_uncertainty_sentence_clause(base, row)
+        base = f"In {scenario}, {pathway} enters the baseline portfolio with {share * 100.0:.1f}% allocated share."
+        return _append_uncertainty_sentence_clause(base, row)
     if label == "environment_sensitive_alternative":
-        return f"In {scenario}, {pathway} is not selected in the baseline portfolio but enters under environment-priority stress."
+        base = f"In {scenario}, {pathway} is not selected in the baseline portfolio but enters under environment-priority stress."
+        return _append_uncertainty_sentence_clause(base, row)
     if label == "stress_sensitive_alternative":
-        return f"In {scenario}, {pathway} is a stress-sensitive alternative supported by {stress_tags}."
+        base = f"In {scenario}, {pathway} is a stress-sensitive alternative supported by {stress_tags}."
+        return _append_uncertainty_sentence_clause(base, row)
     if label == "competitive_unselected_alternative":
-        return f"In {scenario}, {pathway} remains competitive in score but is not selected in the baseline portfolio."
+        base = f"In {scenario}, {pathway} remains competitive in score but is not selected in the baseline portfolio."
+        return _append_uncertainty_sentence_clause(base, row)
     if label == "baseline_comparison_anchor":
-        return f"In {scenario}, baseline is retained as the comparison anchor rather than as a selected optimization pathway."
+        base = f"In {scenario}, baseline is retained as the comparison anchor rather than as a selected optimization pathway."
+        return _append_uncertainty_sentence_clause(base, row)
     if label == "not_evaluated":
-        return f"In {scenario}, {pathway} remains available for comparison, but the current outputs do not fully quantify its manuscript-facing planning status."
-    return f"In {scenario}, {pathway} acts as a comparison-only pathway under the current planning evidence."
+        base = f"In {scenario}, {pathway} remains available for comparison, but the current outputs do not fully quantify its manuscript-facing planning status."
+        return _append_uncertainty_sentence_clause(base, row)
+    base = f"In {scenario}, {pathway} acts as a comparison-only pathway under the current planning evidence."
+    return _append_uncertainty_sentence_clause(base, row)
+
+
+def _append_uncertainty_sentence_clause(base: str, row: pd.Series) -> str:
+    note = str(row.get("best_case_uq_ranking_note", "")).strip()
+    if not note:
+        return base
+    return f"{base} {note}"
 
 
 def _format_writing_label(label: object) -> str:
@@ -551,6 +761,114 @@ def _format_metric_label(value: float, unit: str) -> str:
     return str(value)
 
 
+def _read_optional_csv(path: Path) -> pd.DataFrame:
+    if not path.exists():
+        return pd.DataFrame()
+    return pd.read_csv(path)
+
+
+def _format_uncertainty_stress_support(frame: pd.DataFrame) -> str:
+    tags: list[str] = []
+    max_interval = frame.get(
+        "selected_under_max_interval_uncertainty",
+        pd.Series([False] * len(frame), index=frame.index),
+    ).fillna(False).astype(bool)
+    combined_only = frame.get(
+        "selected_under_combined_only_uncertainty",
+        pd.Series([False] * len(frame), index=frame.index),
+    ).fillna(False).astype(bool)
+    if max_interval.any():
+        tags.append("max_interval")
+    if combined_only.any():
+        tags.append("combined_only")
+    return "|".join(tags) if tags else "none"
+
+
+def _format_uncertainty_mode_sensitivity(row: pd.Series) -> str:
+    case_switch_count = _optional_float(row.get("uncertainty_mode_case_switch_count"))
+    pathway_switch_count = _optional_float(row.get("uncertainty_mode_pathway_switch_count"))
+    if pd.isna(case_switch_count) or pd.isna(pathway_switch_count):
+        return "not evaluated"
+    if pathway_switch_count > 1.0:
+        return "pathway-sensitive"
+    if case_switch_count > 1.0:
+        return "case-sensitive, pathway-stable"
+    return "stable across tested UQ modes"
+
+
+def _build_best_case_uq_ranking_note(row: pd.Series) -> str:
+    best_case_id = str(row.get("best_case_id", "") or "")
+    if not best_case_id:
+        return ""
+    modes: list[str] = []
+    if best_case_id and best_case_id == str(row.get("max_interval_top_ranked_case_id", "") or ""):
+        modes.append("max-interval")
+    if best_case_id and best_case_id == str(row.get("combined_only_top_ranked_case_id", "") or ""):
+        modes.append("combined-only")
+    baseline_case_id = str(row.get("interval_mean_top_ranked_case_id", "") or "")
+    case_switch_count = _optional_float(row.get("uncertainty_mode_case_switch_count"))
+    if best_case_id == baseline_case_id:
+        if modes == ["max-interval", "combined-only"] or modes == ["combined-only", "max-interval"]:
+            return "The same case remains top-ranked under all tested uncertainty definitions."
+        if pd.notna(case_switch_count) and case_switch_count > 1.0:
+            sensitivity = str(row.get("uncertainty_mode_sensitivity", "case-sensitive, pathway-stable"))
+            return f"The interval-mean top case shifts under at least one alternative uncertainty definition, but the scenario remains {sensitivity}."
+        return "The same case remains top-ranked under all tested uncertainty definitions."
+    if modes:
+        return f"This case becomes top-ranked only under {' and '.join(modes)} uncertainty aggregation."
+    return "This case is not the interval-mean top-ranked candidate."
+
+
+def _build_best_case_uq_rank_profile(row: pd.Series) -> str:
+    parts: list[str] = []
+    for column, label in [
+        ("best_case_rank_interval_mean", "interval-mean"),
+        ("best_case_rank_max_interval", "max-interval"),
+        ("best_case_rank_combined_only", "combined-only"),
+    ]:
+        rank_value = _optional_float(row.get(column))
+        if pd.notna(rank_value):
+            parts.append(f"{label} #{int(float(rank_value))}")
+    return "; ".join(parts) if parts else "not available"
+
+
+def _build_uq_mode_comparison_sentence(row: pd.Series) -> str:
+    profile = str(row.get("best_case_uq_rank_profile", "")).strip()
+    sensitivity = str(row.get("uncertainty_mode_sensitivity", "")).strip()
+    if not profile or profile == "not available":
+        return ""
+
+    pathway = str(row.get("pathway", "pathway"))
+    clauses = [f"Across tested UQ modes, the best {pathway} case ranks as {profile}."]
+    rank_span = _optional_float(row.get("best_case_uncertainty_rank_span"))
+    if pd.notna(rank_span):
+        clauses.append(f"The within-pathway rank span is {int(float(rank_span))}.")
+    best_mode = _uq_mode_label(row.get("best_case_uncertainty_best_mode"))
+    worst_mode = _uq_mode_label(row.get("best_case_uncertainty_worst_mode"))
+    if best_mode != "not available" and worst_mode != "not available":
+        if best_mode == worst_mode:
+            clauses.append(f"It performs most strongly under {best_mode} scoring.")
+        else:
+            clauses.append(
+                f"It performs best under {best_mode} scoring and worst under {worst_mode} scoring."
+            )
+    if sensitivity and sensitivity != "not evaluated":
+        clauses.append(f"At the scenario level, the recommendation is {sensitivity}.")
+    return " ".join(clauses)
+
+
+def _uq_mode_label(mode: object) -> str:
+    mapping = {
+        "interval_mean": "interval-mean",
+        "max_interval": "max-interval",
+        "combined_only": "combined-only",
+    }
+    value = str(mode or "").strip()
+    if not value:
+        return "not available"
+    return mapping.get(value, value.replace("_", "-"))
+
+
 def _split_stress_test_tags(raw_value: object) -> set[str]:
     return {
         part.strip()
@@ -584,3 +902,13 @@ def _require_numeric_columns(
             )
         validated[column] = values
     return validated
+
+
+def _mode_or_default(series: pd.Series, default: str) -> str:
+    values = series.dropna().astype(str)
+    if values.empty:
+        return default
+    modes = values.mode()
+    if modes.empty:
+        return default
+    return str(modes.iloc[0])

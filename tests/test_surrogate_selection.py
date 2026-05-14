@@ -117,6 +117,58 @@ def test_selected_models_manifest_contains_one_selected_row_per_dataset_target()
     assert manifest.loc[0, "selection_status"] == "selected_on_validation"
 
 
+def test_ranked_suite_summary_prioritizes_catboost_for_htc_datasets():
+    ranked = build_ranked_suite_summary_frame(
+        [
+            {
+                "model_key": "catboost",
+                "dataset_key": "htc_direct",
+                "target_column": "product_char_hhv_mj_per_kg",
+                "split_strategy": "leave_study_out",
+                "feature_count": 10,
+                "train_rows": 100,
+                "validation_rows": 20,
+                "test_rows": 20,
+                "metrics_path": "m1",
+                "predictions_path": "p1",
+                "feature_importance_path": "f1",
+                "model_path": "model1",
+                "run_config_path": "cfg1",
+                "validation_r2": 0.48,
+                "validation_rmse": 1.8,
+                "validation_mae": 1.2,
+                "test_r2": 0.28,
+                "test_rmse": 1.9,
+                "test_mae": 1.3,
+            },
+            {
+                "model_key": "lightgbm",
+                "dataset_key": "htc_direct",
+                "target_column": "product_char_hhv_mj_per_kg",
+                "split_strategy": "leave_study_out",
+                "feature_count": 10,
+                "train_rows": 100,
+                "validation_rows": 20,
+                "test_rows": 20,
+                "metrics_path": "m2",
+                "predictions_path": "p2",
+                "feature_importance_path": "f2",
+                "model_path": "model2",
+                "run_config_path": "cfg2",
+                "validation_r2": 0.53,
+                "validation_rmse": 1.7,
+                "validation_mae": 1.1,
+                "test_r2": 0.21,
+                "test_rmse": 2.0,
+                "test_mae": 1.4,
+            },
+        ]
+    )
+
+    assert ranked.loc[0, "model_key"] == "catboost"
+    assert bool(ranked.loc[0, "is_selected_model"])
+
+
 def test_freeze_selected_models_from_results_writes_refit_manifest_and_artifacts(tmp_path):
     benchmark_run_config_path = tmp_path / "benchmark_run_config_rf.json"
     benchmark_run_config_path.write_text(

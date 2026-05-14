@@ -16,6 +16,7 @@ SURROGATE_OUTPUTS_DIR = OUTPUTS_ROOT / "surrogates"
 PLANNING_OUTPUTS_DIR = OUTPUTS_ROOT / "planning"
 SCENARIO_OUTPUTS_DIR = OUTPUTS_ROOT / "scenarios"
 OPERATION_OUTPUTS_DIR = OUTPUTS_ROOT / "operation"
+BENCHMARK_OUTPUTS_DIR = OUTPUTS_ROOT / "benchmark"
 OUTPUTS_DIR = SURROGATE_OUTPUTS_DIR
 RANDOM_STATE = 42
 
@@ -155,4 +156,3 @@ def _deduplicate_weight_systems(
             )
         )
     return deduplicated
-

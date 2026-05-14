@@ -11,7 +11,9 @@ from waste2energy.planning.reporting import (
     _format_blend_label,
     build_main_results_table,
 )
+from waste2energy.scenarios.robustness import build_decision_stability
 from waste2energy.scenarios.run import resolve_audit_output_dir, run_scenario_robustness_baseline
+from waste2energy.scenarios.uncertainty import build_uncertainty_summary
 
 
 def test_scenario_robustness_smoke(tmp_path):
@@ -32,16 +34,49 @@ def test_scenario_robustness_smoke(tmp_path):
     decision_stability = pd.read_csv(output_dir / "decision_stability.csv")
     uncertainty_summary = pd.read_csv(output_dir / "uncertainty_summary.csv")
     planning_claim_flags = pd.read_csv(tmp_path / "audit" / "planning_claim_flag_table.csv")
+    main_results_table = pd.read_csv(planning_dir / "main_results_table.csv")
+    recommendation_confidence = pd.read_csv(planning_dir / "recommendation_confidence_summary.csv")
+    transferability_risk = pd.read_csv(tmp_path / "audit" / "planning_transferability_risk_summary.csv")
 
     assert "robustness_factor" in stress_registry.columns
     assert "carbon_budget_factor" in stress_registry.columns
     assert "constraint_relaxation_ratio" in stress_registry.columns
     assert "candidate_cap_enforced" in stress_registry.columns
+    assert "uncertainty_penalty_mode" in stress_registry.columns
     assert "unconstrained_scenario" in set(stress_registry["stress_test_name"])
+    assert "uncertainty_penalty_max_interval" in set(stress_registry["stress_test_name"])
+    assert "uncertainty_penalty_combined_only" in set(stress_registry["stress_test_name"])
+    uncertainty_modes = stress_registry.set_index("stress_test_name")["uncertainty_penalty_mode"].to_dict()
+    assert uncertainty_modes["baseline"] == "prefer_interval_mean"
+    assert uncertainty_modes["uncertainty_penalty_max_interval"] == "max_interval_ratio"
+    assert uncertainty_modes["uncertainty_penalty_combined_only"] == "combined_only"
     assert not decision_stability.empty
     assert not uncertainty_summary.empty
     assert not planning_claim_flags.empty
+    assert not main_results_table.empty
+    assert not recommendation_confidence.empty
+    assert not transferability_risk.empty
+    assert "uncertainty_stress_selection_rate" in decision_stability.columns
+    assert "selected_under_max_interval_uncertainty" in decision_stability.columns
+    assert "selected_under_combined_only_uncertainty" in decision_stability.columns
+    assert "max_interval_changes_case_vs_baseline" in uncertainty_summary.columns
+    assert "combined_only_changes_case_vs_baseline" in uncertainty_summary.columns
+    assert "uncertainty_mode_case_switch_count" in uncertainty_summary.columns
+    assert "uncertainty_mode_sensitivity" in main_results_table.columns
+    assert "best_case_uq_ranking_note" in main_results_table.columns
+    assert "best_case_uq_rank_profile" in main_results_table.columns
+    assert "uq_mode_comparison_sentence" in main_results_table.columns
+    assert "uq_stress_support" in main_results_table.columns
+    assert "max_uq_stress_selection_rate" in main_results_table.columns
+    assert "uncertainty_mode_ranking_summary" in main_results_table.columns
     assert "claim_status" in planning_claim_flags.columns
+    assert "recommendation_confidence_tier" in planning_claim_flags.columns
+    assert "recommendation_evidence_ceiling" in planning_claim_flags.columns
+    assert "recommendation_confidence_tier" in recommendation_confidence.columns
+    assert recommendation_confidence["recommendation_confidence_score"].between(0.0, 1.0).all()
+    assert "transferability_evidence_ceiling" in transferability_risk.columns
+    assert main_results_table["best_case_uq_rank_profile"].astype(str).str.len().gt(0).all()
+    assert main_results_table["uq_mode_comparison_sentence"].astype(str).str.len().gt(0).all()
 
 
 def test_scenario_run_requires_explicit_planning_dir(tmp_path):
@@ -218,6 +253,102 @@ def test_scenario_run_refreshes_audit_outputs(workflow_dirs):
     assert not planning_claim_flags.empty
     assert planning_claim_flags["pathway"].isin(["pyrolysis", "htc", "ad", "baseline"]).all()
     assert (workflow_dirs["planning_dir"] / "main_results_table.csv").exists()
+
+
+def test_decision_stability_tracks_uncertainty_mode_selection_rate():
+    portfolio = pd.DataFrame(
+        [
+            {
+                "scenario_name": "baseline_region_case",
+                "stress_test_name": "baseline",
+                "sample_id": "sample-1",
+                "optimization_case_id": "Waste2Energy::planning::pyrolysis::0010::baseline_region_case",
+                "portfolio_rank": 1,
+                "allocated_feed_share": 0.50,
+                "planning_score": 1.0,
+                "manure_subtype": "beef",
+            },
+            {
+                "scenario_name": "baseline_region_case",
+                "stress_test_name": "uncertainty_penalty_max_interval",
+                "sample_id": "sample-1",
+                "optimization_case_id": "Waste2Energy::planning::pyrolysis::0010::baseline_region_case",
+                "portfolio_rank": 1,
+                "allocated_feed_share": 0.52,
+                "planning_score": 1.1,
+                "manure_subtype": "beef",
+            },
+            {
+                "scenario_name": "baseline_region_case",
+                "stress_test_name": "uncertainty_penalty_combined_only",
+                "sample_id": "sample-2",
+                "optimization_case_id": "Waste2Energy::planning::pyrolysis::0011::baseline_region_case",
+                "portfolio_rank": 1,
+                "allocated_feed_share": 0.48,
+                "planning_score": 0.9,
+                "manure_subtype": "dairy",
+            },
+        ]
+    )
+
+    stability = build_decision_stability(portfolio)
+    sample_1 = stability.loc[stability["sample_id"] == "sample-1"].iloc[0]
+    sample_2 = stability.loc[stability["sample_id"] == "sample-2"].iloc[0]
+
+    assert sample_1["uncertainty_stress_run_count"] == 1
+    assert sample_1["uncertainty_stress_selection_rate"] == pytest.approx(0.5)
+    assert bool(sample_1["selected_under_max_interval_uncertainty"]) is True
+    assert bool(sample_1["selected_under_combined_only_uncertainty"]) is False
+    assert sample_2["uncertainty_stress_run_count"] == 1
+    assert sample_2["uncertainty_stress_selection_rate"] == pytest.approx(0.5)
+    assert bool(sample_2["selected_under_combined_only_uncertainty"]) is True
+
+
+def test_uncertainty_summary_exposes_uncertainty_mode_switch_flags():
+    stress = pd.DataFrame(
+        [
+            {
+                "scenario_name": "baseline_region_case",
+                "stress_test_name": "baseline",
+                "top_portfolio_case_id": "Waste2Energy::planning::pyrolysis::0010::baseline_region_case",
+                "portfolio_energy_objective": 10.0,
+                "portfolio_environment_objective": 5.0,
+                "portfolio_cost_objective": 1.0,
+                "scenario_feed_coverage_ratio": 1.0,
+                "remaining_unmet_feed_ton_per_year": 0.0,
+            },
+            {
+                "scenario_name": "baseline_region_case",
+                "stress_test_name": "uncertainty_penalty_max_interval",
+                "top_portfolio_case_id": "Waste2Energy::planning::pyrolysis::0012::baseline_region_case",
+                "portfolio_energy_objective": 10.2,
+                "portfolio_environment_objective": 5.1,
+                "portfolio_cost_objective": 1.0,
+                "scenario_feed_coverage_ratio": 1.0,
+                "remaining_unmet_feed_ton_per_year": 0.0,
+            },
+            {
+                "scenario_name": "baseline_region_case",
+                "stress_test_name": "uncertainty_penalty_combined_only",
+                "top_portfolio_case_id": "Waste2Energy::planning::pyrolysis::0010::baseline_region_case",
+                "portfolio_energy_objective": 10.0,
+                "portfolio_environment_objective": 5.0,
+                "portfolio_cost_objective": 1.0,
+                "scenario_feed_coverage_ratio": 1.0,
+                "remaining_unmet_feed_ton_per_year": 0.0,
+            },
+        ]
+    )
+
+    summary = build_uncertainty_summary(stress_test_summary=stress, decision_stability=pd.DataFrame())
+    row = summary.iloc[0]
+
+    assert row["baseline_top_case_id"].endswith("::0010::baseline_region_case")
+    assert row["max_interval_top_case_id"].endswith("::0012::baseline_region_case")
+    assert bool(row["max_interval_changes_case_vs_baseline"]) is True
+    assert bool(row["combined_only_changes_case_vs_baseline"]) is False
+    assert row["uncertainty_mode_case_switch_count"] == 2
+    assert row["uncertainty_mode_pathway_switch_count"] == 1
 
 
 def test_scenario_run_reporting_outputs_stay_with_explicit_planning_dir(tmp_path):

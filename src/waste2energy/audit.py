@@ -4,14 +4,24 @@ from __future__ import annotations
 
 import json
 import warnings
+from datetime import timedelta
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
 
-from .config import OUTPUTS_ROOT, resolve_surrogate_outputs_dir
+from .common import parse_manifest_timestamp
+from .config import BENCHMARK_OUTPUTS_DIR, OUTPUTS_ROOT, resolve_surrogate_outputs_dir
 from .data import DATASET_KEYS, TARGET_COLUMNS
+from .evidence_policy import (
+    SURROGATE_LED_SHARE_THRESHOLD,
+    build_transferability_note,
+    classify_pathway_reliability,
+    classify_recommendation_evidence_ceiling,
+    classify_scenario_transferability_ceiling,
+)
 from .models import MODEL_KEYS
+from .planning.confidence import build_recommendation_confidence_summary
 
 
 class InconsistencyWarning(UserWarning):
@@ -37,8 +47,20 @@ def _default_selected_manifest_paths() -> dict[str, Path]:
 
 
 DEFAULT_OPERATION_COMPARISON_DIR = OUTPUTS_ROOT / "operation" / "comparison"
-DEFAULT_PLANNING_DIR = OUTPUTS_ROOT / "planning" / "baseline"
-DEFAULT_SCENARIO_DIR = OUTPUTS_ROOT / "scenarios" / "baseline"
+DEFAULT_PLANNING_DIR = OUTPUTS_ROOT / "planning"
+DEFAULT_SCENARIO_DIR = OUTPUTS_ROOT / "scenarios"
+DEFAULT_BENCHMARK_DIR = BENCHMARK_OUTPUTS_DIR / "baseline"
+HTC_PRIORITY_DATASETS = frozenset({"htc_direct", "paper1_htc_scope"})
+HTC_MODEL_PRIORITY = (
+    "catboost",
+    "lightgbm",
+    "stacking",
+    "xgboost",
+    "extra_trees",
+    "rf",
+    "gradient_boosting",
+    "elastic_net",
+)
 
 
 def build_confirmatory_audit(
@@ -47,6 +69,7 @@ def build_confirmatory_audit(
     planning_dir: str | Path | None = None,
     scenario_dir: str | Path | None = None,
     operation_dir: str | Path | None = None,
+    benchmark_dir: str | Path | None = None,
 ) -> dict[str, pd.DataFrame | dict[str, object] | list[dict[str, object]]]:
     active_outputs_root = Path(outputs_root) if outputs_root else OUTPUTS_ROOT
     default_paths = _default_split_summary_paths()
@@ -74,16 +97,34 @@ def build_confirmatory_audit(
         if operation_dir
         else active_outputs_root / DEFAULT_OPERATION_COMPARISON_DIR.relative_to(OUTPUTS_ROOT)
     )
+    active_benchmark_dir = (
+        Path(benchmark_dir)
+        if benchmark_dir
+        else active_outputs_root / DEFAULT_BENCHMARK_DIR.relative_to(OUTPUTS_ROOT)
+    )
 
     ml_summary = build_ml_split_coverage_summary(ml_paths)
     ml_best = build_ml_best_result_summary(ml_paths, selected_manifest_paths)
     ml_flags = build_ml_claim_flag_table(ml_paths, selected_manifest_paths)
     ml_provenance = build_ml_refit_provenance_summary(selected_manifest_paths)
     pathway_reliability = build_pathway_reliability_summary(ml_flags)
-    planning_flags = build_planning_claim_flag_table(active_planning_dir, active_scenario_dir)
+    planning_flags = build_planning_claim_flag_table(
+        active_planning_dir,
+        active_scenario_dir,
+        pathway_reliability=pathway_reliability,
+    )
+    planning_recommendation_confidence = _load_or_build_planning_recommendation_confidence(
+        active_planning_dir
+    )
+    planning_transferability_risk = build_planning_transferability_risk_summary(
+        active_planning_dir,
+        pathway_reliability,
+    )
     planning_ml_consistency = build_planning_ml_consistency_summary(active_planning_dir, pathway_reliability)
     _emit_surrogate_led_inconsistency_warnings(planning_ml_consistency)
     planning_data_quality = _read_csv_if_exists(active_planning_dir / "planning_data_quality_summary.csv")
+    benchmark_claim_summary = build_benchmark_claim_summary(active_benchmark_dir)
+    benchmark_manuscript_sentences = build_benchmark_manuscript_sentences(benchmark_claim_summary)
     operation_table = build_operation_comparison_summary(active_operation_dir)
     operation_flags = build_operation_claim_flag_table(active_operation_dir)
     artifact_inventory = build_artifact_inventory(
@@ -91,12 +132,14 @@ def build_confirmatory_audit(
         active_operation_dir,
         active_planning_dir,
         active_scenario_dir,
+        active_benchmark_dir,
     )
     audit_manifest = build_audit_manifest(
         ml_paths,
         active_operation_dir,
         active_planning_dir,
         active_scenario_dir,
+        active_benchmark_dir,
     )
 
     return {
@@ -106,8 +149,12 @@ def build_confirmatory_audit(
         "ml_refit_provenance_summary": ml_provenance,
         "pathway_reliability_summary": pathway_reliability,
         "planning_claim_flag_table": planning_flags,
+        "planning_recommendation_confidence_summary": planning_recommendation_confidence,
+        "planning_transferability_risk_summary": planning_transferability_risk,
         "planning_ml_consistency_summary": planning_ml_consistency,
         "planning_data_quality_summary": planning_data_quality,
+        "benchmark_claim_summary": benchmark_claim_summary,
+        "benchmark_manuscript_sentences": benchmark_manuscript_sentences,
         "operation_comparison_summary": operation_table,
         "operation_claim_flag_table": operation_flags,
         "artifact_inventory": artifact_inventory,
@@ -147,7 +194,7 @@ def build_ml_split_coverage_summary(summary_paths: dict[str, Path]) -> pd.DataFr
     rows: list[dict[str, object]] = []
     expected_pairs = len(DATASET_KEYS) * len(TARGET_COLUMNS)
     for label, path in summary_paths.items():
-        frame = _read_csv_if_exists(path)
+        frame = _read_ml_summary_frame(path, label)
         rows.append(
             {
                 "summary_label": label,
@@ -173,7 +220,7 @@ def build_ml_best_result_summary(
 ) -> pd.DataFrame:
     rows: list[dict[str, object]] = []
     for label, path in summary_paths.items():
-        frame = _read_csv_if_exists(path)
+        frame = _read_ml_summary_frame(path, label)
         if frame.empty or "test_r2" not in frame.columns:
             continue
         manifest = _read_selected_manifest(selected_manifest_paths, label)
@@ -202,8 +249,8 @@ def build_ml_claim_flag_table(
     selected_manifest_paths: dict[str, Path] | None = None,
 ) -> pd.DataFrame:
     rows: list[dict[str, object]] = []
-    strict_group = _read_csv_if_exists(summary_paths["strict_group"])
-    leave_study_out = _read_csv_if_exists(summary_paths["leave_study_out"])
+    strict_group = _read_ml_summary_frame(summary_paths["strict_group"], "strict_group")
+    leave_study_out = _read_ml_summary_frame(summary_paths["leave_study_out"], "leave_study_out")
 
     rows.extend(
         _build_claim_rows_from_frame(
@@ -422,15 +469,12 @@ def build_pathway_reliability_summary(ml_flags: pd.DataFrame) -> pd.DataFrame:
         total = max(int(len(pathway_frame)), 1)
         weak_or_unsupported_ratio = (weak + unsupported) / total
         reliability_score = (supportive + 0.5 * weak) / total
-        if weak_or_unsupported_ratio > 0.50 and pathway == "htc":
-            reviewer_sentence = "The findings for HTC are auxiliary and lack cross-study generalizability."
-            reliability_tier = "auxiliary_only"
-        elif reliability_score >= 0.60:
-            reviewer_sentence = "Cross-study evidence remains pathway-specific and should be written with claim discipline."
-            reliability_tier = "conditional_support"
-        else:
-            reviewer_sentence = "Cross-study evidence is limited and should not be generalized without qualification."
-            reliability_tier = "limited_support"
+        mean_best_test_r2 = pd.to_numeric(pathway_frame.get("best_test_r2"), errors="coerce").mean()
+        decision = classify_pathway_reliability(
+            pathway=pathway,
+            reliability_score=reliability_score,
+            weak_or_unsupported_ratio=weak_or_unsupported_ratio,
+        )
         rows.append(
             {
                 "pathway": pathway,
@@ -440,8 +484,9 @@ def build_pathway_reliability_summary(ml_flags: pd.DataFrame) -> pd.DataFrame:
                 "leave_study_out_total_count": total,
                 "weak_or_unsupported_ratio": weak_or_unsupported_ratio,
                 "reliability_score": reliability_score,
-                "reliability_tier": reliability_tier,
-                "reviewer_restriction_sentence": reviewer_sentence,
+                "mean_best_test_r2": mean_best_test_r2,
+                "reliability_tier": decision.tier,
+                "reviewer_restriction_sentence": decision.reviewer_sentence,
             }
         )
     return pd.DataFrame(rows).sort_values("pathway").reset_index(drop=True)
@@ -582,8 +627,206 @@ def build_planning_ml_consistency_summary(
     return pd.DataFrame(rows).sort_values("scenario_name").reset_index(drop=True)
 
 
-def build_planning_claim_flag_table(planning_dir: Path, scenario_dir: Path) -> pd.DataFrame:
+def build_planning_transferability_risk_summary(
+    planning_dir: Path,
+    pathway_reliability: pd.DataFrame,
+) -> pd.DataFrame:
+    pathway_summary = _read_csv_if_exists(planning_dir / "pathway_summary.csv")
+    if pathway_summary.empty or pathway_reliability.empty:
+        return pd.DataFrame()
+
+    reliability_columns = [
+        column
+        for column in [
+            "pathway",
+            "reliability_score",
+            "reliability_tier",
+            "reviewer_restriction_sentence",
+        ]
+        if column in pathway_reliability.columns
+    ]
+    reliability_lookup = pathway_reliability[reliability_columns].drop_duplicates(subset=["pathway"])
+    rows: list[dict[str, object]] = []
+
+    for scenario_name, frame in pathway_summary.groupby("scenario_name", dropna=False):
+        working = frame.copy().merge(reliability_lookup, on="pathway", how="left")
+        share = pd.to_numeric(working["portfolio_allocated_feed_share"], errors="coerce").fillna(0.0)
+        selected = pd.to_numeric(working["portfolio_selected_count"], errors="coerce").fillna(0.0).gt(0.0)
+        working["selected_share"] = np.where(selected, share, 0.0)
+        total_selected_share = float(working["selected_share"].sum())
+        if total_selected_share <= 0.0:
+            total_selected_share = 1.0
+
+        reliability_score = pd.to_numeric(working.get("reliability_score"), errors="coerce").fillna(0.0)
+        missing_mask = working["reliability_tier"].isna()
+        supportive_mask = working["reliability_tier"].astype(str).eq("conditional_support")
+        limited_mask = working["reliability_tier"].astype(str).eq("limited_support")
+        auxiliary_mask = working["reliability_tier"].astype(str).eq("auxiliary_only")
+
+        supportive_share = float(working.loc[supportive_mask, "selected_share"].sum())
+        limited_share = float(working.loc[limited_mask, "selected_share"].sum())
+        auxiliary_share = float(working.loc[auxiliary_mask, "selected_share"].sum())
+        missing_share = float(working.loc[missing_mask, "selected_share"].sum())
+        weighted_score = float((working["selected_share"] * reliability_score).sum() / total_selected_share)
+        evidence_ceiling = _classify_scenario_transferability_ceiling(
+            weighted_score=weighted_score,
+            auxiliary_share=auxiliary_share,
+            limited_share=limited_share,
+            missing_share=missing_share,
+        )
+        rows.append(
+            {
+                "scenario_name": scenario_name,
+                "selected_pathway_count": int(selected.sum()),
+                "supportive_transfer_share": supportive_share,
+                "limited_transfer_share": limited_share,
+                "auxiliary_transfer_share": auxiliary_share,
+                "missing_transfer_share": missing_share,
+                "weighted_transferability_score": weighted_score,
+                "transferability_evidence_ceiling": evidence_ceiling,
+                "transferability_note": _build_transferability_note(
+                    evidence_ceiling=evidence_ceiling,
+                    weighted_score=weighted_score,
+                    auxiliary_share=auxiliary_share,
+                    limited_share=limited_share,
+                    missing_share=missing_share,
+                ),
+            }
+        )
+    summary = pd.DataFrame(rows).sort_values("scenario_name").reset_index(drop=True)
+    for column in [
+        "supportive_transfer_share",
+        "limited_transfer_share",
+        "auxiliary_transfer_share",
+        "missing_transfer_share",
+        "weighted_transferability_score",
+    ]:
+        summary[column] = pd.to_numeric(summary[column], errors="coerce").round(3)
+    return summary
+
+
+def build_benchmark_claim_summary(benchmark_dir: Path) -> pd.DataFrame:
+    summary = _read_csv_if_exists(benchmark_dir / "benchmark_summary.csv")
+    shifts = _read_csv_if_exists(benchmark_dir / "benchmark_shift_summary.csv")
+    statistical_summary = _read_csv_if_exists(benchmark_dir / "benchmark_statistical_summary.csv")
+    if summary.empty or shifts.empty:
+        return pd.DataFrame()
+
+    baseline = summary[summary["benchmark_variant"] == "baseline_evidence_aware"].copy()
+    if baseline.empty:
+        return pd.DataFrame()
+    baseline = baseline.rename(
+        columns={
+            "portfolio_score_mass": "baseline_portfolio_score_mass",
+            "portfolio_carbon_load_kgco2e": "baseline_portfolio_carbon_load_kgco2e",
+            "scenario_feed_coverage_ratio": "baseline_scenario_feed_coverage_ratio",
+            "selected_pathways": "baseline_selected_pathways",
+        }
+    )
+    merged = shifts.merge(
+        baseline[
+            [
+                "scenario_name",
+                "baseline_portfolio_score_mass",
+                "baseline_portfolio_carbon_load_kgco2e",
+                "baseline_scenario_feed_coverage_ratio",
+                "baseline_selected_pathways",
+            ]
+        ],
+        on="scenario_name",
+        how="left",
+        suffixes=("", "_baseline"),
+    )
+    if not statistical_summary.empty:
+        statistical_columns = [
+            column
+            for column in [
+                "scenario_name",
+                "benchmark_variant",
+                "bootstrap_replicate_count",
+                "pathway_shift_count",
+                "pathway_shift_rate",
+                "pathway_shift_rate_ci_lower",
+                "pathway_shift_rate_ci_upper",
+                "case_shift_count",
+                "case_shift_rate",
+                "case_shift_rate_ci_lower",
+                "case_shift_rate_ci_upper",
+                "delta_portfolio_score_mass_median",
+                "delta_portfolio_score_mass_ci_lower",
+                "delta_portfolio_score_mass_ci_upper",
+                "delta_portfolio_score_mass_ci_excludes_zero",
+                "delta_portfolio_score_mass_sign_agreement_rate",
+                "delta_portfolio_score_mass_empirical_p_value",
+                "delta_portfolio_score_mass_direction",
+                "delta_portfolio_carbon_load_kgco2e_median",
+                "delta_portfolio_carbon_load_kgco2e_ci_lower",
+                "delta_portfolio_carbon_load_kgco2e_ci_upper",
+                "delta_portfolio_carbon_load_kgco2e_ci_excludes_zero",
+                "delta_portfolio_carbon_load_kgco2e_sign_agreement_rate",
+                "delta_portfolio_carbon_load_kgco2e_empirical_p_value",
+                "delta_portfolio_carbon_load_kgco2e_direction",
+                "delta_scenario_feed_coverage_ratio_median",
+                "delta_scenario_feed_coverage_ratio_ci_lower",
+                "delta_scenario_feed_coverage_ratio_ci_upper",
+                "delta_scenario_feed_coverage_ratio_ci_excludes_zero",
+                "delta_scenario_feed_coverage_ratio_sign_agreement_rate",
+                "delta_scenario_feed_coverage_ratio_empirical_p_value",
+                "delta_scenario_feed_coverage_ratio_direction",
+                "effect_significance_tier",
+            ]
+            if column in statistical_summary.columns
+        ]
+        merged = merged.merge(
+            statistical_summary[statistical_columns],
+            on=["scenario_name", "benchmark_variant"],
+            how="left",
+        )
+    merged["necessity_tier"] = merged.apply(_classify_benchmark_necessity_tier, axis=1)
+    merged["necessity_note"] = merged.apply(_build_benchmark_necessity_note, axis=1)
+    merged["manuscript_sentence"] = merged.apply(_build_benchmark_sentence, axis=1)
+    return merged.sort_values(["scenario_name", "benchmark_variant"]).reset_index(drop=True)
+
+
+def build_benchmark_manuscript_sentences(benchmark_claim_summary: pd.DataFrame) -> pd.DataFrame:
+    if benchmark_claim_summary.empty:
+        return pd.DataFrame()
+    rows: list[dict[str, object]] = []
+    for variant_key, frame in benchmark_claim_summary.groupby("benchmark_variant", dropna=False):
+        changed_pathway_count = int(frame["portfolio_pathway_shift"].astype(str).eq("changed").sum())
+        changed_case_count = int(frame["portfolio_case_shift"].astype(str).eq("changed").sum())
+        strong_support_count = int(frame["necessity_tier"].astype(str).eq("supports_core_innovation").sum())
+        secondary_support_count = int(
+            frame["necessity_tier"].astype(str).eq("supports_secondary_innovation").sum()
+        )
+        rows.append(
+            {
+                "benchmark_variant": variant_key,
+                "scenario_count": int(len(frame)),
+                "changed_pathway_count": changed_pathway_count,
+                "changed_case_count": changed_case_count,
+                "supports_core_innovation_count": strong_support_count,
+                "supports_secondary_innovation_count": secondary_support_count,
+                "manuscript_sentence": _build_benchmark_aggregate_sentence(
+                    variant_key=variant_key,
+                    changed_pathway_count=changed_pathway_count,
+                    changed_case_count=changed_case_count,
+                    strong_support_count=strong_support_count,
+                    secondary_support_count=secondary_support_count,
+                    scenario_count=int(len(frame)),
+                ),
+            }
+        )
+    return pd.DataFrame(rows).sort_values("benchmark_variant").reset_index(drop=True)
+
+
+def build_planning_claim_flag_table(
+    planning_dir: Path,
+    scenario_dir: Path,
+    pathway_reliability: pd.DataFrame | None = None,
+) -> pd.DataFrame:
     main_results = _read_csv_if_exists(planning_dir / "main_results_table.csv")
+    recommendation_confidence = _load_or_build_planning_recommendation_confidence(planning_dir)
     pathway_summary = _read_csv_if_exists(planning_dir / "pathway_summary.csv")
     portfolio_allocations = _read_csv_if_exists(planning_dir / "portfolio_allocations.csv")
     scored_cases = _read_csv_if_exists(planning_dir / "scored_cases.csv")
@@ -593,6 +836,7 @@ def build_planning_claim_flag_table(planning_dir: Path, scenario_dir: Path) -> p
         return pd.DataFrame()
 
     planning_flags = main_results.copy()
+    reliability_frame = pathway_reliability.copy() if pathway_reliability is not None else pd.DataFrame()
     if not pathway_summary.empty:
         planning_flags = planning_flags.merge(
             pathway_summary[
@@ -644,9 +888,55 @@ def build_planning_claim_flag_table(planning_dir: Path, scenario_dir: Path) -> p
             right_on=["scenario_name", "top_portfolio_case_id"],
             how="left",
         ).drop(columns=["top_portfolio_case_id"], errors="ignore")
+    if not recommendation_confidence.empty:
+        confidence_columns = [
+            "recommendation_confidence_score",
+            "recommendation_confidence_tier",
+            "recommendation_confidence_note",
+        ]
+        if any(column not in planning_flags.columns for column in confidence_columns):
+            planning_flags = planning_flags.merge(
+                recommendation_confidence[
+                    [
+                        "scenario_name",
+                        "pathway",
+                        "recommendation_confidence_score",
+                        "recommendation_confidence_tier",
+                        "recommendation_confidence_note",
+                    ]
+                ],
+                on=["scenario_name", "pathway"],
+                how="left",
+            )
+    if not reliability_frame.empty:
+        reliability_columns = [
+            column
+            for column in [
+                "pathway",
+                "reliability_score",
+                "reliability_tier",
+                "reviewer_restriction_sentence",
+            ]
+            if column in reliability_frame.columns
+        ]
+        if reliability_columns:
+            planning_flags = planning_flags.merge(
+                reliability_frame[reliability_columns].drop_duplicates(subset=["pathway"]),
+                on="pathway",
+                how="left",
+            )
 
     planning_flags["claim_status"] = planning_flags.apply(_classify_planning_claim_status, axis=1)
     planning_flags["claim_rule"] = planning_flags.apply(_describe_planning_claim_rule, axis=1)
+    if "reliability_score" in planning_flags.columns:
+        planning_flags["reliability_score"] = pd.to_numeric(
+            planning_flags["reliability_score"],
+            errors="coerce",
+        )
+    planning_flags["recommendation_evidence_ceiling"] = planning_flags.apply(
+        _classify_recommendation_evidence_ceiling,
+        axis=1,
+    )
     support_levels = planning_flags["Surrogate_Support_Level"].fillna("unknown").astype(str)
     evidence_gap_flag = np.where(
         support_levels.eq("documented_static_fallback"),
@@ -680,8 +970,21 @@ def build_planning_claim_flag_table(planning_dir: Path, scenario_dir: Path) -> p
         "baseline_portfolio_share_pct",
         "max_stress_selection_rate",
         "stress_tests_supporting_pathway",
+        "uq_stress_support",
+        "max_uq_stress_selection_rate",
+        "uncertainty_mode_sensitivity",
+        "uncertainty_mode_case_switch_count",
+        "uncertainty_mode_pathway_switch_count",
+        "best_case_uq_ranking_note",
         "best_case_score_index",
         "claim_boundary",
+        "recommendation_confidence_score",
+        "recommendation_confidence_tier",
+        "recommendation_confidence_note",
+        "reliability_score",
+        "reliability_tier",
+        "recommendation_evidence_ceiling",
+        "reviewer_restriction_sentence",
         "results_sentence",
     ]
     available = [column for column in selected_columns if column in planning_flags.columns]
@@ -696,7 +999,13 @@ def build_artifact_inventory(
     operation_dir: Path,
     planning_dir: Path,
     scenario_dir: Path,
+    benchmark_dir: Path,
 ) -> pd.DataFrame:
+    operation_freshness = _build_operation_artifact_freshness(
+        operation_dir=operation_dir,
+        planning_dir=planning_dir,
+        scenario_dir=scenario_dir,
+    )
     records: list[dict[str, object]] = []
     for label, path in summary_paths.items():
         records.append(
@@ -705,13 +1014,18 @@ def build_artifact_inventory(
                 "artifact_label": label,
                 "path": str(path),
                 "exists": path.exists(),
+                "freshness_status": "not_checked",
+                "freshness_note": "",
             }
         )
     for file_name in [
         "main_results_table.csv",
         "main_results_table_manifest.json",
+        "recommendation_confidence_summary.csv",
         "pathway_summary.csv",
         "portfolio_allocations.csv",
+        "scenario_summary.csv",
+        "optimization_diagnostics.csv",
         "run_config.json",
     ]:
         path = planning_dir / file_name
@@ -721,6 +1035,8 @@ def build_artifact_inventory(
                 "artifact_label": file_name,
                 "path": str(path),
                 "exists": path.exists(),
+                "freshness_status": "source_truth",
+                "freshness_note": "",
             }
         )
     for file_name in [
@@ -737,6 +1053,29 @@ def build_artifact_inventory(
                 "artifact_label": file_name,
                 "path": str(path),
                 "exists": path.exists(),
+                "freshness_status": "source_truth",
+                "freshness_note": "",
+            }
+        )
+    for file_name in [
+        "benchmark_summary.csv",
+        "benchmark_allocations.csv",
+        "benchmark_scenario_summary.csv",
+        "benchmark_shift_summary.csv",
+        "benchmark_diagnostics.csv",
+        "benchmark_bootstrap_shift_samples.csv",
+        "benchmark_statistical_summary.csv",
+        "run_config.json",
+    ]:
+        path = benchmark_dir / file_name
+        records.append(
+            {
+                "artifact_group": "benchmark",
+                "artifact_label": file_name,
+                "path": str(path),
+                "exists": path.exists(),
+                "freshness_status": "source_truth",
+                "freshness_note": "",
             }
         )
     for file_name in [
@@ -761,9 +1100,87 @@ def build_artifact_inventory(
                 "artifact_label": file_name,
                 "path": str(path),
                 "exists": path.exists(),
+                "freshness_status": operation_freshness["freshness_status"],
+                "freshness_note": operation_freshness["freshness_note"],
             }
         )
     return pd.DataFrame(records)
+
+
+def _build_operation_artifact_freshness(
+    *,
+    operation_dir: Path,
+    planning_dir: Path,
+    scenario_dir: Path,
+) -> dict[str, str]:
+    operation_run_config = _read_json_if_exists(operation_dir / "run_config.json")
+    planning_run_config = _read_json_if_exists(planning_dir / "run_config.json")
+    scenario_run_config = _read_json_if_exists(scenario_dir / "run_config.json")
+
+    operation_timestamp = parse_manifest_timestamp(operation_run_config)
+    planning_timestamp = parse_manifest_timestamp(planning_run_config)
+    scenario_timestamp = parse_manifest_timestamp(scenario_run_config)
+    required_timestamp = _max_timestamp(planning_timestamp, scenario_timestamp)
+
+    source_planning_timestamp = _parse_timestamp_string(operation_run_config.get("source_planning_generated_at_utc"))
+    source_scenario_timestamp = _parse_timestamp_string(operation_run_config.get("source_scenario_generated_at_utc"))
+
+    if not operation_run_config:
+        return {
+            "freshness_status": "missing_run_config",
+            "freshness_note": "Operation comparison run_config.json is missing, so artifact freshness cannot be verified.",
+        }
+
+    if planning_timestamp is None or scenario_timestamp is None:
+        return {
+            "freshness_status": "unknown",
+            "freshness_note": "Planning/scenario manifest timestamps are unavailable, so operation freshness cannot be verified.",
+        }
+
+    if source_planning_timestamp and source_planning_timestamp + timedelta(seconds=1) < planning_timestamp:
+        return {
+            "freshness_status": "stale",
+            "freshness_note": "Operation comparison artifacts record an older planning source manifest than the current planning outputs.",
+        }
+
+    if source_scenario_timestamp and source_scenario_timestamp + timedelta(seconds=1) < scenario_timestamp:
+        return {
+            "freshness_status": "stale",
+            "freshness_note": "Operation comparison artifacts record an older scenario source manifest than the current scenario outputs.",
+        }
+
+    if operation_timestamp is None or required_timestamp is None:
+        return {
+            "freshness_status": "unknown",
+            "freshness_note": "Operation comparison timestamp is unavailable, so freshness cannot be confirmed.",
+        }
+
+    if operation_timestamp + timedelta(seconds=1) < required_timestamp:
+        return {
+            "freshness_status": "stale",
+            "freshness_note": "Operation comparison artifacts are older than the current planning/scenario source outputs and should be regenerated.",
+        }
+
+    return {
+        "freshness_status": "current",
+        "freshness_note": "Operation comparison artifacts are aligned with the current planning/scenario manifests.",
+    }
+
+
+def _parse_timestamp_string(value: object):
+    if not value:
+        return None
+    try:
+        return pd.Timestamp(str(value)).to_pydatetime()
+    except Exception:
+        return None
+
+
+def _max_timestamp(*values):
+    valid_values = [value for value in values if value is not None]
+    if not valid_values:
+        return None
+    return max(valid_values)
 
 
 def build_audit_manifest(
@@ -771,6 +1188,7 @@ def build_audit_manifest(
     operation_dir: Path,
     planning_dir: Path,
     scenario_dir: Path,
+    benchmark_dir: Path,
 ) -> dict[str, object]:
     return {
         "expected_models": list(MODEL_KEYS),
@@ -780,10 +1198,15 @@ def build_audit_manifest(
         "planning_dir": str(planning_dir),
         "scenario_dir": str(scenario_dir),
         "operation_comparison_dir": str(operation_dir),
+        "benchmark_dir": str(benchmark_dir),
         "confirmation_rules": [
             "strict_group is the main-table benchmark evidence tier",
             "leave_study_out is the stronger cross-study stress test",
             "planning_claim_flag_table is the manuscript-facing planning claim inventory",
+            "recommendation_confidence_summary grades how strong a pathway recommendation remains after evidence and stress screening",
+            "benchmark_claim_summary converts ablation outputs into scenario-level necessity evidence for the innovation claims",
+            "benchmark_manuscript_sentences provides manuscript-safe wording for how benchmark variants alter recommendations",
+            "benchmark_statistical_summary adds bootstrap-backed uncertainty intervals for benchmark deltas when repeated runs are enabled",
             "pyrolysis may retain partial cross-study generalization on some targets",
             "HTC and Paper 1 HTC scope should not be written as uniformly strong cross-study generalization",
             "SAC matching hold_plan should be written as conservative behavior, not superior control",
@@ -829,6 +1252,184 @@ def _build_claim_rows_from_frame(
     return rows
 
 
+def _classify_benchmark_necessity_tier(row: pd.Series) -> str:
+    pathway_shift = str(row.get("portfolio_pathway_shift", "") or "")
+    case_shift = str(row.get("portfolio_case_shift", "") or "")
+    score_delta = _abs_optional_float(row.get("delta_portfolio_score_mass"))
+    carbon_delta = _abs_optional_float(row.get("delta_portfolio_carbon_load_kgco2e"))
+    coverage_delta = _abs_optional_float(row.get("delta_scenario_feed_coverage_ratio"))
+    has_material_metric_shift = score_delta >= 1.0 or carbon_delta >= 1.0 or coverage_delta >= 0.01
+
+    if pathway_shift == "changed":
+        return "supports_core_innovation"
+    if case_shift == "changed" and has_material_metric_shift:
+        return "supports_secondary_innovation"
+    if has_material_metric_shift:
+        return "supports_secondary_innovation"
+    return "limited_effect"
+
+
+def _build_benchmark_necessity_note(row: pd.Series) -> str:
+    action_phrase, innovation_label = _benchmark_variant_labels(row.get("benchmark_variant"))
+    tier = str(row.get("necessity_tier", "") or "")
+    baseline_pathways = str(row.get("baseline_selected_pathways", "") or "baseline portfolio")
+    variant_pathways = str(row.get("variant_selected_pathways", "") or "variant portfolio")
+    significance_clause = _benchmark_significance_clause(row, prefix=" ")
+
+    if tier == "supports_core_innovation":
+        return (
+            f"{action_phrase} changed the selected pathway set from {baseline_pathways} to {variant_pathways}, "
+            f"so the {innovation_label} is materially necessary for the exported recommendation.{significance_clause}"
+        )
+    if tier == "supports_secondary_innovation":
+        return (
+            f"{action_phrase} did not force a full pathway replacement in every case, but it still altered "
+            f"the preferred portfolio case or portfolio metrics, so the {innovation_label} remains decision-relevant.{significance_clause}"
+        )
+    return (
+        f"{action_phrase} produced only limited movement in the exported portfolio, so the {innovation_label} "
+        f"should be described as a bounded refinement rather than the sole driver of the result.{significance_clause}"
+    )
+
+
+def _build_benchmark_sentence(row: pd.Series) -> str:
+    action_phrase, innovation_label = _benchmark_variant_labels(row.get("benchmark_variant"))
+    scenario_name = str(row.get("scenario_name", "the audited scenario"))
+    tier = str(row.get("necessity_tier", "") or "")
+    baseline_pathways = str(row.get("baseline_selected_pathways", "") or "the baseline pathway set")
+    variant_pathways = str(row.get("variant_selected_pathways", "") or "the variant pathway set")
+    score_delta = _format_signed_delta(row.get("delta_portfolio_score_mass"), precision=2)
+    carbon_delta = _format_signed_delta(row.get("delta_portfolio_carbon_load_kgco2e"), precision=2)
+    coverage_delta = _format_signed_delta(row.get("delta_scenario_feed_coverage_ratio"), precision=3)
+    significance_clause = _benchmark_significance_clause(row, prefix=" ")
+
+    if tier == "supports_core_innovation":
+        return (
+            f"In {scenario_name}, {action_phrase.lower()} changed the selected pathways from "
+            f"{baseline_pathways} to {variant_pathways}, showing that the {innovation_label} materially shapes "
+            f"the recommendation (score delta {score_delta}, carbon delta {carbon_delta}, coverage delta {coverage_delta}).{significance_clause}"
+        )
+    if tier == "supports_secondary_innovation":
+        return (
+            f"In {scenario_name}, {action_phrase.lower()} did not always replace the full pathway set, but it "
+            f"still changed the preferred portfolio case or portfolio metrics (score delta {score_delta}, carbon "
+            f"delta {carbon_delta}, coverage delta {coverage_delta}), so the {innovation_label} is not cosmetic.{significance_clause}"
+        )
+    return (
+        f"In {scenario_name}, {action_phrase.lower()} produced only limited movement relative to the exported "
+        f"baseline portfolio, so the {innovation_label} should be written as a bounded refinement.{significance_clause}"
+    )
+
+
+def _build_benchmark_aggregate_sentence(
+    *,
+    variant_key: object,
+    changed_pathway_count: int,
+    changed_case_count: int,
+    strong_support_count: int,
+    secondary_support_count: int,
+    scenario_count: int,
+) -> str:
+    action_phrase, innovation_label = _benchmark_variant_labels(variant_key)
+    if scenario_count <= 0:
+        return (
+            f"{action_phrase} did not yield any auditable scenarios, so the necessity of the {innovation_label} "
+            "cannot be summarized yet."
+        )
+    if strong_support_count > 0:
+        return (
+            f"{action_phrase} changed selected pathways in {changed_pathway_count}/{scenario_count} scenarios and "
+            f"changed the top portfolio case in {changed_case_count}/{scenario_count} scenarios, supporting the "
+            f"necessity of the {innovation_label}."
+        )
+    if secondary_support_count > 0:
+        return (
+            f"{action_phrase} did not broadly replace pathways, but it still produced material portfolio movement "
+            f"in {secondary_support_count}/{scenario_count} scenarios and changed the top portfolio case in "
+            f"{changed_case_count}/{scenario_count} scenarios, indicating a secondary yet non-cosmetic role for "
+            f"the {innovation_label}."
+        )
+    return (
+        f"{action_phrase} left both pathways and top portfolio cases largely unchanged across the audited "
+        f"scenarios, so the {innovation_label} should be written as a bounded refinement rather than a dominant driver."
+    )
+
+
+def _benchmark_significance_clause(row: pd.Series, *, prefix: str = " ") -> str:
+    significance_tier = str(row.get("effect_significance_tier", "") or "").strip()
+    replicate_count = _optional_float(row.get("bootstrap_replicate_count"))
+    pathway_shift_rate = _optional_float(row.get("pathway_shift_rate"))
+    pathway_shift_ci_lower = _optional_float(row.get("pathway_shift_rate_ci_lower"))
+    pathway_shift_ci_upper = _optional_float(row.get("pathway_shift_rate_ci_upper"))
+    score_p_value = _optional_float(row.get("delta_portfolio_score_mass_empirical_p_value"))
+    if not significance_tier:
+        return ""
+    if significance_tier == "highly_consistent":
+        detail = ""
+        if pd.notna(pathway_shift_rate):
+            detail = f" pathway-shift rate {float(pathway_shift_rate) * 100:.0f}%"
+            if pd.notna(pathway_shift_ci_lower) and pd.notna(pathway_shift_ci_upper):
+                detail += (
+                    f" (95% interval {float(pathway_shift_ci_lower) * 100:.0f}--"
+                    f"{float(pathway_shift_ci_upper) * 100:.0f}%)"
+                )
+        return f"{prefix}Bootstrap repeats indicate a highly consistent effect{detail}."
+    if significance_tier == "directionally_consistent":
+        if pd.notna(score_p_value):
+            return (
+                f"{prefix}Bootstrap repeats indicate a directionally consistent effect "
+                f"(empirical p={float(score_p_value):.3f} for the score shift)."
+            )
+        return f"{prefix}Bootstrap repeats indicate a directionally consistent effect."
+    if significance_tier == "suggestive":
+        if pd.notna(replicate_count):
+            detail = ""
+            if pd.notna(score_p_value):
+                detail = f"; empirical p={float(score_p_value):.3f}"
+            return (
+                f"{prefix}Bootstrap repeats remain suggestive rather than fully stable "
+                f"({int(float(replicate_count))} replicates{detail})."
+            )
+        return f"{prefix}Bootstrap repeats remain suggestive rather than fully stable."
+    return f"{prefix}Bootstrap repeats suggest the effect is unstable and should be written conservatively."
+
+
+def _benchmark_variant_labels(variant_key: object) -> tuple[str, str]:
+    mapping = {
+        "no_evidence_penalty": ("Removing evidence penalties", "evidence-aware design"),
+        "no_robustness_penalty": ("Removing robustness penalties", "robustness-aware design"),
+        "no_carbon_constraint": ("Relaxing the carbon constraint", "carbon guardrail"),
+        "classic_multiobjective_optimizer": (
+            "Replacing the method with a classic multi-objective optimizer",
+            "evidence-aware and robustness-aware design",
+        ),
+        "greedy_weighted_score_heuristic": (
+            "Replacing the optimizer with a greedy weighted-score heuristic",
+            "portfolio optimization layer",
+        ),
+        "ranking_only_unconstrained": (
+            "Removing portfolio caps and diversity constraints",
+            "portfolio-constraint design",
+        ),
+        "baseline_evidence_aware": ("Using the evidence-aware baseline", "evidence-aware design"),
+    }
+    return mapping.get(str(variant_key), (f"Applying benchmark variant '{variant_key}'", "design choice"))
+
+
+def _abs_optional_float(value: object) -> float:
+    numeric = _optional_float(value)
+    if pd.isna(numeric):
+        return 0.0
+    return abs(float(numeric))
+
+
+def _format_signed_delta(value: object, *, precision: int) -> str:
+    numeric = _optional_float(value)
+    if pd.isna(numeric):
+        return "NA"
+    return f"{float(numeric):+.{precision}f}"
+
+
 def _read_selected_manifest(
     selected_manifest_paths: dict[str, Path] | None,
     label: str,
@@ -839,6 +1440,22 @@ def _read_selected_manifest(
     if path is None:
         return pd.DataFrame()
     return _read_csv_if_exists(path)
+
+
+def _read_ml_summary_frame(path: Path, label: str) -> pd.DataFrame:
+    primary = _read_csv_if_exists(path)
+    if label != "leave_study_out":
+        return primary
+    supplement = _read_csv_if_exists(BENCHMARK_OUTPUTS_DIR / "htc_model_compare_lso" / "traditional_ml_suite_summary_leave_study_out.csv")
+    if primary.empty:
+        return supplement
+    if supplement.empty:
+        return primary
+    combined = pd.concat([supplement, primary], ignore_index=True)
+    dedupe_columns = [column for column in ["dataset_key", "target_column", "model_key"] if column in combined.columns]
+    if dedupe_columns:
+        combined = combined.drop_duplicates(subset=dedupe_columns, keep="first")
+    return combined.reset_index(drop=True)
 
 
 def _selected_or_best_frame(frame: pd.DataFrame, selected_manifest: pd.DataFrame | None) -> pd.DataFrame:
@@ -893,25 +1510,29 @@ def _selected_from_summary_frame(frame: pd.DataFrame) -> pd.DataFrame | None:
         selected_groups: list[pd.DataFrame] = []
         for _, subset in frame.groupby(["dataset_key", "target_column"], dropna=False, sort=False):
             working = subset.copy()
+            dataset_key = str(working["dataset_key"].iloc[0])
             working["_validation_r2_sort"] = pd.to_numeric(
-                working.get("validation_r2"),
+                working.get("validation_r2", pd.Series([pd.NA] * len(working), index=working.index)),
                 errors="coerce",
             ).fillna(float("-inf"))
+            working["_model_priority_sort"] = working["model_key"].map(
+                lambda value: _audit_model_priority_rank(dataset_key=dataset_key, model_key=str(value))
+            )
             working["_validation_rmse_sort"] = pd.to_numeric(
-                working.get("validation_rmse"),
+                working.get("validation_rmse", pd.Series([pd.NA] * len(working), index=working.index)),
                 errors="coerce",
             ).fillna(float("inf"))
             working["_validation_mae_sort"] = pd.to_numeric(
-                working.get("validation_mae"),
+                working.get("validation_mae", pd.Series([pd.NA] * len(working), index=working.index)),
                 errors="coerce",
             ).fillna(float("inf"))
             working = working.sort_values(
-                ["_validation_r2_sort", "_validation_rmse_sort", "_validation_mae_sort", "model_key"],
-                ascending=[False, True, True, True],
+                ["_model_priority_sort", "_validation_r2_sort", "_validation_rmse_sort", "_validation_mae_sort", "model_key"],
+                ascending=[True, False, True, True, True],
             ).head(1)
             selected_groups.append(
                 working.drop(
-                    columns=["_validation_r2_sort", "_validation_rmse_sort", "_validation_mae_sort"],
+                    columns=["_model_priority_sort", "_validation_r2_sort", "_validation_rmse_sort", "_validation_mae_sort"],
                     errors="ignore",
                 )
             )
@@ -953,6 +1574,16 @@ def _read_csv_if_exists(path: Path) -> pd.DataFrame:
         return pd.DataFrame()
 
 
+def _load_or_build_planning_recommendation_confidence(planning_dir: Path) -> pd.DataFrame:
+    existing = _read_csv_if_exists(planning_dir / "recommendation_confidence_summary.csv")
+    if not existing.empty:
+        return existing
+    main_results = _read_csv_if_exists(planning_dir / "main_results_table.csv")
+    if main_results.empty:
+        return pd.DataFrame()
+    return build_recommendation_confidence_summary(main_results)
+
+
 def _read_json_if_exists(path: Path) -> dict[str, object]:
     if not path.exists():
         return {}
@@ -992,11 +1623,55 @@ def _describe_planning_claim_rule(row: pd.Series) -> str:
     return "Available for pathway comparison but not currently supported as a selected planning recommendation."
 
 
+def _classify_recommendation_evidence_ceiling(row: pd.Series) -> str:
+    return classify_recommendation_evidence_ceiling(
+        claim_boundary=row.get("claim_boundary", ""),
+        reliability_tier=row.get("reliability_tier", ""),
+        selected=bool(row.get("selected_in_baseline_portfolio", False)),
+        confidence_tier=row.get("recommendation_confidence_tier", ""),
+    )
+
+
 def _optional_float(value: object) -> float | object:
     numeric = pd.to_numeric(pd.Series([value]), errors="coerce").iloc[0]
     if pd.isna(numeric):
         return pd.NA
     return float(numeric)
+
+
+def _audit_model_priority_rank(*, dataset_key: str, model_key: str) -> int:
+    if dataset_key in HTC_PRIORITY_DATASETS:
+        try:
+            return HTC_MODEL_PRIORITY.index(model_key)
+        except ValueError:
+            return len(HTC_MODEL_PRIORITY)
+    return 0
+
+
+def _classify_scenario_transferability_ceiling(
+    *,
+    weighted_score: float,
+    auxiliary_share: float,
+    limited_share: float,
+    missing_share: float,
+) -> str:
+    return classify_scenario_transferability_ceiling(
+        weighted_score=weighted_score,
+        auxiliary_share=auxiliary_share,
+        limited_share=limited_share,
+        missing_share=missing_share,
+    )
+
+
+def _build_transferability_note(
+    *,
+    evidence_ceiling: str,
+    weighted_score: float,
+    auxiliary_share: float,
+    limited_share: float,
+    missing_share: float,
+) -> str:
+    return build_transferability_note(evidence_ceiling=evidence_ceiling)
 
 
 def _mode_or_default(series: pd.Series, default: str) -> str:
@@ -1050,7 +1725,7 @@ def _emit_surrogate_led_inconsistency_warnings(consistency: pd.DataFrame) -> Non
         warnings.warn(
             (
                 f"Scenario '{row.get('scenario_name', 'unknown_scenario')}' is inconsistent with a surrogate-led claim: "
-                f"surrogate-supported allocated share is {share_pct}, below the 80.0% threshold."
+                f"surrogate-supported allocated share is {share_pct}, below the {SURROGATE_LED_SHARE_THRESHOLD * 100.0:.1f}% threshold."
             ),
             InconsistencyWarning,
         )

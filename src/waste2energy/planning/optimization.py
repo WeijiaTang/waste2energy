@@ -60,16 +60,8 @@ def build_candidate_score_frame(
     scored["energy_utility"] = _normalize(scored["planning_energy_intensity_mj_per_ton"])
     scored["environment_utility"] = _normalize(scored["planning_environment_intensity_kgco2e_per_ton"])
     scored["cost_utility"] = 1.0 - _normalize(scored["planning_cost_intensity_proxy_or_real_per_ton"])
-    scored["robustness_utility"] = 1.0 - _normalize(scored["effective_uncertainty_ratio"])
     scored["evidence_utility"] = _normalize(scored["evidence_based_weight"])
-    scored["weighted_score_per_ton"] = (
-        config.energy_weight * scored["energy_utility"]
-        + config.environment_weight * scored["environment_utility"]
-        + config.cost_weight * scored["cost_utility"]
-        + config.robustness_factor * scored["robustness_utility"]
-        + 0.15 * scored["evidence_utility"]
-    )
-    scored["planning_score"] = scored["weighted_score_per_ton"] * scored["evidence_based_weight"]
+    scored = _attach_uncertainty_mode_score_diagnostics(scored, config)
     scored["planning_score_scope"] = "scenario_local_optimizer"
     return scored.sort_values(
         ["planning_score", "planning_energy_intensity_mj_per_ton"],
@@ -241,6 +233,7 @@ def build_pyomo_model(
     candidate_cap = _required_constraint_value(scenario_constraint, "candidate_share_cap_ton_per_year")
     subtype_cap = _required_constraint_value(scenario_constraint, "subtype_share_cap_ton_per_year")
     carbon_budget = _carbon_budget(scored, scenario_constraint, config)
+    activation_floor = _activation_floor_ton_per_year(effective_budget, candidate_cap)
 
     _require_numeric_columns(
         scored,
@@ -276,19 +269,33 @@ def build_pyomo_model(
         sense=pyo.maximize,
     )
     model.feed_budget = pyo.Constraint(expr=sum(model.x[i] for i in model.CASES) <= effective_budget)
+    model.pathway_min_share = pyo.ConstraintList()
+    for pathway_name, share in getattr(config, "min_pathway_share", ()): 
+        indices = _pathway_indices(scored, pathway_name)
+        if indices and float(share) > 0.0:
+            model.pathway_min_share.add(sum(model.x[i] for i in indices) >= float(share) * effective_budget)
+    model.pathway_max_share = pyo.ConstraintList()
+    for pathway_name, share in getattr(config, "max_pathway_share", ()): 
+        indices = _pathway_indices(scored, pathway_name)
+        if indices:
+            model.pathway_max_share.add(sum(model.x[i] for i in indices) <= float(share) * effective_budget)
     model.candidate_limit = pyo.ConstraintList()
+    model.candidate_activation_floor = pyo.ConstraintList()
     for i in model.CASES:
         cap = candidate_cap if config.enforce_candidate_cap else effective_budget
         model.candidate_limit.add(model.x[i] <= cap * model.y[i])
+        model.candidate_activation_floor.add(model.x[i] >= activation_floor * model.y[i])
     if config.enforce_max_selected:
         model.max_selected = pyo.Constraint(expr=sum(model.y[i] for i in model.CASES) <= config.max_portfolio_candidates)
 
     model.subtype_cap = pyo.ConstraintList()
     model.subtype_activation = pyo.ConstraintList()
+    model.subtype_min_load = pyo.ConstraintList()
     for subtype, indices in subtype_groups.items():
         if config.enforce_subtype_cap:
             model.subtype_cap.add(sum(model.x[i] for i in indices) <= subtype_cap)
         model.subtype_activation.add(model.z[subtype] <= sum(model.y[i] for i in indices))
+        model.subtype_min_load.add(sum(model.x[i] for i in indices) >= activation_floor * model.z[subtype])
     if config.enforce_min_distinct_subtypes and len(subtype_groups) >= config.min_distinct_subtypes:
         model.min_diversity = pyo.Constraint(
             expr=sum(model.z[subtype] for subtype in model.SUBTYPES) >= config.min_distinct_subtypes
@@ -346,6 +353,7 @@ def _solve_with_scipy_milp(
     candidate_cap = _required_constraint_value(scenario_constraint, "candidate_share_cap_ton_per_year")
     subtype_cap = _required_constraint_value(scenario_constraint, "subtype_share_cap_ton_per_year")
     carbon_budget = _carbon_budget(scored, scenario_constraint, config)
+    activation_floor = _activation_floor_ton_per_year(effective_budget, candidate_cap)
     _require_numeric_columns(
         scored,
         columns=(
@@ -384,6 +392,10 @@ def _solve_with_scipy_milp(
         row[i] = 1.0
         row[n_cases + i] = -(candidate_cap if config.enforce_candidate_cap else effective_budget)
         constraints.append(LinearConstraint(row, -np.inf, 0.0))
+        min_row = np.zeros(total_vars, dtype=float)
+        min_row[i] = 1.0
+        min_row[n_cases + i] = -activation_floor
+        constraints.append(LinearConstraint(min_row, 0.0, np.inf))
 
     for subtype_index, subtype in enumerate(subtype_names):
         row = np.zeros(total_vars, dtype=float)
@@ -399,11 +411,31 @@ def _solve_with_scipy_milp(
         subtype_activation[n_cases + n_cases + subtype_index] = 1.0
         subtype_activation += subtype_y_row
         constraints.append(LinearConstraint(subtype_activation, -np.inf, 0.0))
+        subtype_min_load = np.zeros(total_vars, dtype=float)
+        for case_index in subtype_groups[subtype]:
+            subtype_min_load[case_index] = 1.0
+        subtype_min_load[n_cases + n_cases + subtype_index] = -activation_floor
+        constraints.append(LinearConstraint(subtype_min_load, 0.0, np.inf))
 
     if config.enforce_min_distinct_subtypes and n_subtypes >= config.min_distinct_subtypes:
         diversity_row = np.zeros(total_vars, dtype=float)
         diversity_row[n_cases + n_cases :] = 1.0
         constraints.append(LinearConstraint(diversity_row, float(config.min_distinct_subtypes), np.inf))
+
+    for pathway_name, share in getattr(config, "min_pathway_share", ()): 
+        indices = _pathway_indices(scored, pathway_name)
+        if indices and float(share) > 0.0:
+            pathway_min_row = np.zeros(total_vars, dtype=float)
+            for case_index in indices:
+                pathway_min_row[case_index] = 1.0
+            constraints.append(LinearConstraint(pathway_min_row, float(share) * effective_budget, np.inf))
+    for pathway_name, share in getattr(config, "max_pathway_share", ()): 
+        indices = _pathway_indices(scored, pathway_name)
+        if indices:
+            pathway_max_row = np.zeros(total_vars, dtype=float)
+            for case_index in indices:
+                pathway_max_row[case_index] = 1.0
+            constraints.append(LinearConstraint(pathway_max_row, -np.inf, float(share) * effective_budget))
 
     carbon_row = np.zeros(total_vars, dtype=float)
     carbon_row[:n_cases] = pd.to_numeric(
@@ -564,11 +596,25 @@ def _prefix_diagnostics(diagnostics: dict[str, object], prefix: str) -> dict[str
     return {f"{prefix}{key}": value for key, value in diagnostics.items()}
 
 
+def _pathway_indices(scored: pd.DataFrame, pathway_name: str) -> list[int]:
+    pathway = scored["pathway"].astype(str).str.lower()
+    target = str(pathway_name).strip().lower()
+    return [int(idx) for idx in scored.index[pathway.eq(target)].tolist()]
+
+
 def _subtype_groups(scored: pd.DataFrame) -> dict[str, list[int]]:
     groups: dict[str, list[int]] = {}
     for idx, row in scored.iterrows():
         groups.setdefault(_candidate_subtype_key(row), []).append(int(idx))
     return groups
+
+
+def _activation_floor_ton_per_year(
+    effective_budget: float,
+    candidate_cap: float,
+) -> float:
+    active_scale = min(value for value in (effective_budget, candidate_cap) if value > 0.0)
+    return max(1e-6, min(1.0, active_scale * 1e-3))
 
 
 def _carbon_budget(
@@ -603,6 +649,94 @@ def _normalize(series: pd.Series) -> pd.Series:
     if maximum <= minimum:
         return pd.Series(0.0, index=values.index)
     return (values - minimum) / (maximum - minimum)
+
+
+def _attach_uncertainty_mode_score_diagnostics(
+    scored: pd.DataFrame,
+    config: "PlanningConfig",
+) -> pd.DataFrame:
+    working = scored.copy()
+    mode_columns = {
+        "interval_mean": pd.to_numeric(
+            working.get("effective_uncertainty_ratio_interval_mean", working["effective_uncertainty_ratio"]),
+            errors="coerce",
+        ).fillna(0.0),
+        "max_interval": pd.to_numeric(
+            working.get("effective_uncertainty_ratio_max_interval", working["effective_uncertainty_ratio"]),
+            errors="coerce",
+        ).fillna(0.0),
+        "combined_only": pd.to_numeric(
+            working.get("effective_uncertainty_ratio_combined_only", working["effective_uncertainty_ratio"]),
+            errors="coerce",
+        ).fillna(0.0),
+    }
+    active_key = _uncertainty_mode_key(getattr(config, "uncertainty_penalty_mode", "prefer_interval_mean"))
+    evidence_factor = float(getattr(config, "evidence_utility_factor", 0.15))
+    base_without_robustness = (
+        config.energy_weight * working["energy_utility"]
+        + config.environment_weight * working["environment_utility"]
+        + config.cost_weight * working["cost_utility"]
+        + evidence_factor * working["evidence_utility"]
+    )
+
+    score_columns: list[str] = []
+    rank_columns: list[str] = []
+    for mode_key, effective_series in mode_columns.items():
+        robustness_utility = 1.0 - _normalize(effective_series)
+        weighted_score = base_without_robustness + config.robustness_factor * robustness_utility
+        planning_score = weighted_score * working["evidence_based_weight"]
+        weighted_column = f"weighted_score_per_ton_{mode_key}"
+        robustness_column = f"robustness_utility_{mode_key}"
+        score_column = f"planning_score_{mode_key}"
+        rank_column = f"planning_rank_{mode_key}"
+        working[robustness_column] = robustness_utility
+        working[weighted_column] = weighted_score
+        working[score_column] = planning_score
+        working[rank_column] = working[score_column].rank(method="first", ascending=False)
+        score_columns.append(score_column)
+        rank_columns.append(rank_column)
+
+    working["robustness_utility"] = working[f"robustness_utility_{active_key}"]
+    working["weighted_score_per_ton"] = working[f"weighted_score_per_ton_{active_key}"]
+    working["planning_score"] = working[f"planning_score_{active_key}"]
+    working["uncertainty_score_span"] = working[score_columns].max(axis=1) - working[score_columns].min(axis=1)
+    working["uncertainty_rank_span"] = working[rank_columns].max(axis=1) - working[rank_columns].min(axis=1)
+    working["uncertainty_best_mode"] = working[score_columns].idxmax(axis=1).str.replace(
+        "planning_score_",
+        "",
+        regex=False,
+    )
+    working["uncertainty_worst_mode"] = working[score_columns].idxmin(axis=1).str.replace(
+        "planning_score_",
+        "",
+        regex=False,
+    )
+    working["max_interval_rank_delta_vs_interval_mean"] = (
+        pd.to_numeric(working["planning_rank_max_interval"], errors="coerce")
+        - pd.to_numeric(working["planning_rank_interval_mean"], errors="coerce")
+    )
+    working["combined_only_rank_delta_vs_interval_mean"] = (
+        pd.to_numeric(working["planning_rank_combined_only"], errors="coerce")
+        - pd.to_numeric(working["planning_rank_interval_mean"], errors="coerce")
+    )
+    working["max_interval_score_delta_vs_interval_mean"] = (
+        pd.to_numeric(working["planning_score_max_interval"], errors="coerce")
+        - pd.to_numeric(working["planning_score_interval_mean"], errors="coerce")
+    )
+    working["combined_only_score_delta_vs_interval_mean"] = (
+        pd.to_numeric(working["planning_score_combined_only"], errors="coerce")
+        - pd.to_numeric(working["planning_score_interval_mean"], errors="coerce")
+    )
+    return working
+
+
+def _uncertainty_mode_key(mode: str) -> str:
+    mapping = {
+        "prefer_interval_mean": "interval_mean",
+        "max_interval_ratio": "max_interval",
+        "combined_only": "combined_only",
+    }
+    return mapping.get(str(mode), "interval_mean")
 
 
 def _apply_scenario_external_evidence(

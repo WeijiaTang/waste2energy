@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from ..config import get_objective_weight_system
 from ..planning.solve import PlanningConfig
@@ -22,6 +22,22 @@ def build_default_stress_registry(base_config: PlanningConfig | None = None) -> 
             name="baseline",
             description="Reference planning configuration carried forward from the planning layer.",
             planning_config=baseline,
+        ),
+        ScenarioStressConfig(
+            name="uncertainty_penalty_max_interval",
+            description="More conservative uncertainty screening that penalizes each case by its largest target-level interval ratio.",
+            planning_config=_replace(
+                baseline,
+                uncertainty_penalty_mode="max_interval_ratio",
+            ),
+        ),
+        ScenarioStressConfig(
+            name="uncertainty_penalty_combined_only",
+            description="Combined-only uncertainty screening that ignores target-level interval ratios when applying the planning penalty.",
+            planning_config=_replace(
+                baseline,
+                uncertainty_penalty_mode="combined_only",
+            ),
         ),
         ScenarioStressConfig(
             name="energy_priority",
@@ -156,6 +172,7 @@ def registry_to_frame(registry: list[ScenarioStressConfig]):
                 "max_selected_enforced": config.enforce_max_selected,
                 "min_distinct_subtypes_enforced": config.enforce_min_distinct_subtypes,
                 "scenario_metric_variance_scale": config.scenario_metric_variance_scale,
+                "uncertainty_penalty_mode": config.uncertainty_penalty_mode,
                 "pyomo_solver_preference": config.pyomo_solver_preference,
             }
         )
@@ -163,40 +180,4 @@ def registry_to_frame(registry: list[ScenarioStressConfig]):
 
 
 def _replace(config: PlanningConfig, **overrides) -> PlanningConfig:
-    payload = {
-        "objective_weight_preset": config.objective_weight_preset,
-        "objective_weight_system": config.objective_weight_system,
-        "top_k_per_scenario": config.top_k_per_scenario,
-        "max_portfolio_candidates": config.max_portfolio_candidates,
-        "max_candidate_share": config.max_candidate_share,
-        "max_subtype_share": config.max_subtype_share,
-        "min_distinct_subtypes": config.min_distinct_subtypes,
-        "deployable_capacity_fraction": config.deployable_capacity_fraction,
-        "robustness_factor": config.robustness_factor,
-        "carbon_budget_factor": config.carbon_budget_factor,
-        "constraint_relaxation_ratio": config.constraint_relaxation_ratio,
-        "subtype_relaxation_ratio": config.subtype_relaxation_ratio,
-        "enforce_candidate_cap": config.enforce_candidate_cap,
-        "enforce_subtype_cap": config.enforce_subtype_cap,
-        "enforce_max_selected": config.enforce_max_selected,
-        "enforce_min_distinct_subtypes": config.enforce_min_distinct_subtypes,
-        "scenario_metric_variance_scale": config.scenario_metric_variance_scale,
-        "scenario_external_evidence_table_path": config.scenario_external_evidence_table_path,
-        "scenario_external_evidence": config.scenario_external_evidence,
-        "optimization_method": config.optimization_method,
-        "pyomo_solver_preference": config.pyomo_solver_preference,
-        "pareto_point_count": config.pareto_point_count,
-        "enable_pareto_export": config.enable_pareto_export,
-        "allow_surrogate_fallback": config.allow_surrogate_fallback,
-        "partial_surrogate_weight": config.partial_surrogate_weight,
-        "static_fallback_weight": config.static_fallback_weight,
-        "unsupported_pathway_weight": config.unsupported_pathway_weight,
-        "partial_surrogate_uncertainty_multiplier": config.partial_surrogate_uncertainty_multiplier,
-        "static_fallback_uncertainty_multiplier": config.static_fallback_uncertainty_multiplier,
-        "unsupported_pathway_uncertainty_multiplier": config.unsupported_pathway_uncertainty_multiplier,
-        "partial_surrogate_information_premium_usd_per_ton": config.partial_surrogate_information_premium_usd_per_ton,
-        "static_fallback_information_premium_usd_per_ton": config.static_fallback_information_premium_usd_per_ton,
-        "unsupported_pathway_information_premium_usd_per_ton": config.unsupported_pathway_information_premium_usd_per_ton,
-    }
-    payload.update(overrides)
-    return PlanningConfig(**payload)
+    return replace(config, **overrides)

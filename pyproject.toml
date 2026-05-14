@@ -10,8 +10,10 @@ readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
     "adjusttext>=1.3.0",
+    "catboost>=1.2.8",
     "gymnasium>=1.2.0,<1.3.0",
     "highspy>=1.14.0",
+    "lightgbm>=4.6.0",
     "matplotlib>=3.10.8",
     "numpy>=1.24.0",
     "openpyxl>=3.1.0",
@@ -19,6 +21,7 @@ dependencies = [
     "pillow>=12.2.0",
     "pymoo>=0.6.1",
     "pyomo>=6.9.0",
+    "pytest>=9.0.2",
     "python-dateutil>=2.9.0",
     "requests>=2.31.0",
     "scienceplots>=2.2.1",
@@ -33,6 +36,7 @@ dependencies = [
 [project.scripts]
 waste2energy-train = "waste2energy.cli:main"
 waste2energy-plan = "waste2energy.planning.cli:main"
+waste2energy-benchmark = "waste2energy.benchmark_cli:main"
 waste2energy-scenario = "waste2energy.scenarios.cli:main"
 waste2energy-operation = "waste2energy.operation.cli:main"
 waste2energy-audit = "waste2energy.audit:main"

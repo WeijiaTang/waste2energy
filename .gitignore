@@ -8,15 +8,31 @@ wheels/
 .win*
 .claude
 .kiro
+.pytest_cache/
+
 # Virtual environments
 .venv
 Reference/
 docs/
 .ace-tool/
+.omx/
+"${workspaceFolder}/"
 
 # results
 /outputs/
 waste2energy-paper/sections/*.tex
+
+# LaTeX build artifacts
+waste2energy-paper/*.aux
+waste2energy-paper/*.bbl
+waste2energy-paper/*.blg
+waste2energy-paper/*.fdb_latexmk
+waste2energy-paper/*.fls
+waste2energy-paper/*.log
+waste2energy-paper/*.out
+waste2energy-paper/*.xdv
+waste2energy-paper/*.spl
+waste2energy-paper/tmp_pdf_pages/
 
 # others
 waste2energy-paper/jocp-main.*
@@ -25,3 +41,15 @@ scripts/run_manuscript_sync.py
 waste2energy-paper/figures/graphical-abstract/graphical-abstract-gemini2.png
 waste2energy-paper/submission/
 results/plot/tiff/*.tiff
+/tmp*
+
+# context
+/context_portal/
+*.log
+
+# Intermediate Data (Ignored as they are rebuildable)
+data/processed/model_ready/
+data/processed/unified_features/
+results/plot/data/
+
+

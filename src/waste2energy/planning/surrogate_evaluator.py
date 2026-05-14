@@ -10,7 +10,7 @@ import joblib
 import numpy as np
 import pandas as pd
 
-from ..config import resolve_surrogate_outputs_dir
+from ..config import BENCHMARK_OUTPUTS_DIR, resolve_surrogate_outputs_dir
 
 
 SURROGATE_TARGETS = (
@@ -25,7 +25,22 @@ PATHWAY_DATASET_PREFERENCES: dict[str, tuple[str, ...]] = {
     "pyrolysis": ("pyrolysis_direct",),
 }
 
+PATHWAY_MODEL_PRIORITIES: dict[str, tuple[str, ...]] = {
+    "htc": (
+        "catboost",
+        "lightgbm",
+        "stacking",
+        "xgboost",
+        "extra_trees",
+        "rf",
+        "gradient_boosting",
+        "elastic_net",
+    ),
+}
+
 SUPPORTED_SURROGATE_PATHWAYS = frozenset(PATHWAY_DATASET_PREFERENCES)
+
+MODEL_LOAD_FALLBACK_EXCEPTIONS = (ImportError, ModuleNotFoundError, FileNotFoundError, OSError, ValueError)
 
 
 @dataclass(frozen=True)
@@ -38,6 +53,7 @@ class SurrogateArtifact:
     model_path: Path
     run_config_path: Path
     metrics_path: Path
+    calibration_predictions_path: Path | None
     feature_columns: tuple[str, ...]
 
 
@@ -50,12 +66,16 @@ class SurrogateEvaluator:
         fallback_split_strategy: str = "recommended",
         fallback_uncertainty_ratio: float = 0.10,
         allow_documented_fallback: bool = True,
+        pathway_model_priorities: dict[str, tuple[str, ...]] | None = None,
     ) -> None:
         self.outputs_root = Path(outputs_root) if outputs_root else resolve_surrogate_outputs_dir()
         self.preferred_split_strategy = preferred_split_strategy
         self.fallback_split_strategy = fallback_split_strategy
         self.fallback_uncertainty_ratio = fallback_uncertainty_ratio
         self.allow_documented_fallback = allow_documented_fallback
+        self.pathway_model_priorities = {
+            key: tuple(value) for key, value in (pathway_model_priorities or PATHWAY_MODEL_PRIORITIES).items()
+        }
         self._artifact_cache: dict[tuple[str, str], SurrogateArtifact | None] = {}
         self._model_cache: dict[Path, object] = {}
 
@@ -73,6 +93,8 @@ class SurrogateEvaluator:
             predictions[f"{target}_ci_upper"] = np.nan
             predictions[f"{target}_prediction_std"] = np.nan
             predictions[f"{target}_uncertainty_ratio"] = np.nan
+            predictions[f"{target}_uncertainty_method"] = ""
+            predictions[f"{target}_uncertainty_calibration_count"] = np.nan
             predictions[f"{target}_prediction_source"] = ""
 
         grouped = frame.groupby(frame["pathway"].astype(str).str.strip().str.lower(), dropna=False)
@@ -159,86 +181,101 @@ class SurrogateEvaluator:
                 feature_imputation_flag=materialized["feature_imputation_flag"],
             )
 
-        model = self._load_model(artifact)
-        prediction_std = self._estimate_prediction_std(artifact)
-        mean_values = np.asarray(model.predict(materialized["feature_frame"]), dtype=float)
-        lower = mean_values - 1.96 * prediction_std
-        upper = mean_values + 1.96 * prediction_std
-        ratio = np.abs(upper - lower) / np.maximum(np.abs(mean_values), 1.0)
-        return pd.DataFrame(
-            {
-                "optimization_case_id": frame["optimization_case_id"].to_numpy(),
-                "pathway": frame["pathway"].astype(str).str.strip().str.lower().to_numpy(),
-                "surrogate_prediction_status": ["trained_surrogate_prediction"] * len(frame),
-                "surrogate_feature_imputation_flag": materialized["feature_imputation_flag"].to_numpy(),
-                "surrogate_missing_feature_columns": materialized["missing_required_feature_columns"].to_numpy(),
-                "surrogate_fallback_reason": [""] * len(frame),
-                f"predicted_{target_column}": mean_values,
-                f"{target_column}_ci_lower": lower,
-                f"{target_column}_ci_upper": upper,
-                f"{target_column}_prediction_std": prediction_std,
-                f"{target_column}_uncertainty_ratio": ratio,
-                f"{target_column}_prediction_source": [
-                    f"surrogate:{artifact.model_key}:{artifact.dataset_key}:{artifact.split_strategy}"
-                ]
-                * len(frame),
-            }
-        )
+        try:
+            model = self._load_model(artifact)
+            mean_values = np.asarray(model.predict(materialized["feature_frame"]), dtype=float)
+            half_width, prediction_std, uncertainty_method, calibration_count = (
+                self._estimate_prediction_interval(artifact)
+            )
+            lower = mean_values - half_width
+            upper = mean_values + half_width
+            ratio = np.abs(upper - lower) / np.maximum(np.abs(mean_values), 1.0)
+            return pd.DataFrame(
+                {
+                    "optimization_case_id": frame["optimization_case_id"].to_numpy(),
+                    "pathway": frame["pathway"].astype(str).str.strip().str.lower().to_numpy(),
+                    "surrogate_prediction_status": ["trained_surrogate_prediction"] * len(frame),
+                    "surrogate_feature_imputation_flag": materialized["feature_imputation_flag"].to_numpy(),
+                    "surrogate_missing_feature_columns": materialized["missing_required_feature_columns"].to_numpy(),
+                    "surrogate_fallback_reason": [""] * len(frame),
+                    f"predicted_{target_column}": mean_values,
+                    f"{target_column}_ci_lower": lower,
+                    f"{target_column}_ci_upper": upper,
+                    f"{target_column}_prediction_std": prediction_std,
+                    f"{target_column}_uncertainty_ratio": ratio,
+                    f"{target_column}_uncertainty_method": [uncertainty_method] * len(frame),
+                    f"{target_column}_uncertainty_calibration_count": [calibration_count] * len(frame),
+                    f"{target_column}_prediction_source": [
+                        f"surrogate:{artifact.model_key}:{artifact.dataset_key}:{artifact.split_strategy}"
+                    ]
+                    * len(frame),
+                }
+            )
+        except MODEL_LOAD_FALLBACK_EXCEPTIONS as exc:
+            if not self.allow_documented_fallback:
+                raise
+            reason = (
+                f"model_load_failure:{artifact.model_key}:{artifact.dataset_key}:"
+                f"{exc.__class__.__name__}"
+            )
+            return self._fallback_payload_batch(
+                frame=frame,
+                target_column=target_column,
+                reason=reason,
+                prediction_status="documented_fallback_model_load_failure",
+                missing_feature_columns=materialized["missing_required_feature_columns"],
+                feature_imputation_flag=materialized["feature_imputation_flag"],
+            )
 
     def _resolve_artifact(self, *, pathway: str, target_column: str) -> SurrogateArtifact | None:
         cache_key = (pathway, target_column)
         if cache_key in self._artifact_cache:
             return self._artifact_cache[cache_key]
 
-        selected_manifest_candidates = [
-            self.outputs_root / f"selected_models_manifest_{self.preferred_split_strategy}.csv",
-            self.outputs_root / "selected_models_manifest.csv",
-            self.outputs_root / f"selected_models_manifest_{self.fallback_split_strategy}.csv",
-        ]
-        summary_candidates = [
-            self.outputs_root / "traditional_ml_suite_summary_strict_group.csv",
-            self.outputs_root / self.preferred_split_strategy / "traditional_ml_suite_summary_strict_group.csv",
-            self.outputs_root / "traditional_ml_suite_summary.csv",
-            self.outputs_root / self.fallback_split_strategy / "traditional_ml_suite_summary.csv",
-        ]
         datasets = PATHWAY_DATASET_PREFERENCES.get(pathway, ())
         selected: SurrogateArtifact | None = None
 
-        for manifest_path in selected_manifest_candidates:
-            if not manifest_path.exists():
-                continue
-            manifest = pd.read_csv(manifest_path)
-            subset = manifest[
-                manifest["dataset_key"].isin(datasets) & manifest["target_column"].eq(target_column)
-            ].copy()
-            if subset.empty:
-                continue
-            subset = self._apply_dataset_preference_order(subset, datasets)
-            if subset.empty:
-                continue
-            preferred_subset = subset[
-                subset.get("artifact_role", pd.Series([""] * len(subset), index=subset.index)).astype(str)
-                == "selected_model_refit"
-            ]
-            if preferred_subset.empty:
+        if pathway != "htc":
+            for source_root, manifest_path in self._selected_manifest_candidates(pathway):
+                if not manifest_path.exists():
+                    continue
+                manifest = pd.read_csv(manifest_path)
+                subset = manifest[
+                    manifest["dataset_key"].isin(datasets) & manifest["target_column"].eq(target_column)
+                ].copy()
+                if subset.empty:
+                    continue
+                subset = self._rank_candidate_rows(
+                    subset,
+                    pathway=pathway,
+                    datasets=datasets,
+                    metric_columns=("selected_validation_r2", "selected_test_r2"),
+                )
+                if subset.empty:
+                    continue
                 preferred_subset = subset[
-                    subset.get("selection_status", pd.Series([""] * len(subset), index=subset.index))
-                    .astype(str)
-                    .str.startswith("selected_on_validation")
+                    subset.get("artifact_role", pd.Series([""] * len(subset), index=subset.index)).astype(str)
+                    == "selected_model_refit"
                 ]
-            if not preferred_subset.empty:
-                subset = preferred_subset
-            best = subset.sort_values(["selected_validation_r2", "selected_model_key"], ascending=[False, True]).iloc[0]
-            artifact = self._build_artifact_from_selected_manifest(best)
-            if artifact is not None:
-                selected = artifact
-                break
+                if preferred_subset.empty:
+                    preferred_subset = subset[
+                        subset.get("selection_status", pd.Series([""] * len(subset), index=subset.index))
+                        .astype(str)
+                        .str.startswith("selected_on_validation")
+                    ]
+                if not preferred_subset.empty:
+                    subset = preferred_subset
+                best = subset.iloc[0]
+                artifact = self._build_artifact_from_selected_manifest(best, source_root=source_root)
+                if artifact is not None:
+                    selected = artifact
+                    break
 
         if selected is not None:
             self._artifact_cache[cache_key] = selected
             return selected
 
-        for summary_path in summary_candidates:
+        for source_root, summary_path in self._summary_candidates(pathway):
             if not summary_path.exists():
                 continue
             summary = pd.read_csv(summary_path)
@@ -247,12 +284,16 @@ class SurrogateEvaluator:
             ].copy()
             if subset.empty:
                 continue
-            subset = self._apply_dataset_preference_order(subset, datasets)
+            subset = self._rank_candidate_rows(
+                subset,
+                pathway=pathway,
+                datasets=datasets,
+                metric_columns=("validation_r2", "test_r2"),
+            )
             if subset.empty:
                 continue
-            subset["test_r2_rank"] = pd.to_numeric(subset.get("test_r2"), errors="coerce").fillna(-np.inf)
-            best = subset.sort_values(["test_r2_rank", "model_key"], ascending=[False, True]).iloc[0]
-            artifact = self._build_artifact_from_summary(best)
+            best = subset.iloc[0]
+            artifact = self._build_artifact_from_summary(best, source_root=source_root)
             if artifact is not None:
                 selected = artifact
                 break
@@ -260,14 +301,14 @@ class SurrogateEvaluator:
         self._artifact_cache[cache_key] = selected
         return selected
 
-    def _build_artifact_from_selected_manifest(self, row: pd.Series) -> SurrogateArtifact | None:
+    def _build_artifact_from_selected_manifest(self, row: pd.Series, *, source_root: Path) -> SurrogateArtifact | None:
         model_key = str(row.get("selected_model_key"))
         dataset_key = str(row.get("dataset_key"))
         target_column = str(row.get("target_column"))
         split_strategy = str(row.get("split_strategy", "recommended") or "recommended")
-        model_path = Path(str(row.get("model_path", "")))
-        run_config_path = Path(str(row.get("run_config_path", "")))
-        metrics_path = Path(str(row.get("metrics_path", "")))
+        model_path = self._resolve_existing_path(source_root, row.get("model_path", ""))
+        run_config_path = self._resolve_existing_path(source_root, row.get("run_config_path", ""))
+        metrics_path = self._resolve_existing_path(source_root, row.get("metrics_path", ""))
 
         if not model_path.exists() or not run_config_path.exists():
             payload = pd.Series(
@@ -278,7 +319,7 @@ class SurrogateEvaluator:
                     "split_strategy": split_strategy,
                 }
             )
-            return self._build_artifact_from_summary(payload)
+            return self._build_artifact_from_summary(payload, source_root=source_root)
 
         payload = json.loads(run_config_path.read_text(encoding="utf-8"))
         return SurrogateArtifact(
@@ -290,29 +331,31 @@ class SurrogateEvaluator:
             model_path=model_path,
             run_config_path=run_config_path,
             metrics_path=metrics_path,
+            calibration_predictions_path=self._resolve_optional_existing_path(
+                source_root,
+                row.get("benchmark_predictions_path"),
+                row.get("predictions_path"),
+            ),
             feature_columns=tuple(payload.get("feature_columns", [])),
         )
 
-    def _build_artifact_from_summary(self, row: pd.Series) -> SurrogateArtifact | None:
+    def _build_artifact_from_summary(self, row: pd.Series, *, source_root: Path) -> SurrogateArtifact | None:
         model_key = str(row["model_key"])
         dataset_key = str(row["dataset_key"])
         target_column = str(row["target_column"])
         split_strategy = str(row.get("split_strategy", "recommended") or "recommended")
 
-        if split_strategy == "recommended":
-            base_dir = self.outputs_root
-        else:
-            base_dir = self.outputs_root / split_strategy
-
-        if model_key == "xgboost":
-            artifact_dir = base_dir / dataset_key / target_column
-            model_path = artifact_dir / "model.json"
-        else:
-            artifact_dir = base_dir / model_key / dataset_key / target_column
-            model_path = artifact_dir / "model.joblib"
+        artifact_dir, model_path = self._artifact_location_from_root(
+            source_root=source_root,
+            split_strategy=split_strategy,
+            model_key=model_key,
+            dataset_key=dataset_key,
+            target_column=target_column,
+        )
 
         run_config_path = artifact_dir / "run_config.json"
         metrics_path = artifact_dir / "metrics.json"
+        predictions_path = artifact_dir / "predictions.csv"
         if not run_config_path.exists() or not model_path.exists():
             return None
 
@@ -326,6 +369,7 @@ class SurrogateEvaluator:
             model_path=model_path,
             run_config_path=run_config_path,
             metrics_path=metrics_path,
+            calibration_predictions_path=predictions_path if predictions_path.exists() else None,
             feature_columns=tuple(payload.get("feature_columns", [])),
         )
 
@@ -338,10 +382,172 @@ class SurrogateEvaluator:
 
             model = xgb.XGBRegressor()
             model.load_model(artifact.model_path)
+        elif artifact.model_key == "catboost":
+            import catboost
+
+            model = catboost.CatBoostRegressor()
+            model.load_model(str(artifact.model_path))
+        elif artifact.model_key == "lightgbm":
+            import lightgbm as lgb
+
+            model = lgb.Booster(model_file=str(artifact.model_path))
         else:
             model = joblib.load(artifact.model_path)
         self._model_cache[artifact.model_path] = model
         return model
+
+    def _artifact_location_from_root(
+        self,
+        *,
+        source_root: Path,
+        split_strategy: str,
+        model_key: str,
+        dataset_key: str,
+        target_column: str,
+    ) -> tuple[Path, Path]:
+        candidate_roots = [source_root]
+        if split_strategy != "recommended":
+            candidate_roots.insert(0, source_root / split_strategy)
+        for root in candidate_roots:
+            artifact_dir, model_path = _artifact_location_for_model(
+                root=root,
+                model_key=model_key,
+                dataset_key=dataset_key,
+                target_column=target_column,
+            )
+            if model_path.exists() or (artifact_dir / "run_config.json").exists():
+                return artifact_dir, model_path
+        return _artifact_location_for_model(
+            root=candidate_roots[0],
+            model_key=model_key,
+            dataset_key=dataset_key,
+            target_column=target_column,
+        )
+
+    def _selected_manifest_candidates(self, pathway: str) -> list[tuple[Path, Path]]:
+        candidates: list[tuple[Path, Path]] = []
+        for root in self._candidate_source_roots(pathway):
+            if pathway == "htc":
+                candidates.extend(
+                    [
+                        (root, root / "selected_models_manifest_benchmark_leave_study_out.csv"),
+                        (root, root / "selected_models_manifest_leave_study_out.csv"),
+                    ]
+                )
+            candidates.extend(
+                [
+                    (root, root / f"selected_models_manifest_{self.preferred_split_strategy}.csv"),
+                    (root, root / "selected_models_manifest.csv"),
+                    (root, root / f"selected_models_manifest_{self.fallback_split_strategy}.csv"),
+                ]
+            )
+        return _deduplicate_candidate_paths(candidates)
+
+    def _summary_candidates(self, pathway: str) -> list[tuple[Path, Path]]:
+        candidates: list[tuple[Path, Path]] = []
+        for root in self._candidate_source_roots(pathway):
+            if pathway == "htc":
+                candidates.append((root, root / "traditional_ml_suite_summary_leave_study_out.csv"))
+            candidates.extend(
+                [
+                    (root, root / f"traditional_ml_suite_summary_{self.preferred_split_strategy}.csv"),
+                    (root, root / self.preferred_split_strategy / f"traditional_ml_suite_summary_{self.preferred_split_strategy}.csv"),
+                    (root, root / "traditional_ml_suite_summary.csv"),
+                    (root, root / self.fallback_split_strategy / "traditional_ml_suite_summary.csv"),
+                ]
+            )
+        return _deduplicate_candidate_paths(candidates)
+
+    def _candidate_source_roots(self, pathway: str) -> list[Path]:
+        roots: list[Path] = []
+        if pathway == "htc":
+            roots.append(BENCHMARK_OUTPUTS_DIR / "htc_model_compare_lso")
+        roots.append(self.outputs_root)
+        return roots
+
+    def _rank_candidate_rows(
+        self,
+        subset: pd.DataFrame,
+        *,
+        pathway: str,
+        datasets: tuple[str, ...],
+        metric_columns: tuple[str, ...],
+    ) -> pd.DataFrame:
+        working = self._apply_dataset_preference_order(subset, datasets)
+        if working.empty:
+            return working
+        working = working.copy()
+        model_column = "selected_model_key" if "selected_model_key" in working.columns else "model_key"
+        working = working[
+            working[model_column].astype(str).map(self._model_runtime_available).fillna(False)
+        ].copy()
+        if working.empty:
+            return working
+        working["_model_priority_rank"] = working[model_column].astype(str).map(
+            lambda value: self._model_priority_rank(pathway=pathway, model_key=value)
+        )
+        sort_columns = ["_model_priority_rank"]
+        ascending = [True]
+        for metric_column in metric_columns:
+            working[f"_{metric_column}_sort"] = pd.to_numeric(working.get(metric_column), errors="coerce").fillna(-np.inf)
+            sort_columns.append(f"_{metric_column}_sort")
+            ascending.append(False)
+        sort_columns.append(model_column)
+        ascending.append(True)
+        return working.sort_values(sort_columns, ascending=ascending).reset_index(drop=True)
+
+    def _model_priority_rank(self, *, pathway: str, model_key: str) -> int:
+        priorities = self.pathway_model_priorities.get(pathway, ())
+        try:
+            return priorities.index(model_key)
+        except ValueError:
+            return len(priorities)
+
+    def _model_runtime_available(self, model_key: str) -> bool:
+        try:
+            if model_key == "xgboost":
+                import xgboost  # noqa: F401
+            elif model_key == "catboost":
+                import catboost  # noqa: F401
+            elif model_key == "lightgbm":
+                import lightgbm  # noqa: F401
+            return True
+        except Exception:
+            return model_key in {"stacking", "rf", "extra_trees", "gradient_boosting", "elastic_net"}
+
+    def _resolve_existing_path(self, source_root: Path, raw_path: object) -> Path:
+        path = Path(str(raw_path or ""))
+        if path.exists():
+            return path
+        if path.is_absolute():
+            return path
+        candidate = source_root / path
+        if candidate.exists():
+            return candidate
+        return path
+
+    def _resolve_optional_existing_path(self, source_root: Path, *raw_paths: object) -> Path | None:
+        for raw_path in raw_paths:
+            if raw_path is None:
+                continue
+            path = self._resolve_existing_path(source_root, raw_path)
+            if path.exists():
+                return path
+        return None
+
+    def _estimate_prediction_interval(
+        self,
+        artifact: SurrogateArtifact,
+    ) -> tuple[float, float, str, int]:
+        if artifact.calibration_predictions_path and artifact.calibration_predictions_path.exists():
+            calibration = self._read_calibration_residuals(artifact.calibration_predictions_path)
+            if calibration is not None:
+                half_width, count = calibration
+                half_width = max(float(half_width), 1e-6)
+                return half_width, half_width / 1.96, "split_conformal_abs_residual", count
+
+        prediction_std = max(float(self._estimate_prediction_std(artifact)), 1e-6)
+        return 1.96 * prediction_std, prediction_std, "rmse_proxy", 0
 
     def _estimate_prediction_std(self, artifact: SurrogateArtifact) -> float:
         if artifact.metrics_path.exists():
@@ -355,6 +561,36 @@ class SurrogateEvaluator:
             if rmse_values:
                 return max(max(rmse_values), 1e-6)
         return self.fallback_uncertainty_ratio
+
+    def _read_calibration_residuals(self, predictions_path: Path) -> tuple[float, int] | None:
+        try:
+            predictions = pd.read_csv(predictions_path)
+        except (OSError, pd.errors.EmptyDataError):
+            return None
+
+        if predictions.empty or not {"y_true", "y_pred"}.issubset(predictions.columns):
+            return None
+
+        working = predictions.copy()
+        if "split" in working.columns:
+            for split_name in ("validation", "test", "train", "refit_train"):
+                selected = working[working["split"].astype(str) == split_name].copy()
+                if not selected.empty:
+                    working = selected
+                    break
+
+        residuals = (
+            pd.to_numeric(working["y_true"], errors="coerce")
+            - pd.to_numeric(working["y_pred"], errors="coerce")
+        ).abs().dropna()
+        if residuals.empty:
+            return None
+
+        values = np.sort(residuals.to_numpy(dtype=float))
+        count = int(len(values))
+        quantile_rank = int(np.ceil((count + 1) * 0.95)) - 1
+        quantile_rank = min(max(quantile_rank, 0), count - 1)
+        return float(values[quantile_rank]), count
 
     def _materialize_features(
         self,
@@ -498,6 +734,16 @@ class SurrogateEvaluator:
                 f"{target_column}_ci_upper": upper,
                 f"{target_column}_prediction_std": std,
                 f"{target_column}_uncertainty_ratio": ratio,
+                f"{target_column}_uncertainty_method": np.where(
+                    values.isna(),
+                    "",
+                    "fallback_ratio_proxy",
+                ),
+                f"{target_column}_uncertainty_calibration_count": np.where(
+                    values.isna(),
+                    np.nan,
+                    0,
+                ),
                 f"{target_column}_prediction_source": prediction_source,
             }
         )
@@ -524,8 +770,12 @@ class SurrogateEvaluator:
         return pd.DataFrame(columns=frame.columns)
 
 
-def build_surrogate_predictions(frame: pd.DataFrame) -> pd.DataFrame:
-    evaluator = SurrogateEvaluator()
+def build_surrogate_predictions(
+    frame: pd.DataFrame,
+    *,
+    pathway_model_priorities: dict[str, tuple[str, ...]] | None = None,
+) -> pd.DataFrame:
+    evaluator = SurrogateEvaluator(pathway_model_priorities=pathway_model_priorities)
     predictions = evaluator.evaluate(frame)
     uncertainty_columns = [f"{target}_uncertainty_ratio" for target in SURROGATE_TARGETS]
     predictions["combined_uncertainty_ratio"] = predictions[
@@ -547,3 +797,48 @@ def build_surrogate_predictions(frame: pd.DataFrame) -> pd.DataFrame:
         }
     )
     return predictions
+
+
+def _optional_path(*values: object) -> Path | None:
+    for value in values:
+        if value is None:
+            continue
+        text = str(value).strip()
+        if not text or text.lower() == "nan":
+            continue
+        return Path(text)
+    return None
+
+
+def _deduplicate_candidate_paths(
+    values: list[tuple[Path, Path]],
+) -> list[tuple[Path, Path]]:
+    deduplicated: list[tuple[Path, Path]] = []
+    seen: set[tuple[str, str]] = set()
+    for source_root, path in values:
+        key = (str(source_root), str(path))
+        if key in seen:
+            continue
+        seen.add(key)
+        deduplicated.append((source_root, path))
+    return deduplicated
+
+
+def _artifact_location_for_model(
+    *,
+    root: Path,
+    model_key: str,
+    dataset_key: str,
+    target_column: str,
+) -> tuple[Path, Path]:
+    if model_key == "xgboost":
+        artifact_dir = root / dataset_key / target_column
+        return artifact_dir, artifact_dir / "model.json"
+    if model_key == "catboost":
+        artifact_dir = root / model_key / dataset_key / target_column
+        return artifact_dir, artifact_dir / "model.cbm"
+    if model_key == "lightgbm":
+        artifact_dir = root / model_key / dataset_key / target_column
+        return artifact_dir, artifact_dir / "model.txt"
+    artifact_dir = root / model_key / dataset_key / target_column
+    return artifact_dir, artifact_dir / "model.joblib"

@@ -4,6 +4,10 @@ import argparse
 import json
 import sys
 
+import pandas as pd
+
+from ..common import parse_manifest_timestamp
+from ..config import OPERATION_OUTPUTS_DIR
 from .baselines import run_baseline_policies
 from .artifacts import (
     write_operation_comparison_outputs,
@@ -17,7 +21,7 @@ from .comparison import (
     build_rl_policy_behavior_summary,
     build_rl_policy_summary,
 )
-from .inputs import build_operation_environment_specs
+from .inputs import build_operation_environment_specs, load_operation_input_bundle
 from .train_rl import train_rl_agents
 
 
@@ -58,6 +62,11 @@ def build_parser() -> argparse.ArgumentParser:
         default="42,43,44,45,46",
         help="Comma-separated random seeds for RL mode or compare mode.",
     )
+    parser.add_argument(
+        "--force-retrain-rl",
+        action="store_true",
+        help="Ignore any reusable RL artifacts and retrain RL policies from scratch.",
+    )
     return parser
 
 
@@ -66,9 +75,14 @@ def main() -> int:
     args = parser.parse_args()
     seeds = [int(item.strip()) for item in args.seeds.split(",") if item.strip()]
     try:
+        input_bundle = load_operation_input_bundle(
+            planning_dir=args.planning_dir or None,
+            scenario_dir=args.scenario_dir or None,
+        )
         environment_specs = build_operation_environment_specs(
             planning_dir=args.planning_dir or None,
             scenario_dir=args.scenario_dir or None,
+            bundle=input_bundle,
         )
         if args.mode == "baseline":
             rollout_steps, rollout_summary = run_baseline_policies(
@@ -80,6 +94,9 @@ def main() -> int:
                 rollout_steps=rollout_steps,
                 rollout_summary=rollout_summary,
                 output_dir=args.output_dir or None,
+                planning_run_config=input_bundle.planning_run_config,
+                scenario_run_config=input_bundle.scenario_run_config,
+                horizon_steps=args.horizon_steps,
             )
             payload = {
                 "mode": "baseline",
@@ -106,6 +123,12 @@ def main() -> int:
                 policy_behavior_summary=policy_behavior_summary,
                 output_dir=args.output_dir or None,
                 algorithm=args.algorithm,
+                planning_run_config=input_bundle.planning_run_config,
+                scenario_run_config=input_bundle.scenario_run_config,
+                seeds=seeds,
+                total_timesteps=args.total_timesteps,
+                evaluation_episodes=args.evaluation_episodes,
+                horizon_steps=args.horizon_steps,
             )
             payload = {
                 "mode": "rl",
@@ -128,13 +151,21 @@ def main() -> int:
             rl_seed_aggregate_summaries: dict[str, object] = {}
             rl_policy_summaries = []
             for algorithm in ["sac", "td3"]:
-                training_summary, evaluation_rollouts, evaluation_episode_summary, seed_aggregate_summary = train_rl_agents(
-                    environment_specs,
+                (
+                    training_summary,
+                    evaluation_rollouts,
+                    evaluation_episode_summary,
+                    seed_aggregate_summary,
+                    policy_behavior_summary,
+                ) = _load_or_train_rl_artifacts(
+                    environment_specs=environment_specs,
+                    input_bundle=input_bundle,
                     algorithm=algorithm,
                     total_timesteps=args.total_timesteps,
                     seeds=seeds,
                     horizon_steps=args.horizon_steps,
                     evaluation_episodes=args.evaluation_episodes,
+                    force_retrain=args.force_retrain_rl,
                 )
                 rl_training_summaries[algorithm] = training_summary
                 rl_evaluation_rollouts[algorithm] = evaluation_rollouts
@@ -148,7 +179,7 @@ def main() -> int:
             )
             policy_behavior_comparison = build_policy_behavior_comparison(
                 baseline_rollout_steps,
-                list(rl_evaluation_rollouts.values()),
+                list(rl_evaluation_rollouts.values()) if rl_evaluation_rollouts else [],
             )
             outputs = write_operation_comparison_outputs(
                 baseline_rollout_steps=baseline_rollout_steps,
@@ -162,6 +193,10 @@ def main() -> int:
                 output_dir=args.output_dir or None,
                 seeds=seeds,
                 total_timesteps=args.total_timesteps,
+                planning_run_config=input_bundle.planning_run_config,
+                scenario_run_config=input_bundle.scenario_run_config,
+                evaluation_episodes=args.evaluation_episodes,
+                horizon_steps=args.horizon_steps,
             )
             payload = {
                 "mode": "compare",
@@ -176,6 +211,148 @@ def main() -> int:
 
     print(json.dumps(payload, indent=2))
     return 0
+
+
+def _load_or_train_rl_artifacts(
+    *,
+    environment_specs: pd.DataFrame,
+    input_bundle,
+    algorithm: str,
+    total_timesteps: int,
+    seeds: list[int],
+    horizon_steps: int,
+    evaluation_episodes: int,
+    force_retrain: bool,
+) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    if not force_retrain:
+        cached = _load_cached_rl_artifacts(
+            algorithm=algorithm,
+            input_bundle=input_bundle,
+            total_timesteps=total_timesteps,
+            seeds=seeds,
+            horizon_steps=horizon_steps,
+            evaluation_episodes=evaluation_episodes,
+        )
+        if cached is not None:
+            return cached
+
+    training_summary, evaluation_rollouts, evaluation_episode_summary, seed_aggregate_summary = train_rl_agents(
+        environment_specs,
+        algorithm=algorithm,
+        total_timesteps=total_timesteps,
+        seeds=seeds,
+        horizon_steps=horizon_steps,
+        evaluation_episodes=evaluation_episodes,
+    )
+    policy_behavior_summary = build_rl_policy_behavior_summary(evaluation_rollouts)
+    write_operation_rl_outputs(
+        environment_specs=environment_specs,
+        training_summary=training_summary,
+        evaluation_rollouts=evaluation_rollouts,
+        evaluation_episode_summary=evaluation_episode_summary,
+        seed_aggregate_summary=seed_aggregate_summary,
+        policy_behavior_summary=policy_behavior_summary,
+        output_dir=None,
+        algorithm=algorithm,
+        planning_run_config=input_bundle.planning_run_config,
+        scenario_run_config=input_bundle.scenario_run_config,
+        seeds=seeds,
+        total_timesteps=total_timesteps,
+        evaluation_episodes=evaluation_episodes,
+        horizon_steps=horizon_steps,
+    )
+    return (
+        training_summary,
+        evaluation_rollouts,
+        evaluation_episode_summary,
+        seed_aggregate_summary,
+        policy_behavior_summary,
+    )
+
+
+def _load_cached_rl_artifacts(
+    *,
+    algorithm: str,
+    input_bundle,
+    total_timesteps: int,
+    seeds: list[int],
+    horizon_steps: int,
+    evaluation_episodes: int,
+) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame] | None:
+    rl_dir = OPERATION_OUTPUTS_DIR / "rl" / algorithm
+    run_config_path = rl_dir / "run_config.json"
+    if not run_config_path.exists():
+        return None
+
+    run_config = json.loads(run_config_path.read_text(encoding="utf-8"))
+    if not _rl_run_config_is_compatible(
+        run_config=run_config,
+        input_bundle=input_bundle,
+        total_timesteps=total_timesteps,
+        seeds=seeds,
+        horizon_steps=horizon_steps,
+        evaluation_episodes=evaluation_episodes,
+    ):
+        return None
+
+    required_files = {
+        "training_summary": rl_dir / "training_summary.csv",
+        "evaluation_rollouts": rl_dir / "evaluation_rollouts.csv",
+        "evaluation_episode_summary": rl_dir / "evaluation_episode_summary.csv",
+        "seed_aggregate_summary": rl_dir / "seed_aggregate_summary.csv",
+        "policy_behavior_summary": rl_dir / "policy_behavior_summary.csv",
+    }
+    if not all(path.exists() for path in required_files.values()):
+        return None
+
+    return tuple(pd.read_csv(path) for path in required_files.values())  # type: ignore[return-value]
+
+
+def _rl_run_config_is_compatible(
+    *,
+    run_config: dict[str, object],
+    input_bundle,
+    total_timesteps: int,
+    seeds: list[int],
+    horizon_steps: int,
+    evaluation_episodes: int,
+) -> bool:
+    planning_timestamp = parse_manifest_timestamp(input_bundle.planning_run_config)
+    scenario_timestamp = parse_manifest_timestamp(input_bundle.scenario_run_config)
+    cached_planning_timestamp = _parse_cached_timestamp(run_config.get("source_planning_generated_at_utc"))
+    cached_scenario_timestamp = _parse_cached_timestamp(run_config.get("source_scenario_generated_at_utc"))
+
+    if planning_timestamp and cached_planning_timestamp and cached_planning_timestamp < planning_timestamp:
+        return False
+    if scenario_timestamp and cached_scenario_timestamp and cached_scenario_timestamp < scenario_timestamp:
+        return False
+
+    if planning_timestamp and cached_planning_timestamp is None:
+        return False
+    if scenario_timestamp and cached_scenario_timestamp is None:
+        return False
+
+    if int(run_config.get("total_timesteps", -1) or -1) != int(total_timesteps):
+        return False
+    if int(run_config.get("evaluation_episodes", -1) or -1) != int(evaluation_episodes):
+        return False
+    if int(run_config.get("horizon_steps", -1) or -1) != int(horizon_steps):
+        return False
+
+    cached_seeds = [int(value) for value in list(run_config.get("seeds", []))]
+    if sorted(cached_seeds) != sorted(int(seed) for seed in seeds):
+        return False
+
+    return True
+
+
+def _parse_cached_timestamp(value: object):
+    if not value:
+        return None
+    try:
+        return parse_manifest_timestamp({"generated_at_utc": str(value)})
+    except Exception:
+        return None
 
 
 if __name__ == "__main__":

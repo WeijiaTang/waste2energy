@@ -29,6 +29,107 @@ def build_figure_ready_tables(metrics: pd.DataFrame) -> dict[str, pd.DataFrame]:
     }
 
 
+def build_figure3_enhanced_table(
+    robustness_frame: pd.DataFrame,
+    confidence_df: pd.DataFrame,
+    evidence_ceiling_df: pd.DataFrame,
+) -> pd.DataFrame:
+    frame = robustness_frame.copy()
+    if frame.empty:
+        return frame
+
+    working = frame.merge(
+        confidence_df[
+            [
+                "scenario_name",
+                "pathway",
+                "recommendation_confidence_score",
+                "recommendation_confidence_tier",
+                "support_score_component",
+                "stress_support_score_component",
+                "role_score_component",
+            ]
+        ],
+        on=["scenario_name", "pathway"],
+        how="left",
+    )
+
+    scenario_lookup = (
+        evidence_ceiling_df.rename(
+            columns={
+                "scenario": "scenario_display",
+                "surrogate_supported_share_pct": "full_support_share_pct",
+                "transferability_ceiling": "scenario_transferability_ceiling",
+                "selected_pathways": "scenario_selected_pathways",
+            }
+        )
+        .copy()
+    )
+    scenario_lookup["scenario_display"] = scenario_lookup["scenario_display"].replace(
+        {
+            "baseline-region": "Baseline region",
+            "high-supply": "High supply",
+            "policy-support": "Policy support",
+        }
+    )
+    scenario_lookup["full_support_share_pct"] = pd.to_numeric(
+        scenario_lookup["full_support_share_pct"],
+        errors="coerce",
+    )
+    working = working.merge(
+        scenario_lookup[
+            [
+                "scenario_display",
+                "full_support_share_pct",
+                "scenario_transferability_ceiling",
+                "scenario_selected_pathways",
+            ]
+        ],
+        on="scenario_display",
+        how="left",
+    )
+    return working.sort_values(["scenario_order", "pathway_order"]).reset_index(drop=True)
+
+
+def build_benchmark_necessity_table(benchmark_df: pd.DataFrame) -> pd.DataFrame:
+    if benchmark_df.empty:
+        return benchmark_df
+    working = benchmark_df.copy()
+    variant_labels = {
+        "no_robustness_penalty": "No robustness",
+        "no_evidence_penalty": "No evidence penalty",
+        "classic_multiobjective_optimizer": "Classic MOO",
+        "ranking_only_unconstrained": "No share/diversity caps",
+        "greedy_weighted_score_heuristic": "Greedy heuristic",
+        "no_carbon_constraint": "No carbon constraint",
+    }
+    significance_labels = {
+        "highly_consistent": "HC",
+        "directionally_consistent": "DC",
+        "suggestive": "SG",
+        "unstable": "UN",
+    }
+    necessity_rank = {
+        "limited_effect": 0,
+        "supports_secondary_innovation": 1,
+        "supports_core_innovation": 2,
+    }
+    working["benchmark_variant_display"] = working["benchmark_variant"].map(variant_labels).fillna(
+        working["benchmark_variant"].astype(str)
+    )
+    working["significance_abbrev"] = working["effect_significance_tier"].map(significance_labels).fillna("NA")
+    working["necessity_rank"] = working["necessity_tier"].map(necessity_rank).fillna(-1).astype(int)
+    working["pathway_shift_rate_pct"] = pd.to_numeric(
+        working.get("pathway_shift_rate"),
+        errors="coerce",
+    ).fillna(0.0) * 100.0
+    working["case_shift_rate_pct"] = pd.to_numeric(
+        working.get("case_shift_rate"),
+        errors="coerce",
+    ).fillna(0.0) * 100.0
+    return working.sort_values(["benchmark_variant_display", "scenario_name"]).reset_index(drop=True)
+
+
 def write_figure_ready_tables(
     tables: dict[str, pd.DataFrame],
     *,

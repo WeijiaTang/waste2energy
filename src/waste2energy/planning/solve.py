@@ -11,6 +11,7 @@ from ..config import (
     ObjectiveWeightSystem,
     get_objective_weight_system,
 )
+from ..evidence_policy import DEFAULT_PLANNING_EVIDENCE_POLICY, EVIDENCE_POLICY_VERSION
 from .artifacts import write_planning_outputs
 from .constraints import build_scenario_constraints
 from .inputs import load_planning_input_bundle, load_scenario_external_evidence_table
@@ -55,22 +56,49 @@ class PlanningConfig:
     enforce_max_selected: bool = True
     enforce_min_distinct_subtypes: bool = True
     scenario_metric_variance_scale: float = 1.00
+    min_pathway_share: tuple[tuple[str, float], ...] = field(default_factory=tuple)
+    max_pathway_share: tuple[tuple[str, float], ...] = field(default_factory=tuple)
     scenario_external_evidence_table_path: str | None = None
     scenario_external_evidence: tuple[ScenarioExternalEvidence, ...] = field(default_factory=tuple)
     optimization_method: str = "auto"
     pyomo_solver_preference: str = "auto"
     pareto_point_count: int = 12
     enable_pareto_export: bool = True
+    uncertainty_penalty_mode: str = "prefer_interval_mean"
+    evidence_policy_version: str = EVIDENCE_POLICY_VERSION
+    evidence_utility_factor: float = DEFAULT_PLANNING_EVIDENCE_POLICY.evidence_utility_factor
     allow_surrogate_fallback: bool = True
-    partial_surrogate_weight: float = 0.70
-    static_fallback_weight: float = 0.35
-    unsupported_pathway_weight: float = 0.15
-    partial_surrogate_uncertainty_multiplier: float = 1.35
-    static_fallback_uncertainty_multiplier: float = 2.10
-    unsupported_pathway_uncertainty_multiplier: float = 3.25
-    partial_surrogate_information_premium_usd_per_ton: float = 8.0
-    static_fallback_information_premium_usd_per_ton: float = 22.0
-    unsupported_pathway_information_premium_usd_per_ton: float = 45.0
+    htc_model_priority: tuple[str, ...] = (
+        "catboost",
+        "lightgbm",
+        "stacking",
+        "xgboost",
+        "extra_trees",
+        "rf",
+        "gradient_boosting",
+        "elastic_net",
+    )
+    partial_surrogate_weight: float = DEFAULT_PLANNING_EVIDENCE_POLICY.partial_surrogate_weight
+    static_fallback_weight: float = DEFAULT_PLANNING_EVIDENCE_POLICY.static_fallback_weight
+    unsupported_pathway_weight: float = DEFAULT_PLANNING_EVIDENCE_POLICY.unsupported_pathway_weight
+    partial_surrogate_uncertainty_multiplier: float = (
+        DEFAULT_PLANNING_EVIDENCE_POLICY.partial_surrogate_uncertainty_multiplier
+    )
+    static_fallback_uncertainty_multiplier: float = (
+        DEFAULT_PLANNING_EVIDENCE_POLICY.static_fallback_uncertainty_multiplier
+    )
+    unsupported_pathway_uncertainty_multiplier: float = (
+        DEFAULT_PLANNING_EVIDENCE_POLICY.unsupported_pathway_uncertainty_multiplier
+    )
+    partial_surrogate_information_premium_usd_per_ton: float = (
+        DEFAULT_PLANNING_EVIDENCE_POLICY.partial_surrogate_information_premium_usd_per_ton
+    )
+    static_fallback_information_premium_usd_per_ton: float = (
+        DEFAULT_PLANNING_EVIDENCE_POLICY.static_fallback_information_premium_usd_per_ton
+    )
+    unsupported_pathway_information_premium_usd_per_ton: float = (
+        DEFAULT_PLANNING_EVIDENCE_POLICY.unsupported_pathway_information_premium_usd_per_ton
+    )
 
     @property
     def energy_weight(self) -> float:
@@ -149,7 +177,10 @@ def run_planning_baseline(
 def execute_planning_pipeline(bundle, config: PlanningConfig) -> dict[str, object]:
     active_config = _resolve_planning_config(config, bundle.frame)
     planning_frame = _attach_scenario_external_evidence(bundle.frame, active_config)
-    surrogate_predictions = build_surrogate_predictions(planning_frame)
+    surrogate_predictions = build_surrogate_predictions(
+        planning_frame,
+        pathway_model_priorities={"htc": active_config.htc_model_priority},
+    )
     objective_frame, readiness, data_quality_summary, candidate_exclusions = assemble_objective_frame(
         base_frame=planning_frame,
         surrogate_predictions=surrogate_predictions,
@@ -223,6 +254,10 @@ def build_scenario_portfolios(
 
     for scenario_name, scenario_frame in scored.groupby("scenario_name", dropna=False):
         constraint = constraint_map.get(scenario_name, {})
+        ranking_diagnostics = _build_uncertainty_mode_ranking_diagnostics(
+            scenario_frame,
+            active_mode=config.uncertainty_penalty_mode,
+        )
         result = solve_scenario_optimization(scenario_frame, constraint, config)
         allocations = result.allocations.copy()
         if not allocations.empty:
@@ -232,6 +267,7 @@ def build_scenario_portfolios(
             {
                 "scenario_name": scenario_name,
                 **result.diagnostics,
+                **ranking_diagnostics,
             }
         )
 
@@ -394,6 +430,25 @@ def build_pathway_summary(
                     best_case,
                     "combined_uncertainty_ratio",
                 ),
+                "best_case_uncertainty_source": best_case.get("combined_uncertainty_ratio_source"),
+                "best_case_uncertainty_rank_span": _optional_numeric_from_row(
+                    best_case,
+                    "uncertainty_rank_span",
+                ),
+                "best_case_uncertainty_best_mode": best_case.get("uncertainty_best_mode"),
+                "best_case_uncertainty_worst_mode": best_case.get("uncertainty_worst_mode"),
+                "best_case_rank_interval_mean": _optional_numeric_from_row(
+                    best_case,
+                    "planning_rank_interval_mean",
+                ),
+                "best_case_rank_max_interval": _optional_numeric_from_row(
+                    best_case,
+                    "planning_rank_max_interval",
+                ),
+                "best_case_rank_combined_only": _optional_numeric_from_row(
+                    best_case,
+                    "planning_rank_combined_only",
+                ),
                 "best_case_manure_subtype": best_case.get("manure_subtype"),
                 "best_case_blend_manure_ratio": best_case.get("blend_manure_ratio"),
                 "best_case_blend_wet_waste_ratio": best_case.get("blend_wet_waste_ratio"),
@@ -443,6 +498,142 @@ def _safe_ratio(numerator: float, denominator: float) -> float:
     return numerator / denominator
 
 
+def _build_uncertainty_mode_ranking_diagnostics(
+    scored: pd.DataFrame,
+    *,
+    active_mode: str,
+) -> dict[str, object]:
+    if scored.empty:
+        return {
+            "active_uncertainty_penalty_mode": active_mode,
+            "uncertainty_mode_case_switch_count": 0,
+            "uncertainty_mode_pathway_switch_count": 0,
+        }
+
+    mode_specs = {
+        "interval_mean": "planning_score_interval_mean",
+        "max_interval": "planning_score_max_interval",
+        "combined_only": "planning_score_combined_only",
+    }
+    top_cases: dict[str, str] = {}
+    top_pathways: dict[str, str] = {}
+    top_scores: dict[str, float] = {}
+    tie_breaker = "planning_energy_intensity_mj_per_ton" if "planning_energy_intensity_mj_per_ton" in scored.columns else None
+
+    for mode_key, score_column in mode_specs.items():
+        if score_column not in scored.columns:
+            continue
+        sort_columns = [score_column]
+        ascending = [False]
+        if tie_breaker:
+            sort_columns.append(tie_breaker)
+            ascending.append(False)
+        top_row = scored.sort_values(sort_columns, ascending=ascending).iloc[0]
+        top_cases[mode_key] = str(top_row.get("optimization_case_id", ""))
+        top_pathways[mode_key] = str(top_row.get("pathway", ""))
+        score_value = pd.to_numeric(pd.Series([top_row.get(score_column)]), errors="coerce").iloc[0]
+        top_scores[mode_key] = float(score_value) if pd.notna(score_value) else 0.0
+
+    active_key = _uncertainty_mode_key(active_mode)
+    active_case = top_cases.get(active_key, "")
+    active_pathway = top_pathways.get(active_key, "")
+    unique_cases = {value for value in top_cases.values() if value}
+    unique_pathways = {value for value in top_pathways.values() if value}
+    case_map = "|".join(
+        f"{mode_key}:{_case_id_short_display(top_cases.get(mode_key, ''))}"
+        for mode_key in ("interval_mean", "max_interval", "combined_only")
+        if top_cases.get(mode_key, "")
+    )
+    pathway_map = "|".join(
+        f"{mode_key}:{top_pathways.get(mode_key, '')}"
+        for mode_key in ("interval_mean", "max_interval", "combined_only")
+        if top_pathways.get(mode_key, "")
+    )
+    ranking_summary = _build_uncertainty_mode_ranking_summary(
+        top_cases=top_cases,
+        top_pathways=top_pathways,
+    )
+    return {
+        "active_uncertainty_penalty_mode": active_mode,
+        "active_top_ranked_case_id": active_case,
+        "active_top_ranked_pathway": active_pathway,
+        "interval_mean_top_ranked_case_id": top_cases.get("interval_mean", ""),
+        "max_interval_top_ranked_case_id": top_cases.get("max_interval", ""),
+        "combined_only_top_ranked_case_id": top_cases.get("combined_only", ""),
+        "interval_mean_top_ranked_pathway": top_pathways.get("interval_mean", ""),
+        "max_interval_top_ranked_pathway": top_pathways.get("max_interval", ""),
+        "combined_only_top_ranked_pathway": top_pathways.get("combined_only", ""),
+        "interval_mean_top_ranked_score": top_scores.get("interval_mean", 0.0),
+        "max_interval_top_ranked_score": top_scores.get("max_interval", 0.0),
+        "combined_only_top_ranked_score": top_scores.get("combined_only", 0.0),
+        "uncertainty_mode_case_switch_count": int(len(unique_cases)),
+        "uncertainty_mode_pathway_switch_count": int(len(unique_pathways)),
+        "uncertainty_mode_case_map": case_map,
+        "uncertainty_mode_pathway_map": pathway_map,
+        "uncertainty_mode_ranking_summary": ranking_summary,
+        "max_interval_changes_case_vs_active": bool(top_cases.get("max_interval", "") != active_case),
+        "combined_only_changes_case_vs_active": bool(top_cases.get("combined_only", "") != active_case),
+        "max_interval_changes_pathway_vs_active": bool(top_pathways.get("max_interval", "") != active_pathway),
+        "combined_only_changes_pathway_vs_active": bool(top_pathways.get("combined_only", "") != active_pathway),
+    }
+
+
+def _uncertainty_mode_key(mode: str) -> str:
+    mapping = {
+        "prefer_interval_mean": "interval_mean",
+        "max_interval_ratio": "max_interval",
+        "combined_only": "combined_only",
+    }
+    return mapping.get(str(mode), "interval_mean")
+
+
+def _case_id_short_display(case_id: str) -> str:
+    value = str(case_id or "").strip()
+    if not value:
+        return ""
+    parts = value.split("::")
+    if len(parts) >= 4:
+        return f"{parts[2]}-{parts[3]}"
+    return value
+
+
+def _build_uncertainty_mode_ranking_summary(
+    *,
+    top_cases: dict[str, str],
+    top_pathways: dict[str, str],
+) -> str:
+    interval_case = _case_id_short_display(top_cases.get("interval_mean", ""))
+    max_case = _case_id_short_display(top_cases.get("max_interval", ""))
+    combined_case = _case_id_short_display(top_cases.get("combined_only", ""))
+    interval_pathway = str(top_pathways.get("interval_mean", "") or "")
+    max_pathway = str(top_pathways.get("max_interval", "") or "")
+    combined_pathway = str(top_pathways.get("combined_only", "") or "")
+
+    unique_pathways = {value for value in [interval_pathway, max_pathway, combined_pathway] if value}
+    unique_cases = {value for value in [interval_case, max_case, combined_case] if value}
+    if not unique_cases:
+        return "Uncertainty-mode ranking diagnostics are not available."
+    if len(unique_pathways) > 1:
+        return (
+            "Alternative uncertainty modes change pathway identity: "
+            f"interval-mean selects {interval_pathway or 'NA'} ({interval_case or 'NA'}), "
+            f"max-interval selects {max_pathway or 'NA'} ({max_case or 'NA'}), and "
+            f"combined-only selects {combined_pathway or 'NA'} ({combined_case or 'NA'})."
+        )
+    stable_pathway = interval_pathway or max_pathway or combined_pathway or "NA"
+    if len(unique_cases) > 1:
+        return (
+            "Alternative uncertainty modes keep pathway identity stable but change the preferred case: "
+            f"{stable_pathway} remains selected, with interval-mean favoring {interval_case or 'NA'}, "
+            f"max-interval favoring {max_case or 'NA'}, and combined-only favoring {combined_case or 'NA'}."
+        )
+    stable_case = interval_case or max_case or combined_case or "NA"
+    return (
+        "The same case remains top-ranked across the tested uncertainty modes: "
+        f"{stable_pathway} ({stable_case})."
+    )
+
+
 def _optional_numeric_from_row(row: pd.Series, column: str) -> float | object:
     if column not in row.index:
         return pd.NA
@@ -474,6 +665,16 @@ def _validate_config(config: PlanningConfig) -> None:
         raise ValueError("max_subtype_share must be greater than or equal to max_candidate_share.")
     if config.min_distinct_subtypes < 1:
         raise ValueError("min_distinct_subtypes must be at least 1.")
+    for pathway_name, share in config.min_pathway_share:
+        if not str(pathway_name).strip():
+            raise ValueError("min_pathway_share pathway names must be non-empty.")
+        if not 0.0 <= float(share) <= 1.0:
+            raise ValueError("min_pathway_share values must be within [0, 1].")
+    for pathway_name, share in config.max_pathway_share:
+        if not str(pathway_name).strip():
+            raise ValueError("max_pathway_share pathway names must be non-empty.")
+        if not 0.0 <= float(share) <= 1.0:
+            raise ValueError("max_pathway_share values must be within [0, 1].")
     if config.constraint_relaxation_ratio <= 0.0:
         raise ValueError("constraint_relaxation_ratio must be positive.")
     if config.subtype_relaxation_ratio <= 0.0:
@@ -488,6 +689,15 @@ def _validate_config(config: PlanningConfig) -> None:
         raise ValueError("carbon_budget_factor must be positive.")
     if config.pyomo_solver_preference not in {"auto", "appsi_highs", "highs", "glpk", "cbc"}:
         raise ValueError("pyomo_solver_preference must be one of: auto, appsi_highs, highs, glpk, cbc.")
+    if config.uncertainty_penalty_mode not in {"prefer_interval_mean", "max_interval_ratio", "combined_only"}:
+        raise ValueError(
+            "uncertainty_penalty_mode must be one of: prefer_interval_mean, max_interval_ratio, combined_only."
+        )
+    if config.evidence_policy_version != EVIDENCE_POLICY_VERSION:
+        raise ValueError(
+            "PlanningConfig evidence_policy_version does not match the active evidence policy. "
+            f"Expected '{EVIDENCE_POLICY_VERSION}', received '{config.evidence_policy_version}'."
+        )
 
 
 def _resolve_planning_config(config: PlanningConfig, frame: pd.DataFrame) -> PlanningConfig:

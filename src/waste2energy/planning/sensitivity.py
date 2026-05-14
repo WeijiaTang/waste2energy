@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
@@ -24,40 +25,10 @@ def analyze_weight_sensitivity(
     ranking_rows: list[dict[str, object]] = []
 
     for variant in perturb_objective_weights(config.objective_weight_system):
-        variant_config = PlanningConfig(
+        variant_config = replace(
+            config,
             objective_weight_preset=variant.preset_name,
             objective_weight_system=variant,
-            top_k_per_scenario=config.top_k_per_scenario,
-            max_portfolio_candidates=config.max_portfolio_candidates,
-            max_candidate_share=config.max_candidate_share,
-            max_subtype_share=config.max_subtype_share,
-            min_distinct_subtypes=config.min_distinct_subtypes,
-            deployable_capacity_fraction=config.deployable_capacity_fraction,
-            robustness_factor=config.robustness_factor,
-            carbon_budget_factor=config.carbon_budget_factor,
-            constraint_relaxation_ratio=config.constraint_relaxation_ratio,
-            subtype_relaxation_ratio=config.subtype_relaxation_ratio,
-            enforce_candidate_cap=config.enforce_candidate_cap,
-            enforce_subtype_cap=config.enforce_subtype_cap,
-            enforce_max_selected=config.enforce_max_selected,
-            enforce_min_distinct_subtypes=config.enforce_min_distinct_subtypes,
-            scenario_metric_variance_scale=config.scenario_metric_variance_scale,
-            scenario_external_evidence_table_path=config.scenario_external_evidence_table_path,
-            scenario_external_evidence=config.scenario_external_evidence,
-            optimization_method=config.optimization_method,
-            pyomo_solver_preference=config.pyomo_solver_preference,
-            pareto_point_count=config.pareto_point_count,
-            enable_pareto_export=config.enable_pareto_export,
-            allow_surrogate_fallback=config.allow_surrogate_fallback,
-            partial_surrogate_weight=config.partial_surrogate_weight,
-            static_fallback_weight=config.static_fallback_weight,
-            unsupported_pathway_weight=config.unsupported_pathway_weight,
-            partial_surrogate_uncertainty_multiplier=config.partial_surrogate_uncertainty_multiplier,
-            static_fallback_uncertainty_multiplier=config.static_fallback_uncertainty_multiplier,
-            unsupported_pathway_uncertainty_multiplier=config.unsupported_pathway_uncertainty_multiplier,
-            partial_surrogate_information_premium_usd_per_ton=config.partial_surrogate_information_premium_usd_per_ton,
-            static_fallback_information_premium_usd_per_ton=config.static_fallback_information_premium_usd_per_ton,
-            unsupported_pathway_information_premium_usd_per_ton=config.unsupported_pathway_information_premium_usd_per_ton,
         )
         with TemporaryDirectory(prefix="wte_weight_sensitivity_") as tmp_dir:
             planning_dir = Path(tmp_dir) / "planning"

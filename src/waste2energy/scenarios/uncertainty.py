@@ -42,6 +42,14 @@ def build_uncertainty_summary(
             objective_summary[f"{prefix}_mean"],
         )
 
+    uncertainty_mode_summary = _build_uncertainty_mode_summary(stress_test_summary)
+    if not uncertainty_mode_summary.empty:
+        objective_summary = objective_summary.merge(
+            uncertainty_mode_summary,
+            on="scenario_name",
+            how="left",
+        )
+
     if decision_stability.empty:
         objective_summary["stable_candidate_count"] = 0
         objective_summary["dominant_sample_id"] = ""
@@ -80,3 +88,86 @@ def build_uncertainty_summary(
 def _safe_ratio_series(numerator: pd.Series, denominator: pd.Series) -> pd.Series:
     safe_denominator = denominator.replace(0.0, pd.NA)
     return numerator / safe_denominator
+
+
+def _build_uncertainty_mode_summary(stress_test_summary: pd.DataFrame) -> pd.DataFrame:
+    tracked_stresses = {
+        "baseline": "baseline",
+        "uncertainty_penalty_max_interval": "max_interval",
+        "uncertainty_penalty_combined_only": "combined_only",
+    }
+    subset = stress_test_summary[
+        stress_test_summary["stress_test_name"].isin(tracked_stresses)
+    ][["scenario_name", "stress_test_name", "top_portfolio_case_id"]].copy()
+    if subset.empty:
+        return pd.DataFrame(columns=["scenario_name"])
+
+    subset["top_portfolio_pathway"] = _extract_pathway_series(subset["top_portfolio_case_id"])
+    case_wide = (
+        subset.assign(stress_key=subset["stress_test_name"].map(tracked_stresses))
+        .pivot(index="scenario_name", columns="stress_key", values="top_portfolio_case_id")
+        .reset_index()
+        .rename_axis(columns=None)
+        .rename(
+            columns={
+                "baseline": "baseline_top_case_id",
+                "max_interval": "max_interval_top_case_id",
+                "combined_only": "combined_only_top_case_id",
+            }
+        )
+    )
+    pathway_wide = (
+        subset.assign(stress_key=subset["stress_test_name"].map(tracked_stresses))
+        .pivot(index="scenario_name", columns="stress_key", values="top_portfolio_pathway")
+        .reset_index()
+        .rename_axis(columns=None)
+        .rename(
+            columns={
+                "baseline": "baseline_top_pathway",
+                "max_interval": "max_interval_top_pathway",
+                "combined_only": "combined_only_top_pathway",
+            }
+        )
+    )
+    switch_counts = (
+        subset.groupby("scenario_name", dropna=False)
+        .agg(
+            uncertainty_mode_case_switch_count=("top_portfolio_case_id", "nunique"),
+            uncertainty_mode_pathway_switch_count=("top_portfolio_pathway", "nunique"),
+        )
+        .reset_index()
+    )
+    merged = case_wide.merge(pathway_wide, on="scenario_name", how="outer").merge(
+        switch_counts,
+        on="scenario_name",
+        how="left",
+    )
+    merged["max_interval_changes_case_vs_baseline"] = _changed_vs_baseline(
+        merged["baseline_top_case_id"],
+        merged["max_interval_top_case_id"],
+    )
+    merged["combined_only_changes_case_vs_baseline"] = _changed_vs_baseline(
+        merged["baseline_top_case_id"],
+        merged["combined_only_top_case_id"],
+    )
+    merged["max_interval_changes_pathway_vs_baseline"] = _changed_vs_baseline(
+        merged["baseline_top_pathway"],
+        merged["max_interval_top_pathway"],
+    )
+    merged["combined_only_changes_pathway_vs_baseline"] = _changed_vs_baseline(
+        merged["baseline_top_pathway"],
+        merged["combined_only_top_pathway"],
+    )
+    return merged
+
+
+def _extract_pathway_series(case_ids: pd.Series) -> pd.Series:
+    values = case_ids.fillna("").astype(str).str.split("::")
+    return values.apply(lambda parts: parts[2] if len(parts) >= 3 else pd.NA)
+
+
+def _changed_vs_baseline(baseline: pd.Series, candidate: pd.Series) -> pd.Series:
+    result = pd.Series(pd.NA, index=baseline.index, dtype="object")
+    valid = baseline.notna() & candidate.notna()
+    result.loc[valid] = baseline.loc[valid] != candidate.loc[valid]
+    return result

@@ -72,6 +72,7 @@ def run_scenario_robustness_baseline(
         enforce_max_selected=baseline_seed.enforce_max_selected,
         enforce_min_distinct_subtypes=baseline_seed.enforce_min_distinct_subtypes,
         scenario_metric_variance_scale=baseline_seed.scenario_metric_variance_scale,
+        uncertainty_penalty_mode=baseline_seed.uncertainty_penalty_mode,
         scenario_external_evidence_table_path=baseline_seed.scenario_external_evidence_table_path,
         scenario_external_evidence=baseline_seed.scenario_external_evidence,
         optimization_method=baseline_seed.optimization_method,

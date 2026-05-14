@@ -51,6 +51,7 @@ def build_stress_test_summary(
     ]
     registry_columns = [
         "stress_test_name",
+        "uncertainty_penalty_mode",
         "energy_weight",
         "environment_weight",
         "cost_weight",
@@ -75,6 +76,10 @@ def build_decision_stability(portfolio_allocations: pd.DataFrame) -> pd.DataFram
                 "scenario_name",
                 "sample_id",
                 "selection_rate",
+                "uncertainty_stress_run_count",
+                "uncertainty_stress_selection_rate",
+                "selected_under_max_interval_uncertainty",
+                "selected_under_combined_only_uncertainty",
             ]
         )
 
@@ -84,6 +89,17 @@ def build_decision_stability(portfolio_allocations: pd.DataFrame) -> pd.DataFram
         .groupby("scenario_name")
         .size()
         .rename("total_stress_runs")
+        .reset_index()
+    )
+    uncertainty_runs = (
+        portfolio_allocations.loc[
+            portfolio_allocations["stress_test_name"].isin(_uncertainty_stress_names()),
+            ["scenario_name", "stress_test_name"],
+        ]
+        .drop_duplicates()
+        .groupby("scenario_name")
+        .size()
+        .rename("total_uncertainty_stress_runs")
         .reset_index()
     )
 
@@ -102,12 +118,41 @@ def build_decision_stability(portfolio_allocations: pd.DataFrame) -> pd.DataFram
             manure_subtype=("manure_subtype", lambda series: _first_non_empty(series)),
             representative_case_id=("optimization_case_id", lambda series: _first_non_empty(series)),
             stress_tests_selected=("stress_test_name", lambda series: "|".join(sorted(set(series.astype(str))))),
+            uncertainty_stress_run_count=(
+                "stress_test_name",
+                lambda series: int(series.astype(str).isin(_uncertainty_stress_names()).sum()),
+            ),
+            uncertainty_stress_tests_selected=(
+                "stress_test_name",
+                lambda series: "|".join(
+                    sorted({value for value in series.astype(str) if value in _uncertainty_stress_names()})
+                ),
+            ),
         )
         .reset_index()
     )
 
-    merged = grouped.merge(total_runs, on="scenario_name", how="left")
+    merged = grouped.merge(total_runs, on="scenario_name", how="left").merge(
+        uncertainty_runs,
+        on="scenario_name",
+        how="left",
+    )
+    merged["total_uncertainty_stress_runs"] = merged["total_uncertainty_stress_runs"].fillna(0).astype(int)
     merged["selection_rate"] = merged["stress_run_count"] / merged["total_stress_runs"]
+    merged["uncertainty_stress_selection_rate"] = _safe_ratio(
+        merged["uncertainty_stress_run_count"],
+        merged["total_uncertainty_stress_runs"],
+    )
+    merged["selected_under_max_interval_uncertainty"] = merged["uncertainty_stress_tests_selected"].str.contains(
+        "uncertainty_penalty_max_interval",
+        regex=False,
+    )
+    merged["selected_under_combined_only_uncertainty"] = merged[
+        "uncertainty_stress_tests_selected"
+    ].str.contains(
+        "uncertainty_penalty_combined_only",
+        regex=False,
+    )
     merged["stable_under_majority_rule"] = merged["selection_rate"] >= 0.5
     merged["stable_under_consensus_rule"] = merged["selection_rate"] >= 0.999999
     return merged.sort_values(
@@ -146,3 +191,15 @@ def build_cross_scenario_stability(portfolio_allocations: pd.DataFrame) -> pd.Da
 def _first_non_empty(series: pd.Series) -> str:
     values = [str(value) for value in series if str(value).strip() and str(value).strip().lower() != "nan"]
     return values[0] if values else ""
+
+
+def _uncertainty_stress_names() -> set[str]:
+    return {
+        "uncertainty_penalty_max_interval",
+        "uncertainty_penalty_combined_only",
+    }
+
+
+def _safe_ratio(numerator: pd.Series, denominator: pd.Series) -> pd.Series:
+    safe_denominator = denominator.replace(0, pd.NA)
+    return numerator / safe_denominator

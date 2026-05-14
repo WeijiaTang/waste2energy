@@ -28,8 +28,8 @@ def load_operation_input_bundle(
     planning_dir: str | Path | None = None,
     scenario_dir: str | Path | None = None,
 ) -> OperationInputBundle:
-    planning_root = Path(planning_dir) if planning_dir else PLANNING_OUTPUTS_DIR / "baseline"
-    scenario_root = Path(scenario_dir) if scenario_dir else SCENARIO_OUTPUTS_DIR / "baseline"
+    planning_root = Path(planning_dir) if planning_dir else PLANNING_OUTPUTS_DIR
+    scenario_root = Path(scenario_dir) if scenario_dir else SCENARIO_OUTPUTS_DIR
 
     files = {
         "planning_portfolio_allocations": planning_root / "portfolio_allocations.csv",
@@ -58,8 +58,9 @@ def load_operation_input_bundle(
 def build_operation_environment_specs(
     planning_dir: str | Path | None = None,
     scenario_dir: str | Path | None = None,
+    bundle: OperationInputBundle | None = None,
 ) -> pd.DataFrame:
-    bundle = load_operation_input_bundle(planning_dir=planning_dir, scenario_dir=scenario_dir)
+    bundle = bundle or load_operation_input_bundle(planning_dir=planning_dir, scenario_dir=scenario_dir)
     _validate_operation_input_freshness(bundle)
 
     uncertainty = bundle.scenario_uncertainty_summary.copy()

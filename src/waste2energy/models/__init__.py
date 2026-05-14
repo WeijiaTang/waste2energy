@@ -8,11 +8,23 @@ from .elastic_net_regressor import (
     save_model as save_elastic_net_model,
     train_model as train_elastic_net_model,
 )
+from .catboost_regressor import (
+    CatBoostConfig,
+    build_feature_importance as build_catboost_feature_importance,
+    save_model as save_catboost_model,
+    train_model as train_catboost_model,
+)
 from .gradient_boosting_regressor import (
     GradientBoostingConfig,
     build_feature_importance as build_gradient_boosting_feature_importance,
     save_model as save_gradient_boosting_model,
     train_model as train_gradient_boosting_model,
+)
+from .lightgbm_regressor import (
+    LightGBMConfig,
+    build_feature_importance as build_lightgbm_feature_importance,
+    save_model as save_lightgbm_model,
+    train_model as train_lightgbm_model,
 )
 from .extra_trees_regressor import (
     ExtraTreesConfig,
@@ -26,6 +38,12 @@ from .random_forest_regressor import (
     save_model as save_random_forest_model,
     train_model as train_random_forest_model,
 )
+from .stacking_regressor import (
+    StackingRegressorConfig,
+    build_feature_importance as build_stacking_feature_importance,
+    save_model as save_stacking_model,
+    train_model as train_stacking_model,
+)
 from .xgboost_regressor import (
     XGBoostConfig,
     build_feature_importance as build_xgboost_feature_importance,
@@ -34,7 +52,16 @@ from .xgboost_regressor import (
 )
 
 
-MODEL_KEYS = ("xgboost", "rf", "extra_trees", "elastic_net", "gradient_boosting")
+MODEL_KEYS = (
+    "xgboost",
+    "catboost",
+    "lightgbm",
+    "stacking",
+    "rf",
+    "extra_trees",
+    "elastic_net",
+    "gradient_boosting",
+)
 
 
 def get_model_ops(model_key: str) -> dict[str, object]:
@@ -48,6 +75,39 @@ def get_model_ops(model_key: str) -> dict[str, object]:
             "train_model": train_xgboost_model,
             "build_feature_importance": build_xgboost_feature_importance,
             "save_model": save_xgboost_model,
+        }
+    if model_key == "catboost":
+        default_config = CatBoostConfig()
+        return {
+            "model_key": "catboost",
+            "model_family": "catboost_regressor",
+            "model_file_name": "model.cbm",
+            "default_config": default_config,
+            "train_model": train_catboost_model,
+            "build_feature_importance": build_catboost_feature_importance,
+            "save_model": save_catboost_model,
+        }
+    if model_key == "lightgbm":
+        default_config = LightGBMConfig()
+        return {
+            "model_key": "lightgbm",
+            "model_family": "lightgbm_regressor",
+            "model_file_name": "model.txt",
+            "default_config": default_config,
+            "train_model": train_lightgbm_model,
+            "build_feature_importance": build_lightgbm_feature_importance,
+            "save_model": save_lightgbm_model,
+        }
+    if model_key == "stacking":
+        default_config = StackingRegressorConfig()
+        return {
+            "model_key": "stacking",
+            "model_family": "stacking_regressor",
+            "model_file_name": "model.joblib",
+            "default_config": default_config,
+            "train_model": train_stacking_model,
+            "build_feature_importance": build_stacking_feature_importance,
+            "save_model": save_stacking_model,
         }
     if model_key == "rf":
         default_config = RandomForestConfig()

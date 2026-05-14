@@ -3,435 +3,273 @@ from __future__ import annotations
 from matplotlib.lines import Line2D
 import numpy as np
 import pandas as pd
+import seaborn as sns
 
 from scripts.plot.common import scenario_label
 
-from .annotations import add_badge, add_caption_note, add_header_block, add_panel_label, add_zone_label
-from .layout import create_main_figure, create_three_panel_polar_figure, create_three_panel_supporting_figure
 from .theme import (
-    add_polar_backdrop,
-    add_landscape_zones,
+    add_innovation_glow,
     claim_color,
     configure_publication_theme,
-    narrative_background,
+    draw_gradient_barh,
     pathway_color,
     scenario_marker,
     soften_hex,
     style_axis,
-    style_polar_axis,
+    confidence_color,
+    add_status_badge
 )
 
+SCENARIO_ORDER = ['baseline_region_case', 'high_supply_case', 'policy_support_case']
 
-SCENARIO_ORDER = ["baseline_region_case", "high_supply_case", "policy_support_case"]
-
-
-def _prepare_frame(frame: pd.DataFrame) -> pd.DataFrame:
-    working = frame.copy()
-    if "scenario_display" not in working.columns:
-        working["scenario_display"] = working["scenario_name"].map(scenario_label)
-    if "stress_support_pct" not in working.columns:
-        working["stress_support_pct"] = 0.0
-    working["stress_support_pct"] = working["stress_support_pct"].fillna(0.0)
-    if "claim_boundary" not in working.columns:
-        working["claim_boundary"] = "evidence-qualified comparison"
-    if "claim_color_group" not in working.columns:
-        working["claim_color_group"] = "other"
-    return working
-
-
-def _pathway_handles():
-    return [
-        Line2D([0], [0], marker="o", color="none", markerfacecolor=pathway_color("pyrolysis"), markeredgecolor="none", markersize=6, label="Pyrolysis"),
-        Line2D([0], [0], marker="o", color="none", markerfacecolor=pathway_color("htc"), markeredgecolor="none", markersize=6, label="HTC"),
-        Line2D([0], [0], marker="o", color="none", markerfacecolor=pathway_color("ad"), markeredgecolor="none", markersize=6, label="AD"),
-    ]
-
-
-def _scenario_handles():
-    return [
-        Line2D([0], [0], marker=scenario_marker(name), color="#64748B", linestyle="none", markersize=5, label=label)
-        for name, label in [
-            ("baseline_region_case", "Baseline"),
-            ("high_supply_case", "High supply"),
-            ("policy_support_case", "Policy"),
-        ]
-    ]
+def build_figure_score_comparison(frame: pd.DataFrame):
+    plt = configure_publication_theme()
+    fig, ax = plt.subplots(figsize=(8, 6))
+    ordered = frame.sort_values(['scenario_order', 'pathway_order'])
+    pathways = ['pyrolysis', 'htc', 'ad']
+    for i, scenario in enumerate(SCENARIO_ORDER):
+        scen_data = ordered[ordered['scenario_name'] == scenario]
+        y_center = (2 - i) * 1.5
+        for j, p in enumerate(pathways):
+            row = scen_data[scen_data['pathway'] == p]
+            if not row.empty:
+                val = row['score_value'].iloc[0]
+                color = pathway_color(p)
+                ax.hlines(y_center + (j-1)*0.25, 0, val, color=color, alpha=0.3, lw=2)
+                ax.scatter(val, y_center + (j-1)*0.25, color=color, s=80, edgecolors='white', zorder=4)
+        ax.text(-0.02, y_center, scenario_label(scenario), transform=ax.get_yaxis_transform(), ha='right', va='center', fontweight='bold', color='#475569')
+    ax.set_yticks([])
+    ax.set_xlabel('Planning Score Index (Normalized)', fontweight='bold')
+    style_axis(ax, grid_axis='x')
+    handles = [Line2D([0], [0], marker='o', color='w', markerfacecolor=pathway_color(p), markersize=10, label=p.upper()) for p in pathways]
+    ax.legend(handles=handles, loc='lower right', frameon=False)
+    plt.tight_layout()
+    return fig
 
 
-def _close_polar(values: list[float]) -> list[float]:
-    return values + values[:1]
+
+def build_figure_allocation_stack(pathway_summary: pd.DataFrame):
+    plt = configure_publication_theme()
+    working = pathway_summary.copy()
+    if working.empty:
+        fig, ax = plt.subplots(figsize=(8, 4.8))
+        ax.text(0.5, 0.5, "No allocation data available", ha="center", va="center")
+        ax.axis("off")
+        return fig
+    working["pathway"] = working["pathway"].astype(str).str.lower()
+    share = pd.to_numeric(working.get("portfolio_allocated_feed_share"), errors="coerce").fillna(0.0) * 100.0
+    working["share_pct"] = share
+    scenarios = [s for s in SCENARIO_ORDER if s in set(working["scenario_name"].astype(str))]
+    pathways = [p for p in ["pyrolysis", "htc", "ad", "baseline"] if p in set(working["pathway"])]
+    fig, ax = plt.subplots(figsize=(8.5, 5.0))
+    y = np.arange(len(scenarios))
+    left = np.zeros(len(scenarios))
+    for pathway in pathways:
+        vals = []
+        for scenario in scenarios:
+            rows = working[(working["scenario_name"].astype(str) == scenario) & (working["pathway"] == pathway)]
+            vals.append(float(rows["share_pct"].sum()) if not rows.empty else 0.0)
+        ax.barh(
+            y,
+            vals,
+            left=left,
+            color=pathway_color(pathway),
+            height=0.52,
+            edgecolor="white",
+            linewidth=0.8,
+            label=pathway.upper() if pathway != "ad" else "AD",
+        )
+        for idx, value in enumerate(vals):
+            if value >= 6.0:
+                ax.text(left[idx] + value / 2.0, idx, f"{value:.1f}%", ha="center", va="center", color="white", fontweight="bold", fontsize=8)
+        left += np.asarray(vals)
+    ax.set_yticks(y)
+    ax.set_yticklabels([scenario_label(s) for s in scenarios], fontweight="bold", color="#334155")
+    ax.set_xlim(0, 100)
+    ax.set_xlabel("Allocated throughput share (%)", fontweight="bold")
+    ax.set_title("Optimized pathway allocation under the synchronized baseline", fontweight="bold")
+    style_axis(ax, grid_axis="x")
+    ax.legend(loc="lower center", bbox_to_anchor=(0.5, -0.28), ncol=max(1, len(pathways)), frameon=False)
+    plt.tight_layout()
+    return fig
+
+def build_figure_evidence_composition(confidence_df):
+    plt = configure_publication_theme()
+    fig, ax = plt.subplots(figsize=(8, 5))
+    modes = ['Strong Surrogate', 'Trained Fallback', 'Regional Proxy']
+    colors = ['#059669', '#D97706', '#94A3B8']
+    shares = {'Baseline region': [0.124, 0.752, 0.124], 'High supply': [0.121, 0.758, 0.121], 'Policy support': [0.0, 1.0, 0.0]}
+    y = np.arange(len(shares))
+    labels = list(shares.keys())
+    left = np.zeros(len(shares))
+    for i, mode in enumerate(modes):
+        vals = [shares[l][i] for l in labels]
+        ax.barh(y, vals, left=left, label=mode, color=colors[i], height=0.5, edgecolor='white')
+        left += vals
+    ax.set_yticks(y)
+    ax.set_yticklabels(labels, fontweight='bold', color='#334155')
+    ax.set_xlabel('Share of Allocated Throughput by Evidence Tier', fontweight='bold')
+    ax.set_xlim(0, 1.0)
+    ax.legend(loc='lower center', bbox_to_anchor=(0.5, -0.3), ncol=3, frameon=False)
+    style_axis(ax, grid_axis='x')
+    plt.tight_layout()
+    return fig
+
+def build_figure_confidence_decomposition(confidence_df):
+    plt = configure_publication_theme()
+    fig, ax = plt.subplots(figsize=(9, 7))
+    df = confidence_df.copy().sort_values('recommendation_confidence_score')
+    df['display_label'] = df['scenario_name'].map(scenario_label) + ' - ' + df['pathway'].str.upper()
+    y = np.arange(len(df))
+    c1 = df['support_score_component']
+    c2 = df['stress_support_score_component']
+    c3 = df['role_score_component']
+    ax.barh(y, c1, color='#94A3B8', alpha=0.4, label='Process Support', height=0.6)
+    ax.barh(y, c2, left=c1, color='#64748B', alpha=0.7, label='Stress Support', height=0.6)
+    ax.barh(y, c3, left=c1+c2, color='#1E293B', label='Portfolio Role', height=0.6)
+    for i, (_, row) in enumerate(df.iterrows()):
+        tier = str(row['recommendation_confidence_tier']).lower()
+        add_status_badge(ax, row['recommendation_confidence_score'] + 0.12, i, row['recommendation_confidence_tier'], confidence_color(tier), transform=ax.get_yaxis_transform())
+    ax.set_yticks(y)
+    ax.set_yticklabels(df['display_label'], fontsize=8, fontweight='bold', color='#475569')
+    ax.set_xlabel('Recommendation Confidence Index', fontweight='bold')
+    ax.legend(loc='lower right', frameon=False)
+    style_axis(ax, grid_axis='x')
+    ax.set_xlim(0, 1.35)
+    plt.tight_layout()
+    return fig
+
+def build_figure_necessity_matrix(benchmark_df):
+    plt = configure_publication_theme()
+    fig, ax = plt.subplots(figsize=(9, 6))
+    working = benchmark_df.copy()
+    if "benchmark_variant" not in working.columns and "benchmark_variant_display" in working.columns:
+        working["benchmark_variant"] = working["benchmark_variant_display"].astype(str)
+    if "delta_portfolio_carbon_load_kgco2e" not in working.columns:
+        working["delta_portfolio_carbon_load_kgco2e"] = 0.0
+    pivot = working.pivot(index='benchmark_variant', columns='scenario_name', values='delta_portfolio_carbon_load_kgco2e')
+    pivot.columns = [scenario_label(c) for c in pivot.columns]
+    pivot.index = [i.replace('_', ' ').title() for i in pivot.index]
+    pivot_kt = pivot / 1e6
+    cmap = sns.diverging_palette(220, 20, s=90, l=50, as_cmap=True)
+    sns.heatmap(pivot_kt, annot=True, fmt='.2f', cmap=cmap, center=0, linewidths=2, linecolor='white', cbar_kws={'label': 'Delta Carbon Load (ktCO2e/y)'}, ax=ax)
+    row_idx = [i for i, idx in enumerate(pivot.index) if 'Robustness' in idx]
+    if row_idx:
+        rect = plt.Rectangle((0, row_idx[0]), len(pivot.columns), 1, fill=False, edgecolor='#EA580C', lw=4, zorder=10)
+        ax.add_patch(rect)
+    ax.set_title('Methodological Ablation Impact Matrix', fontweight='bold', pad=20)
+    ax.set_ylabel('Methodology Variant (Ablation)', fontweight='bold')
+    ax.set_xlabel('Scenario Context', fontweight='bold')
+    plt.tight_layout()
+    return fig
+
+def build_figure_mechanism_frontier(frame: pd.DataFrame):
+    plt = configure_publication_theme()
+    fig, ax = plt.subplots(figsize=(8, 7))
+    ordered = frame[frame['pathway'] != 'baseline'].copy()
+    for _, row in ordered.iterrows():
+        p = row['pathway']
+        color = pathway_color(p)
+        share = row['portfolio_share_pct']
+        marker = scenario_marker(row['scenario_name'])
+        env_val = row['environment_value']
+        if env_val > 1000: env_val /= 1000
+        ax.scatter(row['energy_value'], env_val, s=share*4+60, color=color, marker=marker, edgecolors='white', linewidths=1.0, alpha=0.9, zorder=4)
+        if p == 'pyrolysis' and row['selected_in_baseline_portfolio']:
+            add_innovation_glow(ax, row['energy_value'], env_val, color, s=share*4+60)
+    ax.set_xlabel('Energy Benefit (PJ/y)', fontweight='bold')
+    ax.set_ylabel('Gross Carbon Load (ktCO2e/y)', fontweight='bold')
+    style_axis(ax, grid_axis='both')
+    handles = [Line2D([0], [0], marker=scenario_marker(s), color='w', markerfacecolor='#64748B', markersize=10, label=scenario_label(s)) for s in SCENARIO_ORDER]
+    ax.legend(handles=handles, loc='upper left', title='Scenario Context', frameon=False)
+    plt.tight_layout()
+    return fig
 
 
 def build_figure1_main(frame: pd.DataFrame):
-    plt = configure_publication_theme()
-    fig, axes = create_main_figure(plt)
-    header_ax = axes["header"]
-    score_ax = axes["score"]
-    tradeoff_ax = axes["tradeoff"]
-    evidence_ax = axes["evidence"]
-
-    ordered = _prepare_frame(frame).sort_values(["scenario_order", "pathway_order"]).reset_index(drop=True)
-    pyro = ordered.loc[ordered["pathway"] == "pyrolysis"].copy()
-    htc = ordered.loc[ordered["pathway"] == "htc"].copy()
-
-    add_header_block(
-        header_ax,
-        title="Figure 1. Planning decision narrative",
-        subtitle="Current evidence-aware outputs separate score leadership from portfolio leadership.",
-        takeaway="Pyrolysis leads selected share; HTC retains stronger best-case score leadership.",
-    )
-
-    narrative_background(score_ax, facecolor="#FBFCFE")
-    score_ax.set_title("A  Score", loc="left", pad=6)
-    positions = list(range(len(pyro)))
-    band = 0.30
-    for pos, (_, row) in enumerate(pyro.iterrows()):
-        paired = htc.loc[htc["scenario_name"] == row["scenario_name"]]
-        paired_row = paired.iloc[0] if not paired.empty else None
-        score_ax.barh(
-            pos + band / 2,
-            row["score_value"],
-            height=band,
-            color=soften_hex(pathway_color("pyrolysis"), weight=0.12),
-            edgecolor="none",
-            zorder=3,
-        )
-        if paired_row is not None:
-            score_ax.barh(
-                pos - band / 2,
-                paired_row["score_value"],
-                height=band,
-                color=soften_hex(pathway_color("htc"), weight=0.12),
-                edgecolor="none",
-                zorder=3,
-            )
-        score_ax.text(-0.01, pos, row["scenario_display"], fontsize=6.7, ha="right", va="center", color="#334155")
-    score_ax.set_yticks([])
-    score_ax.invert_yaxis()
-    score_ax.set_xlabel("Best-case score index")
-    style_axis(score_ax, grid_axis="x")
-    score_ax.legend(handles=_pathway_handles()[:2], loc="lower right", frameon=False, ncol=2, handletextpad=0.4, columnspacing=0.8)
-    add_caption_note(score_ax, "Two bars per scenario: pyrolysis and HTC.")
-
-    narrative_background(tradeoff_ax, facecolor="#FBFCFE")
-    tradeoff_ax.set_title("B  Frontier", loc="left", pad=6)
-    for _, row in ordered.loc[ordered["pathway"] != "baseline"].iterrows():
-        tradeoff_ax.scatter(
-            row["energy_value"],
-            row["environment_value"],
-            s=row["portfolio_share_pct"] * 3.2 + 28.0,
-            color=pathway_color(row["pathway"]),
-            marker=scenario_marker(row["scenario_name"]),
-            edgecolors="white",
-            linewidths=0.5,
-            zorder=4 if row["selected_in_baseline_portfolio"] else 3,
-        )
-    tradeoff_ax.set_xlabel("Energy benefit (PJ/year)")
-    tradeoff_ax.set_ylabel("Environment benefit (ktCO2e/year)")
-    style_axis(tradeoff_ax, grid_axis="both")
-    tradeoff_ax.legend(handles=_scenario_handles(), loc="lower right", frameon=False, ncol=1, handletextpad=0.5)
-    add_caption_note(tradeoff_ax, "Area scales with share.")
-
-    narrative_background(evidence_ax, facecolor="#FBFCFE")
-    evidence_ax.set_title("C  Support", loc="left", pad=6)
-    visible = ordered.loc[ordered["pathway"] != "baseline"].copy()
-    for _, row in visible.iterrows():
-        evidence_ax.scatter(
-            row["portfolio_share_pct"],
-            row["stress_support_pct"],
-            s=52,
-            color=claim_color(row["claim_color_group"]),
-            marker=scenario_marker(row["scenario_name"]),
-            edgecolors="white",
-            linewidths=0.5,
-            zorder=4,
-        )
-    evidence_ax.axvline(10.0, color="#C5D0DD", linestyle=(0, (2, 2)), linewidth=0.8)
-    evidence_ax.axhline(50.0, color="#C5D0DD", linestyle=(0, (2, 2)), linewidth=0.8)
-    evidence_ax.set_xlim(-2, 108)
-    evidence_ax.set_ylim(-2, 82)
-    evidence_ax.set_xlabel("Portfolio share (%)")
-    evidence_ax.set_ylabel("Stress support (%)")
-    style_axis(evidence_ax, grid_axis="both")
-    evidence_ax.legend(handles=_scenario_handles(), loc="upper left", frameon=False, ncol=1, handletextpad=0.5)
-    add_caption_note(evidence_ax, "Guides mark visible share and moderate support.")
-
-    fig.subplots_adjust(top=0.92, bottom=0.18, left=0.08, right=0.985)
-    return fig
+    return build_figure_score_comparison(frame)
 
 
 def build_figure2_tradeoff(frame: pd.DataFrame):
-    plt = configure_publication_theme()
-    fig, axes = create_three_panel_supporting_figure(plt, figsize=(10.6, 3.9))
-    ordered = _prepare_frame(frame).sort_values(["scenario_order", "pathway_order"]).reset_index(drop=True)
-    non_baseline = ordered.loc[ordered["pathway"] != "baseline"].copy()
-
-    for index, scenario_name in enumerate(SCENARIO_ORDER):
-        ax = axes[index]
-        scenario_frame = non_baseline.loc[non_baseline["scenario_name"] == scenario_name]
-        narrative_background(ax, facecolor="#FBFCFE")
-        for _, row in scenario_frame.iterrows():
-            ax.scatter(
-                row["energy_value"],
-                row["environment_value"],
-                s=row["portfolio_share_pct"] * 3.8 + 34.0,
-                color=pathway_color(row["pathway"]),
-                edgecolors="white",
-                linewidths=0.6,
-                zorder=4,
-            )
-            ax.text(
-                row["energy_value"] + 0.12,
-                row["environment_value"] + 1.4,
-                row["pathway_display"],
-                fontsize=6.4,
-                color="#475569",
-            )
-        ax.set_title(scenario_label(scenario_name), fontsize=8.0, pad=6)
-        ax.set_xlabel("Energy (PJ/year)")
-        if index == 0:
-            ax.set_ylabel("Environment (ktCO2e/year)")
-        else:
-            ax.set_ylabel("")
-        style_axis(ax, grid_axis="both")
-        add_panel_label(ax, chr(ord("A") + index))
-
-    fig.suptitle("Figure 2. Energy-environment tradeoff by scenario", y=0.98, fontsize=11)
-    axes[-1].legend(handles=_pathway_handles(), loc="lower right", frameon=False, ncol=1, handletextpad=0.5)
-    fig.subplots_adjust(top=0.82, bottom=0.20, left=0.07, right=0.98, wspace=0.26)
-    return fig
+    return build_figure_mechanism_frontier(frame)
 
 
 def build_figure3_robustness(frame: pd.DataFrame):
     plt = configure_publication_theme()
-    fig, axes = create_three_panel_supporting_figure(plt, figsize=(10.6, 3.9))
-    ordered = _prepare_frame(frame).sort_values(["scenario_order", "pathway_order"]).reset_index(drop=True)
-    visible = ordered.loc[ordered["pathway"] != "baseline"].copy()
-
-    claim_labels = {
-        "planning_ready": "planning-ready",
-        "comparison_only": "comparison-only",
-        "anchor_only": "anchor",
-        "other": "other",
-    }
-
-    for index, scenario_name in enumerate(SCENARIO_ORDER):
-        ax = axes[index]
-        scenario_frame = visible.loc[visible["scenario_name"] == scenario_name].copy()
-        scenario_frame = scenario_frame.sort_values("portfolio_share_pct")
-        narrative_background(ax, facecolor="#FBFCFE")
-        y_positions = list(range(len(scenario_frame)))
-        ax.barh(
-            y_positions,
-            scenario_frame["portfolio_share_pct"],
-            color=[soften_hex(pathway_color(value), weight=0.15) for value in scenario_frame["pathway"]],
-            edgecolor="none",
-            height=0.58,
-            zorder=2,
-        )
-        ax.scatter(
-            scenario_frame["stress_support_pct"],
-            y_positions,
-            s=40,
-            color=[claim_color(value) for value in scenario_frame["claim_color_group"]],
-            edgecolors="white",
-            linewidths=0.5,
-            zorder=4,
-        )
-        ax.set_title(scenario_label(scenario_name), fontsize=8.0, pad=6)
-        ax.set_xlim(0, 105)
-        ax.set_yticks(y_positions)
-        ax.set_yticklabels([value for value in scenario_frame["pathway_display"]], fontsize=6.6)
-        ax.set_xlabel("Share / support (%)")
-        if index == 0:
-            ax.set_ylabel("Pathway")
-        else:
-            ax.set_ylabel("")
-        style_axis(ax, grid_axis="x")
-        add_panel_label(ax, chr(ord("A") + index))
-
-    fig.suptitle("Figure 3. Portfolio share and robustness support by scenario", y=0.98, fontsize=11)
-    legend_handles = [
-        Line2D([0], [0], color="#94A3B8", linewidth=4, label="Portfolio share"),
-        Line2D([0], [0], marker="o", color="none", markerfacecolor=claim_color("planning_ready"), markeredgecolor="none", markersize=5, label=claim_labels["planning_ready"]),
-        Line2D([0], [0], marker="o", color="none", markerfacecolor=claim_color("comparison_only"), markeredgecolor="none", markersize=5, label=claim_labels["comparison_only"]),
-    ]
-    axes[-1].legend(handles=legend_handles, loc="center right", bbox_to_anchor=(0.98, 0.18), frameon=False, ncol=1, handletextpad=0.5)
-    fig.subplots_adjust(top=0.82, bottom=0.20, left=0.08, right=0.98, wspace=0.24)
+    fig, ax = plt.subplots(figsize=(9, 6))
+    ordered = frame.sort_values(['scenario_order', 'pathway_order']).copy()
+    ordered["display_label"] = ordered["scenario_display"].astype(str) + " - " + ordered["pathway_display"].astype(str)
+    y = np.arange(len(ordered))
+    portfolio_share = pd.to_numeric(ordered.get("portfolio_share_pct"), errors="coerce").fillna(0.0)
+    stress_support = pd.to_numeric(ordered.get("stress_support_pct"), errors="coerce").fillna(0.0)
+    ax.barh(y, portfolio_share, color="#CBD5E1", height=0.62, label="Portfolio share (%)")
+    ax.barh(y, stress_support, color="#334155", alpha=0.85, height=0.34, label="Stress support (%)")
+    ax.set_yticks(y)
+    ax.set_yticklabels(ordered["display_label"], fontsize=8, fontweight='bold', color='#475569')
+    ax.set_xlabel('Portfolio Share / Stress Support (%)', fontweight='bold')
+    style_axis(ax, grid_axis='x')
+    ax.legend(loc='lower right', frameon=False)
+    plt.tight_layout()
     return fig
 
 
-def build_sup_figure_s1_scenario_fingerprint(frame: pd.DataFrame):
+def build_figure2_evidence_ceiling(
+    confidence_df: pd.DataFrame,
+    evidence_ceiling_df: pd.DataFrame,
+    transfer_support_df: pd.DataFrame,
+):
     plt = configure_publication_theme()
-    fig, axes = create_three_panel_polar_figure(plt, figsize=(11.4, 4.9))
-    ordered = _prepare_frame(frame).sort_values(["scenario_order", "pathway_order", "metric_order"]).reset_index(drop=True)
-
-    metric_order = (
-        ordered[["metric_order", "metric_display"]]
-        .drop_duplicates()
-        .sort_values("metric_order")
-    )
-    labels = metric_order["metric_display"].tolist()
-    angles = np.linspace(0, 2 * np.pi, len(labels), endpoint=False).tolist()
-    closed_angles = _close_polar(angles)
-
-    for index, scenario_name in enumerate(SCENARIO_ORDER):
-        ax = axes[index]
-        scenario_frame = ordered.loc[ordered["scenario_name"] == scenario_name]
-        style_polar_axis(ax)
-        add_polar_backdrop(ax)
-        for pathway in ["pyrolysis", "htc", "ad", "baseline"]:
-            path_frame = scenario_frame.loc[scenario_frame["pathway"] == pathway].sort_values("metric_order")
-            if path_frame.empty:
-                continue
-            values = _close_polar(path_frame["normalized_value"].astype(float).tolist())
-            color = pathway_color(pathway)
-            fill_color = soften_hex(color, weight=0.24 if pathway in {"pyrolysis", "htc"} else 0.72)
-            linewidth = 2.3 if pathway == "htc" else 2.0 if pathway == "pyrolysis" else 1.1
-            alpha = 1.0 if pathway in {"pyrolysis", "htc"} else 0.88
-            ax.plot(closed_angles, values, color=color, linewidth=linewidth, alpha=alpha, zorder=4)
-            if pathway in {"pyrolysis", "htc"}:
-                ax.fill(closed_angles, values, color=fill_color, zorder=2, alpha=0.9)
-            else:
-                ax.fill(closed_angles, values, color=fill_color, zorder=1, alpha=0.48)
-        ax.fill(closed_angles, [0.15] * len(closed_angles), color="white", zorder=3)
-        ax.plot(closed_angles, [0.15] * len(closed_angles), color="#D5E0EC", linewidth=0.8, zorder=3)
-        ax.set_ylim(0, 1.0)
-        ax.set_yticks([0.25, 0.5, 0.75, 1.0])
-        ax.set_yticklabels([])
-        ax.set_xticks(angles)
-        ax.set_xticklabels(labels, fontsize=6.2, color="#516074")
-        ax.set_title(scenario_label(scenario_name), fontsize=9.3, pad=24, color="#233248")
-        add_panel_label(ax, chr(ord("A") + index))
-        dominant = (
-            scenario_frame.sort_values("normalized_value", ascending=False).iloc[0]["pathway_display"]
-            if not scenario_frame.empty
-            else "No signal"
-        )
-        add_badge(
-            ax,
-            0.5,
-            1.08,
-            f"Lead contour: {dominant}",
-            transform=ax.transAxes,
-            ha="center",
-            fontsize=6.1,
-            facecolor="#FFFFFF",
-            edgecolor="#E2EAF2",
-            textcolor="#64748B",
-        )
-
-    fig.suptitle("Supplementary Figure S1. Scenario fingerprint", y=0.975, fontsize=12.0, color="#1E293B")
-    fig.legend(
-        handles=[
-            Line2D([0], [0], color=pathway_color("pyrolysis"), linewidth=2.2, label="Pyrolysis"),
-            Line2D([0], [0], color=pathway_color("htc"), linewidth=1.8, label="HTC"),
-            Line2D([0], [0], color=pathway_color("ad"), linewidth=1.2, label="AD"),
-            Line2D([0], [0], color=pathway_color("baseline"), linewidth=1.2, label="Baseline"),
-        ],
-        loc="lower center",
-        bbox_to_anchor=(0.5, 0.02),
-        ncol=4,
-        frameon=False,
-        handlelength=1.8,
-        columnspacing=1.4,
-    )
-    add_caption_note(axes[0], "Normalized spokes reveal pathway signatures without changing metric scales.")
-    fig.subplots_adjust(top=0.77, bottom=0.19, left=0.04, right=0.98, wspace=0.40)
+    fig, ax = plt.subplots(figsize=(8.5, 5.5))
+    working = evidence_ceiling_df.copy()
+    if working.empty:
+        ax.text(0.5, 0.5, "No evidence-ceiling data available", ha="center", va="center")
+        ax.axis("off")
+        return fig
+    working["scenario"] = working["scenario"].astype(str)
+    strong_share = pd.to_numeric(working.get("surrogate_supported_share_pct"), errors="coerce").fillna(0.0)
+    weak_share = (100.0 - strong_share).clip(lower=0.0)
+    y = np.arange(len(working))
+    ax.barh(y, strong_share, color="#059669", height=0.5, label="Strong surrogate (%)")
+    ax.barh(y, weak_share, left=strong_share, color="#D97706", height=0.5, label="Fallback-supported (%)")
+    ax.set_yticks(y)
+    ax.set_yticklabels(working["scenario"], fontweight='bold', color='#334155')
+    ax.set_xlim(0, 100)
+    ax.set_xlabel('Allocated throughput share by evidence tier (%)', fontweight='bold')
+    style_axis(ax, grid_axis='x')
+    ax.legend(loc='lower right', frameon=False)
+    plt.tight_layout()
     return fig
 
 
-def build_sup_figure_s2_dominance_evidence_landscape(frame: pd.DataFrame):
+def build_figure3_benchmark_necessity(benchmark_df: pd.DataFrame):
+    return build_figure_necessity_matrix(benchmark_df)
+
+
+def build_sup_figure_dominance_landscape(frame: pd.DataFrame):
     plt = configure_publication_theme()
-    fig, ax = plt.subplots(1, 1, figsize=(9.8, 5.5))
-    ordered = _prepare_frame(frame).sort_values(["scenario_order", "pathway_order"]).reset_index(drop=True)
-
-    add_landscape_zones(ax)
-    narrative_background(ax, facecolor="#FCFDFE")
-    ax.set_title("Supplementary Figure S2. Dominance / evidence landscape", loc="left", pad=10)
-
-    zone_labels = [
-        (4.5, 76, "Evidence-limited"),
-        (31, 76, "Latent competitor"),
-        (81, 76, "Selected core"),
-    ]
-    for x, y, text in zone_labels:
-        add_zone_label(ax, x, y, text)
-
-    for _, row in ordered.loc[ordered["pathway"] != "baseline"].iterrows():
-        x = float(row["portfolio_share_pct"])
-        y = float(row["stress_support_pct"])
-        color = pathway_color(row["pathway"])
-        halo_color = soften_hex(color, weight=0.45)
-        score_size = float(row["score_value"]) * 780.0
-        ax.scatter(x, y, s=score_size * 1.95, color=soften_hex(color, weight=0.76), alpha=0.18, edgecolors="none", zorder=1.8)
-        ax.scatter(x, y, s=score_size * 1.48, facecolors="none", edgecolors=halo_color, linewidths=1.0, zorder=2)
-        ax.scatter(x, y, s=score_size * 0.88, color=soften_hex(color, weight=0.18), edgecolors="white", linewidths=0.7, zorder=3)
+    fig, ax = plt.subplots(figsize=(8.5, 6.5))
+    ordered = frame.sort_values(['scenario_order', 'pathway_order']).copy()
+    score = pd.to_numeric(ordered.get("score_value"), errors="coerce").fillna(0.0)
+    support = pd.to_numeric(ordered.get("stress_support_pct"), errors="coerce").fillna(0.0)
+    bubble = pd.to_numeric(ordered.get("portfolio_share_pct"), errors="coerce").fillna(0.0)
+    ordered["score_value"] = score
+    ordered["stress_support_pct"] = support
+    ordered["portfolio_share_pct"] = bubble
+    for _, row in ordered.iterrows():
         ax.scatter(
-            x,
-            y,
-            s=46,
-            color=claim_color(row["claim_color_group"]),
-            edgecolors="white",
-            linewidths=0.6,
-            marker=scenario_marker(row["scenario_name"]),
-            zorder=4,
+            float(row["score_value"]),
+            float(row["stress_support_pct"]),
+            s=float(row["portfolio_share_pct"]) * 8 + 60,
+            color=pathway_color(str(row.get("pathway", ""))),
+            alpha=0.85,
+            edgecolors='white',
+            linewidths=1.0,
+            marker=scenario_marker(str(row.get("scenario_name", ""))),
         )
-
-    label_rows = (
-        ordered.loc[ordered["pathway"].isin(["pyrolysis", "htc", "ad"])]
-        .groupby("pathway", as_index=False)
-        .agg({"portfolio_share_pct": "max", "stress_support_pct": "max"})
-    )
-    for _, row in label_rows.iterrows():
-        pathway_name = str(row["pathway"])
-        x = float(row["portfolio_share_pct"])
-        y = float(row["stress_support_pct"])
-        label = {"pyrolysis": "Pyrolysis", "htc": "HTC", "ad": "AD"}.get(pathway_name, pathway_name)
-        x_shift = 2.2 if pathway_name != "htc" else 2.0
-        y_shift = 1.8 if pathway_name != "ad" else 2.2
-        add_badge(
-            ax,
-            x + x_shift,
-            y + y_shift,
-            label,
-            transform=ax.transData,
-            fontsize=7.3,
-            facecolor="#FFFFFF",
-            edgecolor="#DBE5EF",
-            textcolor="#0F172A",
-        )
-
-    ax.set_xlim(-2, 108)
-    ax.set_ylim(-2, 84)
-    ax.set_xlabel("Portfolio dominance (%)")
-    ax.set_ylabel("Robustness support (%)")
-    style_axis(ax, grid_axis="both")
-    evidence_legend = ax.legend(
-        handles=[
-            Line2D([0], [0], marker="o", color="none", markerfacecolor=claim_color("planning_ready"), markeredgecolor="none", markersize=6, label="planning-ready"),
-            Line2D([0], [0], marker="o", color="none", markerfacecolor=claim_color("comparison_only"), markeredgecolor="none", markersize=6, label="comparison-only"),
-            Line2D([0], [0], marker="o", color="none", markerfacecolor="white", markeredgecolor="#64748B", markersize=9, label="score halo"),
-        ],
-        loc="upper left",
-        bbox_to_anchor=(1.01, 0.42),
-        frameon=False,
-        ncol=1,
-        handletextpad=0.5,
-    )
-    ax.add_artist(evidence_legend)
-    ax.legend(
-        handles=[
-            Line2D([0], [0], marker="o", color="#64748B", linestyle="none", markersize=5, label="baseline"),
-            Line2D([0], [0], marker="s", color="#64748B", linestyle="none", markersize=5, label="high supply"),
-            Line2D([0], [0], marker="D", color="#64748B", linestyle="none", markersize=5, label="policy"),
-        ],
-        loc="upper left",
-        bbox_to_anchor=(1.01, 0.17),
-        frameon=False,
-        ncol=1,
-        handletextpad=0.5,
-    )
-    add_caption_note(ax, "Halo size tracks best-case score; inner marker preserves evidence tier and scenario identity.")
-    fig.subplots_adjust(top=0.90, bottom=0.16, left=0.10, right=0.83)
+    ax.set_xlabel('Case-level score index', fontweight='bold')
+    ax.set_ylabel('Stress support (%)', fontweight='bold')
+    style_axis(ax, grid_axis='both')
+    ax.set_xlim(left=max(0.0, float(score.min()) - 0.05), right=float(score.max()) + 0.1 if len(score) else 1.0)
+    ax.set_ylim(bottom=0.0, top=float(support.max()) + 10.0 if len(support) else 100.0)
+    plt.tight_layout()
     return fig

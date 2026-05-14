@@ -283,3 +283,162 @@ def test_surrogate_evaluator_honors_dataset_preference_order_before_metric_ranki
     selected = evaluator._resolve_artifact(pathway="htc", target_column="product_char_yield_pct")
 
     assert selected == "paper1_htc_scope::rf"
+
+
+def test_surrogate_evaluator_falls_back_when_model_backend_is_unavailable(monkeypatch):
+    frame = pd.DataFrame(
+        [
+            {
+                "optimization_case_id": "case-1",
+                "pathway": "pyrolysis",
+                "feedstock_hhv_mj_per_kg": 18.0,
+                "feedstock_moisture_pct": 72.0,
+                "product_char_yield_pct": 30.0,
+                "product_char_hhv_mj_per_kg": 20.0,
+                "energy_recovery_pct": 55.0,
+                "carbon_retention_pct": 40.0,
+                "source_dataset_kind": "planning_candidate",
+                "sample_id": "planning::001",
+            }
+        ]
+    )
+    evaluator = SurrogateEvaluator()
+    artifact = type(
+        "Artifact",
+        (),
+        {
+            "model_key": "xgboost",
+            "dataset_key": "pyrolysis_direct",
+            "split_strategy": "strict_group",
+            "feature_columns": ("feedstock_hhv_mj_per_kg", "feedstock_moisture_pct"),
+            "model_path": Path("dummy.json"),
+            "metrics_path": Path("dummy.json"),
+        },
+    )()
+
+    monkeypatch.setattr(evaluator, "_resolve_artifact", lambda **kwargs: artifact)
+
+    def _raise_backend_missing(_artifact):
+        raise ModuleNotFoundError("No module named 'xgboost'")
+
+    monkeypatch.setattr(evaluator, "_load_model", _raise_backend_missing)
+
+    predictions = evaluator.evaluate(frame)
+
+    assert predictions.loc[0, "surrogate_prediction_status"] == "documented_fallback_model_load_failure"
+    assert "model_load_failure:xgboost:pyrolysis_direct:ModuleNotFoundError" in predictions.loc[
+        0, "surrogate_fallback_reason"
+    ]
+    assert predictions.loc[0, "predicted_product_char_yield_pct"] == 30.0
+
+
+def test_surrogate_evaluator_uses_split_conformal_interval_when_calibration_predictions_exist(tmp_path, monkeypatch):
+    calibration_predictions_path = tmp_path / "predictions.csv"
+    pd.DataFrame(
+        [
+            {"split": "validation", "y_true": 10.0, "y_pred": 9.0},
+            {"split": "validation", "y_true": 10.0, "y_pred": 8.0},
+            {"split": "validation", "y_true": 10.0, "y_pred": 7.0},
+            {"split": "validation", "y_true": 10.0, "y_pred": 6.0},
+        ]
+    ).to_csv(calibration_predictions_path, index=False)
+
+    frame = pd.DataFrame(
+        [
+            {
+                "optimization_case_id": "case-1",
+                "pathway": "pyrolysis",
+                "feedstock_hhv_mj_per_kg": 18.0,
+                "feedstock_moisture_pct": 72.0,
+                "product_char_yield_pct": 30.0,
+                "product_char_hhv_mj_per_kg": 20.0,
+                "energy_recovery_pct": 55.0,
+                "carbon_retention_pct": 40.0,
+                "source_dataset_kind": "planning_candidate",
+                "sample_id": "planning::001",
+            }
+        ]
+    )
+
+    evaluator = SurrogateEvaluator()
+    artifact = type(
+        "Artifact",
+        (),
+        {
+            "model_key": "rf",
+            "dataset_key": "pyrolysis_direct",
+            "split_strategy": "strict_group",
+            "feature_columns": ("feedstock_hhv_mj_per_kg", "feedstock_moisture_pct"),
+            "model_path": Path("dummy.joblib"),
+            "metrics_path": Path("dummy_metrics.json"),
+            "calibration_predictions_path": calibration_predictions_path,
+        },
+    )()
+
+    class DummyModel:
+        def predict(self, feature_frame):
+            return [10.0] * len(feature_frame)
+
+    monkeypatch.setattr(evaluator, "_resolve_artifact", lambda **kwargs: artifact)
+    monkeypatch.setattr(evaluator, "_load_model", lambda _artifact: DummyModel())
+
+    predictions = evaluator.evaluate(frame)
+
+    assert predictions.loc[0, "product_char_yield_pct_uncertainty_method"] == "split_conformal_abs_residual"
+    assert predictions.loc[0, "product_char_yield_pct_uncertainty_calibration_count"] == 4
+    assert predictions.loc[0, "product_char_yield_pct_prediction_std"] > 0.0
+    assert predictions.loc[0, "product_char_yield_pct_ci_lower"] == 6.0
+    assert predictions.loc[0, "product_char_yield_pct_ci_upper"] == 14.0
+
+
+def test_surrogate_evaluator_falls_back_to_rmse_proxy_interval_when_no_calibration_predictions(tmp_path, monkeypatch):
+    metrics_path = tmp_path / "metrics.json"
+    metrics_path.write_text(
+        '{"validation": {"rmse": 2.0}, "test": {"rmse": 3.0}}',
+        encoding="utf-8",
+    )
+
+    frame = pd.DataFrame(
+        [
+            {
+                "optimization_case_id": "case-1",
+                "pathway": "pyrolysis",
+                "feedstock_hhv_mj_per_kg": 18.0,
+                "feedstock_moisture_pct": 72.0,
+                "product_char_yield_pct": 30.0,
+                "product_char_hhv_mj_per_kg": 20.0,
+                "energy_recovery_pct": 55.0,
+                "carbon_retention_pct": 40.0,
+                "source_dataset_kind": "planning_candidate",
+                "sample_id": "planning::001",
+            }
+        ]
+    )
+
+    evaluator = SurrogateEvaluator()
+    artifact = type(
+        "Artifact",
+        (),
+        {
+            "model_key": "rf",
+            "dataset_key": "pyrolysis_direct",
+            "split_strategy": "strict_group",
+            "feature_columns": ("feedstock_hhv_mj_per_kg", "feedstock_moisture_pct"),
+            "model_path": Path("dummy.joblib"),
+            "metrics_path": metrics_path,
+            "calibration_predictions_path": None,
+        },
+    )()
+
+    class DummyModel:
+        def predict(self, feature_frame):
+            return [10.0] * len(feature_frame)
+
+    monkeypatch.setattr(evaluator, "_resolve_artifact", lambda **kwargs: artifact)
+    monkeypatch.setattr(evaluator, "_load_model", lambda _artifact: DummyModel())
+
+    predictions = evaluator.evaluate(frame)
+
+    assert predictions.loc[0, "product_char_yield_pct_uncertainty_method"] == "rmse_proxy"
+    assert predictions.loc[0, "product_char_yield_pct_uncertainty_calibration_count"] == 0
+    assert round(float(predictions.loc[0, "product_char_yield_pct_prediction_std"]), 6) == 3.0

@@ -15,6 +15,12 @@ SURROGATE_TARGET_COLUMNS = (
     "carbon_retention_pct",
 )
 
+UNCERTAINTY_MODE_COLUMN_SUFFIX = {
+    "prefer_interval_mean": "interval_mean",
+    "max_interval_ratio": "max_interval",
+    "combined_only": "combined_only",
+}
+
 CRITICAL_COLUMNS = {
     "scenario_wet_waste_feed_allocation_ton_per_year_proxy": "allocation mass basis is required for annualized planning objectives",
     "scenario_baseline_waste_treatment_emission_factor_kgco2e_per_metric_ton": "baseline treatment emission factor is required for carbon accounting",
@@ -82,15 +88,24 @@ def assemble_objective_frame(
             fallback_reason="direct_measurement",
         )
 
-    merged["combined_uncertainty_ratio"], merged = _impute_with_flag(
-        frame=merged,
-        column="combined_uncertainty_ratio",
-        default_value=NONCRITICAL_IMPUTATION_COLUMNS["combined_uncertainty_ratio"],
-        flag_reason="default_uncertainty_zero",
-        source_column="combined_uncertainty_ratio_source",
-        explicit_source_label="explicit_uncertainty_column",
-        default_source_label="default_uncertainty_zero",
+    merged["uncertainty_penalty_mode"] = str(getattr(config, "uncertainty_penalty_mode", "prefer_interval_mean"))
+    merged = _attach_uncertainty_mode_reference_columns(merged)
+    active_mode = merged["uncertainty_penalty_mode"].iloc[0] if not merged.empty else "prefer_interval_mean"
+    active_suffix = UNCERTAINTY_MODE_COLUMN_SUFFIX.get(active_mode, "interval_mean")
+    merged["combined_uncertainty_ratio"] = pd.to_numeric(
+        merged.get(f"uncertainty_ratio_{active_suffix}", pd.Series(np.nan, index=merged.index)),
+        errors="coerce",
     )
+    merged["combined_uncertainty_ratio_source"] = merged.get(
+        f"uncertainty_ratio_{active_suffix}_source",
+        pd.Series(["missing"] * len(merged), index=merged.index, dtype="object"),
+    )
+    active_uncertainty_default_mask = merged["combined_uncertainty_ratio_source"].eq("default_uncertainty_zero")
+    if active_uncertainty_default_mask.any():
+        merged.loc[active_uncertainty_default_mask, "planning_imputation_notes"] = _append_message(
+            merged.loc[active_uncertainty_default_mask, "planning_imputation_notes"],
+            "combined_uncertainty_ratio:default_uncertainty_zero",
+        )
     merged["policy_multiplier"], merged = _impute_with_flag(
         frame=merged,
         column="policy_multiplier",
@@ -143,6 +158,12 @@ def assemble_objective_frame(
     explicit_energy_intensity = _optional_numeric_column(merged, "pathway_energy_intensity_mj_per_ton")
     explicit_environment_benefit = _optional_numeric_column(merged, "pathway_environment_benefit_kgco2e_per_ton")
     merged = _attach_surrogate_support_columns(merged, config)
+    for suffix in UNCERTAINTY_MODE_COLUMN_SUFFIX.values():
+        merged[f"effective_uncertainty_ratio_{suffix}"] = (
+            pd.to_numeric(merged.get(f"uncertainty_ratio_{suffix}", pd.Series(0.0, index=merged.index)), errors="coerce")
+            .fillna(0.0)
+            * pd.to_numeric(merged["evidence_uncertainty_multiplier"], errors="coerce").fillna(1.0)
+        ).clip(lower=0.0)
 
     feedstock_hhv = _optional_numeric_column(merged, "feedstock_hhv_mj_per_kg")
     char_yield = _optional_numeric_column(merged, "product_char_yield_pct") / 100.0
@@ -209,9 +230,10 @@ def assemble_objective_frame(
         )
 
     uncertainty_ratio = merged["combined_uncertainty_ratio"].clip(lower=0.0)
-    effective_uncertainty_ratio = (
-        uncertainty_ratio * pd.to_numeric(merged["evidence_uncertainty_multiplier"], errors="coerce").fillna(1.0)
-    ).clip(lower=0.0)
+    effective_uncertainty_ratio = pd.to_numeric(
+        merged.get(f"effective_uncertainty_ratio_{active_suffix}", pd.Series(0.0, index=merged.index)),
+        errors="coerce",
+    ).fillna(0.0)
     robust_multiplier = (1.0 - robustness_factor * effective_uncertainty_ratio).clip(lower=0.40, upper=1.00)
     robust_cost_multiplier = (1.0 + robustness_factor * effective_uncertainty_ratio).clip(lower=1.00, upper=1.90)
 
@@ -249,6 +271,18 @@ def assemble_objective_frame(
     )
     merged["combined_uncertainty_ratio"] = uncertainty_ratio
     merged["effective_uncertainty_ratio"] = effective_uncertainty_ratio
+    merged["active_minus_interval_mean_uncertainty_ratio"] = (
+        merged["combined_uncertainty_ratio"]
+        - pd.to_numeric(merged.get("uncertainty_ratio_interval_mean", pd.Series(np.nan, index=merged.index)), errors="coerce")
+    )
+    merged["active_minus_max_interval_uncertainty_ratio"] = (
+        merged["combined_uncertainty_ratio"]
+        - pd.to_numeric(merged.get("uncertainty_ratio_max_interval", pd.Series(np.nan, index=merged.index)), errors="coerce")
+    )
+    merged["active_minus_combined_only_uncertainty_ratio"] = (
+        merged["combined_uncertainty_ratio"]
+        - pd.to_numeric(merged.get("uncertainty_ratio_combined_only", pd.Series(np.nan, index=merged.index)), errors="coerce")
+    )
     merged["planning_energy_balance_mj_per_year"] = (
         total_mixed_feed_ton * merged["planning_energy_intensity_mj_per_ton"]
     )
@@ -484,6 +518,105 @@ def _impute_with_flag(
     return values.fillna(default_value), frame
 
 
+def _resolve_uncertainty_penalty_ratio(
+    *,
+    frame: pd.DataFrame,
+    mode: str,
+) -> tuple[pd.Series, pd.DataFrame]:
+    working = _attach_uncertainty_mode_reference_columns(frame.copy())
+    suffix = UNCERTAINTY_MODE_COLUMN_SUFFIX.get(mode, "interval_mean")
+    resolved = pd.to_numeric(
+        working.get(f"uncertainty_ratio_{suffix}", pd.Series(np.nan, index=working.index)),
+        errors="coerce",
+    ).fillna(NONCRITICAL_IMPUTATION_COLUMNS["combined_uncertainty_ratio"])
+    working["combined_uncertainty_ratio_source"] = working.get(
+        f"uncertainty_ratio_{suffix}_source",
+        pd.Series(["missing"] * len(working), index=working.index, dtype="object"),
+    )
+    missing_mask = working["combined_uncertainty_ratio_source"].eq("default_uncertainty_zero")
+    if missing_mask.any():
+        working.loc[missing_mask, "planning_imputation_notes"] = _append_message(
+            working.loc[missing_mask, "planning_imputation_notes"],
+            "combined_uncertainty_ratio:default_uncertainty_zero",
+        )
+    return resolved, working
+
+
+def _attach_uncertainty_mode_reference_columns(frame: pd.DataFrame) -> pd.DataFrame:
+    working = frame.copy()
+    explicit_source_column = (
+        "explicit_combined_uncertainty_ratio"
+        if "explicit_combined_uncertainty_ratio" in working.columns
+        else "combined_uncertainty_ratio"
+    )
+    explicit = _optional_numeric_column(working, explicit_source_column)
+    interval_columns = [
+        f"{target}_uncertainty_ratio"
+        for target in SURROGATE_TARGET_COLUMNS
+        if f"{target}_uncertainty_ratio" in working.columns
+    ]
+    if interval_columns:
+        interval_frame = working[interval_columns].apply(pd.to_numeric, errors="coerce")
+        interval_mean = interval_frame.mean(axis=1, skipna=True)
+        interval_max = interval_frame.max(axis=1, skipna=True)
+        interval_count = interval_frame.notna().sum(axis=1).astype(int)
+    else:
+        interval_mean = pd.Series(np.nan, index=working.index, dtype=float)
+        interval_max = pd.Series(np.nan, index=working.index, dtype=float)
+        interval_count = pd.Series(0, index=working.index, dtype=int)
+
+    working["explicit_combined_uncertainty_ratio"] = explicit
+    working["interval_mean_uncertainty_ratio"] = interval_mean
+    working["interval_max_uncertainty_ratio"] = interval_max
+    working["interval_uncertainty_target_count"] = interval_count
+
+    mean_resolved = interval_mean.where(interval_mean.notna(), explicit)
+    working["uncertainty_ratio_interval_mean"] = mean_resolved.fillna(
+        NONCRITICAL_IMPUTATION_COLUMNS["combined_uncertainty_ratio"]
+    )
+    working["uncertainty_ratio_interval_mean_source"] = _resolve_uncertainty_ratio_source(
+        preferred=interval_mean,
+        resolved=mean_resolved,
+        preferred_label="interval_mean_ratio",
+    )
+
+    max_resolved = interval_max.where(interval_max.notna(), explicit)
+    working["uncertainty_ratio_max_interval"] = max_resolved.fillna(
+        NONCRITICAL_IMPUTATION_COLUMNS["combined_uncertainty_ratio"]
+    )
+    working["uncertainty_ratio_max_interval_source"] = _resolve_uncertainty_ratio_source(
+        preferred=interval_max,
+        resolved=max_resolved,
+        preferred_label="interval_max_ratio",
+    )
+
+    working["uncertainty_ratio_combined_only"] = explicit.fillna(
+        NONCRITICAL_IMPUTATION_COLUMNS["combined_uncertainty_ratio"]
+    )
+    working["uncertainty_ratio_combined_only_source"] = _resolve_uncertainty_ratio_source(
+        preferred=pd.Series(np.nan, index=working.index, dtype=float),
+        resolved=explicit,
+        preferred_label="",
+    )
+    return working
+
+
+def _resolve_uncertainty_ratio_source(
+    *,
+    preferred: pd.Series,
+    resolved: pd.Series,
+    preferred_label: str,
+) -> pd.Series:
+    sources = pd.Series("default_uncertainty_zero", index=resolved.index, dtype="object")
+    preferred_mask = preferred.notna()
+    explicit_mask = preferred.isna() & resolved.notna()
+    if preferred_label and preferred_mask.any():
+        sources.loc[preferred_mask] = preferred_label
+    if explicit_mask.any():
+        sources.loc[explicit_mask] = "explicit_combined_uncertainty_ratio"
+    return sources
+
+
 def _adopt_series(
     *,
     frame: pd.DataFrame,
@@ -502,14 +635,23 @@ def _adopt_series(
 def _attach_surrogate_support_columns(frame: pd.DataFrame, config) -> pd.DataFrame:
     pathway = frame["pathway"].astype(str).str.strip().str.lower()
     surrogate_mode = frame.get("surrogate_mode", pd.Series([""] * len(frame), index=frame.index)).astype(str)
+    ad_documented_literature = pathway.eq("ad") & (
+        pd.to_numeric(
+            frame.get("ad_literature_observation_count", pd.Series([0.0] * len(frame), index=frame.index)),
+            errors="coerce",
+        ).fillna(0.0)
+        > 0.0
+    )
     support_level = np.select(
         [
+            ad_documented_literature,
             ~pathway.isin(tuple(SUPPORTED_SURROGATE_PATHWAYS)),
             surrogate_mode.eq("trained_surrogate"),
             surrogate_mode.eq("trained_surrogate_with_documented_fallback"),
             surrogate_mode.eq("documented_static_fallback"),
         ],
         [
+            "documented_static_fallback",
             "unsupported_pathway",
             "surrogate_supported",
             "trained_surrogate_with_documented_fallback",

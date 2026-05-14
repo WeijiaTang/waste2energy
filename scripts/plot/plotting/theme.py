@@ -1,112 +1,101 @@
 from __future__ import annotations
 
-from matplotlib.ticker import MaxNLocator
+import matplotlib.colors as mcolors
+import numpy as np
 
-from scripts.plot.common import CLAIM_COLORS, PATHWAY_COLORS
+from scripts.plot.common import CLAIM_COLORS, PATHWAY_COLORS, CONFIDENCE_COLORS, NECESSITY_COLORS
+
+ULTRA_PREMIUM_FONT_SIZE = 8.5
+ULTRA_PREMIUM_FONT_FAMILY = ['DejaVu Sans']
+ULTRA_PREMIUM_RC = {
+    'figure.facecolor': '#FFFFFF',
+    'axes.facecolor': '#FAFBFC',
+    'savefig.facecolor': '#FFFFFF',
+    'font.family': ULTRA_PREMIUM_FONT_FAMILY,
+    'font.size': ULTRA_PREMIUM_FONT_SIZE,
+    'axes.titlesize': 11.0,
+    'axes.titleweight': 'semibold',
+    'axes.titlepad': 10.0,
+    'axes.labelsize': 9.5,
+    'xtick.labelsize': ULTRA_PREMIUM_FONT_SIZE,
+    'ytick.labelsize': ULTRA_PREMIUM_FONT_SIZE,
+    'legend.fontsize': ULTRA_PREMIUM_FONT_SIZE,
+    'axes.edgecolor': '#1E293B',
+    'axes.linewidth': 1.0,
+    'grid.color': '#E2E8F0',
+    'grid.linewidth': 0.6,
+    'grid.alpha': 0.7,
+    'figure.dpi': 300,
+    'savefig.dpi': 300,
+    'pdf.fonttype': 42,
+    'ps.fonttype': 42,
+}
 
 
 def configure_publication_theme():
     import matplotlib
-
-    matplotlib.use("Agg")
+    matplotlib.use('Agg')
     import matplotlib.pyplot as plt
     import seaborn as sns
-    import scienceplots  # noqa: F401
+    try:  # optional styling package
+        import scienceplots  # noqa: F401
 
-    plt.style.use(["science", "nature", "no-latex"])
-    plt.rcParams.update(
-        {
-            "figure.facecolor": "white",
-            "axes.facecolor": "white",
-            "savefig.facecolor": "white",
-            "font.family": ["Arial", "Helvetica", "DejaVu Sans"],
-            "font.size": 7.6,
-            "axes.titlesize": 8.6,
-            "axes.labelsize": 7.8,
-            "xtick.labelsize": 6.8,
-            "ytick.labelsize": 6.8,
-            "legend.fontsize": 6.8,
-            "axes.edgecolor": "#222222",
-            "axes.linewidth": 0.65,
-            "grid.color": "#E8EDF3",
-            "grid.linewidth": 0.55,
-            "pdf.fonttype": 42,
-            "ps.fonttype": 42,
-        }
-    )
-    sns.set_theme(style="white")
+        plt.style.use(['science', 'nature', 'no-latex'])
+    except ModuleNotFoundError:
+        plt.style.use('default')
+    sns.set_theme(style='white')
+    plt.rcParams.update(ULTRA_PREMIUM_RC)
     return plt
 
-
 def pathway_color(pathway: str) -> str:
-    return PATHWAY_COLORS.get(str(pathway), "#7C7C7C")
+    return PATHWAY_COLORS.get(str(pathway).lower(), '#64748B')
 
+def confidence_color(tier: str) -> str:
+    return CONFIDENCE_COLORS.get(str(tier).lower(), '#64748B')
 
-def claim_color(group: str) -> str:
-    return CLAIM_COLORS.get(str(group), "#7C7C7C")
+def soften_hex(hex_color: str, weight: float = 0.85) -> str:
+    try:
+        color = hex_color.lstrip('#')
+        rgb = [int(color[i:i+2], 16) for i in (0, 2, 4)]
+        mixed = [int(c * (1.0 - weight) + 255 * weight) for c in rgb]
+        return '#{:02X}{:02X}{:02X}'.format(*mixed)
+    except:
+        return '#F1F5F9'
 
-
-def scenario_marker(scenario_name: str) -> str:
-    markers = {
-        "baseline_region_case": "o",
-        "high_supply_case": "s",
-        "policy_support_case": "D",
-    }
-    return markers.get(str(scenario_name), "o")
-
-
-def soften_hex(hex_color: str, weight: float = 0.82) -> str:
-    color = hex_color.lstrip("#")
-    red = int(color[0:2], 16)
-    green = int(color[2:4], 16)
-    blue = int(color[4:6], 16)
-    mixed = [
-        int(channel * (1.0 - weight) + 255 * weight)
-        for channel in (red, green, blue)
-    ]
-    return "#{:02X}{:02X}{:02X}".format(*mixed)
-
-
-def style_axis(ax, *, grid_axis: str = "y", grid: bool = True) -> None:
+def style_axis(ax, *, grid_axis: str = 'y', grid: bool = True):
     if grid:
-        ax.grid(True, axis=grid_axis, color="#E4EAF1", linewidth=0.55)
+        ax.grid(True, axis=grid_axis, color='#E2E8F0', linewidth=0.6, linestyle='--', alpha=0.7)
     else:
         ax.grid(False)
-    ax.tick_params(length=0)
-    for spine in ["top", "right"]:
+    ax.tick_params(length=0, pad=8)
+    for spine in ['top', 'right']:
         ax.spines[spine].set_visible(False)
-    ax.spines["left"].set_color("#8893A0")
-    ax.spines["bottom"].set_color("#8893A0")
-    ax.xaxis.set_major_locator(MaxNLocator(nbins=5))
+    ax.spines['left'].set_color('#94A3B8')
+    ax.spines['bottom'].set_color('#94A3B8')
 
+def draw_gradient_barh(ax, y, width, height, color_start, **kwargs):
+    color_end = soften_hex(color_start, weight=0.35)
+    n_segments = 50
+    zorder = kwargs.get('zorder', 3)
+    for i in range(n_segments):
+        frac = i / n_segments
+        color = mcolors.to_hex(mcolors.to_rgb(color_start) + (np.array(mcolors.to_rgb(color_end)) - np.array(mcolors.to_rgb(color_start))) * frac)
+        ax.barh(y, width / n_segments, left=width * frac, height=height, color=color, edgecolor='none', zorder=zorder)
+    ax.barh(y + height*0.4, width, height=height*0.08, color='#FFFFFF', alpha=0.2, edgecolor='none', zorder=zorder+0.1)
 
-def narrative_background(ax, *, facecolor: str = "#F7F9FC") -> None:
-    ax.set_facecolor(facecolor)
+def add_status_badge(ax, x, y, text, color, **kwargs):
+    transform = kwargs.get('transform', ax.transAxes)
+    ax.text(x, y, text, transform=transform, fontsize=8, ha='center', va='center', color='#FFFFFF', fontweight='bold',
+            bbox=dict(boxstyle='round,pad=0.5,rounding_size=0.3', facecolor=color, edgecolor='none', alpha=0.9),
+            zorder=10)
 
+def add_innovation_glow(ax, x, y, color, s=150, alpha=0.1):
+    for i in range(1, 6):
+        ax.scatter(x, y, s=s*(1+i*0.5), color=color, alpha=alpha/i, edgecolors='none', zorder=1)
 
-def style_polar_axis(ax) -> None:
-    ax.set_facecolor("#FCFDFE")
-    ax.spines["polar"].set_visible(False)
-    ax.grid(color="#DFE7F0", linewidth=0.7)
-    ax.set_theta_offset(3.141592653589793 / 2)
-    ax.set_theta_direction(-1)
-    ax.tick_params(pad=4)
+def claim_color(group: str) -> str:
+    return CLAIM_COLORS.get(str(group).lower(), '#64748B')
 
-
-def add_polar_backdrop(ax) -> None:
-    theta = [0, 2 * 3.141592653589793]
-    for radius, color, alpha in [
-        (1.0, "#F8FBFF", 1.0),
-        (0.78, "#F3F7FC", 0.95),
-        (0.52, "#FBFDFF", 1.0),
-    ]:
-        ax.fill_between(theta, 0, radius, color=color, alpha=alpha, zorder=0)
-
-
-def add_landscape_zones(ax) -> None:
-    ax.axvspan(-2, 8, color="#F8FBFE", zorder=0)
-    ax.axvspan(8, 55, color="#F3F7FC", zorder=0)
-    ax.axvspan(55, 105, color="#EEF9F4", zorder=0)
-    ax.axhspan(-2, 20, color="#FFF8EF", zorder=0)
-    ax.axhline(20, color="#E7DCCB", linewidth=0.8, zorder=1)
-    ax.axvline(55, color="#D9E7DF", linewidth=0.8, zorder=1)
+def scenario_marker(scenario_name: str) -> str:
+    markers = {'baseline_region_case': 'o', 'high_supply_case': 's', 'policy_support_case': 'D'}
+    return markers.get(str(scenario_name), 'o')

@@ -14,6 +14,9 @@ def write_operation_outputs(
     rollout_steps: pd.DataFrame,
     rollout_summary: pd.DataFrame,
     output_dir: str | None,
+    planning_run_config: dict[str, object] | None = None,
+    scenario_run_config: dict[str, object] | None = None,
+    horizon_steps: int | None = None,
 ) -> dict[str, str]:
     target_dir = Path(output_dir) if output_dir else OPERATION_OUTPUTS_DIR / "baseline"
     target_dir.mkdir(parents=True, exist_ok=True)
@@ -36,8 +39,10 @@ def write_operation_outputs(
             else [],
             environment_count=int(len(environment_specs)),
             rollout_episode_count=int(len(rollout_summary)),
+            horizon_steps=horizon_steps,
             output_files={key: str(path) for key, path in outputs.items()},
             operation_layer_status="planning_derived_environment_ready_baseline_policies_only",
+            **_build_operation_source_fields(planning_run_config, scenario_run_config),
         ),
     )
     return {key: str(path) for key, path in outputs.items()}
@@ -53,6 +58,12 @@ def write_operation_rl_outputs(
     policy_behavior_summary: pd.DataFrame,
     output_dir: str | None,
     algorithm: str,
+    planning_run_config: dict[str, object] | None = None,
+    scenario_run_config: dict[str, object] | None = None,
+    seeds: list[int] | None = None,
+    total_timesteps: int | None = None,
+    evaluation_episodes: int | None = None,
+    horizon_steps: int | None = None,
 ) -> dict[str, str]:
     base_dir = Path(output_dir) if output_dir else OPERATION_OUTPUTS_DIR / "rl" / algorithm
     base_dir.mkdir(parents=True, exist_ok=True)
@@ -81,8 +92,13 @@ def write_operation_rl_outputs(
             training_run_count=int(len(training_summary)),
             evaluation_episode_count=int(len(evaluation_episode_summary)),
             algorithm=algorithm,
+            seeds=list(seeds or []),
+            total_timesteps=total_timesteps,
+            evaluation_episodes=evaluation_episodes,
+            horizon_steps=horizon_steps,
             output_files={key: str(path) for key, path in outputs.items()},
             operation_layer_status="gymnasium_env_with_sb3_training_and_evaluation",
+            **_build_operation_source_fields(planning_run_config, scenario_run_config),
         ),
     )
     return {key: str(path) for key, path in outputs.items()}
@@ -101,6 +117,10 @@ def write_operation_comparison_outputs(
     output_dir: str | None,
     seeds: list[int] | None = None,
     total_timesteps: int | None = None,
+    planning_run_config: dict[str, object] | None = None,
+    scenario_run_config: dict[str, object] | None = None,
+    evaluation_episodes: int | None = None,
+    horizon_steps: int | None = None,
 ) -> dict[str, str]:
     base_dir = Path(output_dir) if output_dir else OPERATION_OUTPUTS_DIR / "comparison"
     base_dir.mkdir(parents=True, exist_ok=True)
@@ -165,11 +185,24 @@ def write_operation_comparison_outputs(
             algorithms=sorted(rl_training_summaries.keys()),
             seeds=list(seeds or []),
             total_timesteps=total_timesteps,
+            evaluation_episodes=evaluation_episodes,
+            horizon_steps=horizon_steps,
             output_files={**{key: str(path) for key, path in outputs.items()}, **extra_files},
             operation_layer_status="multi_seed_rl_vs_baseline_comparison_ready",
+            **_build_operation_source_fields(planning_run_config, scenario_run_config),
         ),
     )
     return {
         **{key: str(path) for key, path in outputs.items()},
         **extra_files,
+    }
+
+
+def _build_operation_source_fields(
+    planning_run_config: dict[str, object] | None,
+    scenario_run_config: dict[str, object] | None,
+) -> dict[str, object]:
+    return {
+        "source_planning_generated_at_utc": str((planning_run_config or {}).get("generated_at_utc", "")),
+        "source_scenario_generated_at_utc": str((scenario_run_config or {}).get("generated_at_utc", "")),
     }

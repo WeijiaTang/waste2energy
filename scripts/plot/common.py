@@ -148,3 +148,15 @@ def add_panel_label(ax, label: str) -> None:
 
 def format_pct(value: float) -> str:
     return f"{value:.1f}%"
+
+CONFIDENCE_COLORS = {
+    'high': '#059669',
+    'moderate': '#D97706',
+    'guarded': '#DB2777',
+    'low': '#4B5563',
+}
+NECESSITY_COLORS = {
+    'supports_core_innovation': '#0F172A',
+    'supports_secondary_innovation': '#334155',
+    'limited_effect': '#94A3B8',
+}

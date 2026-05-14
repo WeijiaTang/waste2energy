@@ -14,6 +14,7 @@ RAW_MANURE_DIR = ROOT / "data" / "raw" / "ManurePyrolysisIAM" / "baseline_supple
 
 COMBINED_INPUT = UNIFIED_DIR / "wet_waste_biomass_opt_combined_standardized.csv"
 MANURE_REFERENCE_INPUT = UNIFIED_DIR / "manure_pyrolysis_energy_balance_long.csv"
+AD_LITERATURE_INPUT = UNIFIED_DIR / "ad_literature_standardized.csv"
 CALIFORNIA_MODEL_INPUT = MODEL_READY_DIR / "california_food_waste_model_input.csv"
 REGION_SCENARIO_INPUT = SCENARIO_DIR / "paper1_region_scenario_placeholder.csv"
 TREATMENT_MIX_INPUT = SCENARIO_DIR / "california_food_waste_treatment_mix_reference.csv"
@@ -63,6 +64,8 @@ TARGET_COLUMNS = [
 AD_WET_ELECTRICITY_KWH_PER_TON = 201.4
 AD_WET_AVAILABLE_HEAT_MMBTU_PER_TON = 1.26
 AD_WET_REACTOR_HEAT_MMBTU_PER_TON = 0.14
+AD_LITERATURE_METHANE_TO_ELECTRICITY_EFFICIENCY = 0.35
+AD_LITERATURE_RECOVERABLE_HEAT_FRACTION = 0.40
 MMBTU_TO_MJ = 1055.056
 KWH_TO_MJ = 3.6
 MMBTU_PER_MCF = 1.037
@@ -121,13 +124,13 @@ PATHWAY_READINESS_RULES = {
         ),
     },
     "ad": {
-        "process_basis": "food_waste_ad_summary_proxy_with_canonical_operating_placeholders",
-        "performance_basis": "explicit_energy_proxy_from_warm_wet_digestion_exhibit",
-        "environment_basis": "explicit_food_waste_ad_emission_factor_from_epa_warm",
+        "process_basis": "traceable_ofmsw_ad_methane_yield_layer_with_canonical_operating_placeholders",
+        "performance_basis": "literature_bounded_ofmsw_methane_yield_energy_proxy",
+        "environment_basis": "explicit_food_waste_ad_emission_factor_from_epa_warm_plus_literature_energy_boundary",
         "cost_basis": "literature_parameterized_ad_cost_model_with_california_energy_repricing",
         "claim_boundary": (
-            "AD rows support regional planning comparison but should be written as pathway proxies rather "
-            "than as calibrated facility-specific AD optimization."
+            "AD rows now use traceable OFMSW methane-yield observations for energy-bounded screening, "
+            "but remain unsuitable for facility-specific digester design or siting claims."
         ),
     },
     "pyrolysis": {
@@ -220,6 +223,46 @@ def load_manure_subtype_reference() -> pd.DataFrame:
         }
     )
     return pivot
+
+
+def load_ad_literature_reference() -> pd.DataFrame:
+    if not AD_LITERATURE_INPUT.exists():
+        raise FileNotFoundError(
+            f"Missing AD literature dataset at {AD_LITERATURE_INPUT}. "
+            "Run scripts/data-process/12_ingest_ad_literature_dataset.py first."
+        )
+    frame = pd.read_csv(AD_LITERATURE_INPUT)
+    required = {
+        "feedstock_group",
+        "specific_methane_yield_m3_per_kg_odm",
+        "ad_energy_yield_mj_per_wet_ton_proxy",
+    }
+    missing = required.difference(frame.columns)
+    if missing:
+        raise ValueError(f"AD literature dataset is missing required columns: {sorted(missing)}")
+    return frame.copy()
+
+
+def summarize_ad_literature_reference(frame: pd.DataFrame) -> dict[str, object]:
+    energy = pd.to_numeric(frame["ad_energy_yield_mj_per_wet_ton_proxy"], errors="coerce").dropna()
+    methane = pd.to_numeric(frame["specific_methane_yield_m3_per_kg_odm"], errors="coerce").dropna()
+    food_energy = pd.to_numeric(
+        frame.loc[frame["feedstock_group"].astype(str).eq("food_waste"), "ad_energy_yield_mj_per_wet_ton_proxy"],
+        errors="coerce",
+    ).dropna()
+    if energy.empty:
+        raise ValueError("AD literature dataset has no usable energy-yield proxy values.")
+    return {
+        "row_count": int(len(frame)),
+        "feedstock_group_counts": frame["feedstock_group"].value_counts().to_dict(),
+        "energy_mj_per_wet_ton_median": float(energy.median()),
+        "energy_mj_per_wet_ton_p25": float(energy.quantile(0.25)),
+        "energy_mj_per_wet_ton_p75": float(energy.quantile(0.75)),
+        "food_waste_energy_mj_per_wet_ton_median": float(food_energy.median()) if not food_energy.empty else float(energy.median()),
+        "methane_yield_m3_per_kg_odm_median": float(methane.median()) if not methane.empty else float("nan"),
+        "source_note": "Sailer et al. 2022 OFMSW AD Table 14, Mendeley Data DOI 10.17632/vj6cmc4h3m.1",
+    }
+
 
 
 def load_pyrolysis_cost_reference() -> dict[str, dict[str, float]]:
@@ -532,24 +575,28 @@ def build_ad_candidates(
     *,
     common_feed_rows: list[dict[str, object]],
     ad_emission_factor: float,
+    ad_literature_summary: dict[str, object],
 ) -> list[dict[str, object]]:
     rows: list[dict[str, object]] = []
     row_id = 1
-    ad_energy_mj = AD_WET_ELECTRICITY_KWH_PER_TON * KWH_TO_MJ + (
-        max(AD_WET_AVAILABLE_HEAT_MMBTU_PER_TON - AD_WET_REACTOR_HEAT_MMBTU_PER_TON, 0.0) * MMBTU_TO_MJ
-    )
+    ad_energy_mj = float(ad_literature_summary["food_waste_energy_mj_per_wet_ton_median"])
+    ad_energy_p25 = float(ad_literature_summary["energy_mj_per_wet_ton_p25"])
+    ad_energy_p75 = float(ad_literature_summary["energy_mj_per_wet_ton_p75"])
+    ad_electricity_kwh_per_ton = ad_energy_mj * AD_LITERATURE_METHANE_TO_ELECTRICITY_EFFICIENCY / KWH_TO_MJ
+    ad_recoverable_heat_mmbtu_per_ton = ad_energy_mj * AD_LITERATURE_RECOVERABLE_HEAT_FRACTION / MMBTU_TO_MJ
     for base in common_feed_rows:
         row = base.copy()
         row.update(
             {
                 "sample_id": f"Waste2Energy::planning::ad::{row_id:04d}",
-                "source_repo": "CaliforniaRegionData; EPA_WARM",
+                "source_repo": "MendeleyData; CaliforniaRegionData; EPA_WARM",
                 "source_file": (
+                    "ad_literature_standardized.csv; "
                     "paper1_region_scenario_placeholder.csv; "
                     "california_waste_treatment_emission_factor_reference.csv"
                 ),
-                "source_dataset_kind": "regional_ad_summary_candidate",
-                "reference_label": "food_waste_ad_summary_proxy_with_warm_energy_anchor",
+                "source_dataset_kind": "literature_bounded_regional_ad_candidate",
+                "reference_label": "ofmsw_ad_methane_yield_proxy_with_warm_emission_anchor",
                 "pathway": "ad",
                 "pathway_variant": "anaerobic_digestion_summary_proxy",
                 "pathway_process_basis": PATHWAY_READINESS_RULES["ad"]["process_basis"],
@@ -566,6 +613,14 @@ def build_ad_candidates(
                 ),
                 "pathway_emission_factor_kgco2e_per_short_ton_reference": ad_emission_factor,
                 "pathway_energy_intensity_mj_per_ton": ad_energy_mj,
+                "ad_literature_energy_p25_mj_per_wet_ton": ad_energy_p25,
+                "ad_literature_energy_p75_mj_per_wet_ton": ad_energy_p75,
+                "ad_literature_observation_count": int(ad_literature_summary["row_count"]),
+                "ad_literature_methane_yield_m3_per_kg_odm_median": ad_literature_summary[
+                    "methane_yield_m3_per_kg_odm_median"
+                ],
+                "ad_electricity_kwh_per_ton_proxy": ad_electricity_kwh_per_ton,
+                "ad_recoverable_heat_mmbtu_per_ton_proxy": ad_recoverable_heat_mmbtu_per_ton,
                 "process_temperature_c": 37.0,
                 "residence_time_min": 1440.0,
                 "heating_rate_c_per_min": pd.NA,
@@ -728,9 +783,9 @@ def build_prototypes() -> tuple[pd.DataFrame, dict[str, object]]:
     landfill_energy_kwh_per_ton = LANDFILL_AVOIDED_UTILITY_EMISSIONS_KGCO2E_PER_SHORT_TON / max(
         reference_grid_factor, 1e-9
     )
-    ad_energy_mj = AD_WET_ELECTRICITY_KWH_PER_TON * KWH_TO_MJ + (
-        max(AD_WET_AVAILABLE_HEAT_MMBTU_PER_TON - AD_WET_REACTOR_HEAT_MMBTU_PER_TON, 0.0) * MMBTU_TO_MJ
-    )
+    ad_literature = load_ad_literature_reference()
+    ad_literature_summary = summarize_ad_literature_reference(ad_literature)
+    ad_energy_mj = float(ad_literature_summary["food_waste_energy_mj_per_wet_ton_median"])
     baseline_energy_intensity_mj_per_ton = landfill_share * landfill_energy_kwh_per_ton * KWH_TO_MJ + ad_share * ad_energy_mj
 
     pyrolysis_cost_lookup = load_pyrolysis_cost_reference()
@@ -748,6 +803,7 @@ def build_prototypes() -> tuple[pd.DataFrame, dict[str, object]]:
         build_ad_candidates(
             common_feed_rows=common_feed_rows,
             ad_emission_factor=ad_emission_factor,
+            ad_literature_summary=ad_literature_summary,
         )
     )
     rows.extend(
@@ -775,6 +831,7 @@ def build_prototypes() -> tuple[pd.DataFrame, dict[str, object]]:
         "pyrolysis_condition_count": int(len(pyrolysis_conditions)),
         "blend_case_count": len(BLEND_CASES),
         "manure_subtype_count": len(subtype_profiles),
+        "ad_literature": ad_literature_summary,
     }
     return prototype_df, metadata
 
@@ -983,9 +1040,15 @@ def _apply_ad_cost_model(
     )
     gross_opex = total_mixed_feed_ton.loc[mask] * METRIC_TON_TO_SHORT_TON * AD_OPEX_USD_PER_SHORT_TON_FEED
     product_revenue = (
-        total_mixed_feed_ton.loc[mask] * AD_WET_ELECTRICITY_KWH_PER_TON * electricity_price.loc[mask]
+        total_mixed_feed_ton.loc[mask]
+        * pd.to_numeric(frame.loc[mask, "ad_electricity_kwh_per_ton_proxy"], errors="coerce").fillna(
+            AD_WET_ELECTRICITY_KWH_PER_TON
+        )
+        * electricity_price.loc[mask]
         + total_mixed_feed_ton.loc[mask]
-        * max(AD_WET_AVAILABLE_HEAT_MMBTU_PER_TON - AD_WET_REACTOR_HEAT_MMBTU_PER_TON, 0.0)
+        * pd.to_numeric(frame.loc[mask, "ad_recoverable_heat_mmbtu_per_ton_proxy"], errors="coerce").fillna(
+            max(AD_WET_AVAILABLE_HEAT_MMBTU_PER_TON - AD_WET_REACTOR_HEAT_MMBTU_PER_TON, 0.0)
+        )
         / MMBTU_PER_MCF
         * natural_gas_price.loc[mask]
     )
@@ -1141,7 +1204,7 @@ def build_assumptions_payload(
         "pathways": readiness_summary.to_dict("records"),
         "construction_metadata": metadata,
         "assumptions": [
-            "Baseline and AD rows are optimization-ready regional planning anchors, not direct process-observation rows.",
+            "Baseline rows are regional planning anchors; AD rows now use traceable OFMSW methane-yield observations for energy-bounded screening rather than a single energy proxy.",
             "Pyrolysis and HTC rows are synthetic mixed-feed candidates anchored to repository observations and manure subtype balance references.",
             "Energy objective values now prefer explicit pathway energy intensities when they are available, and thermochemical rows still remain consistent with char-yield-based recoverable energy.",
             "Environmental objective values now prefer pathway-level emission-factor differentials for baseline and AD, while pyrolysis and HTC keep carbon-retention-based avoidance proxies.",

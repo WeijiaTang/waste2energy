@@ -20,7 +20,7 @@ def write_scenario_outputs(
     planner_variant: str,
     objective_readiness: dict[str, str],
 ) -> dict[str, str]:
-    target_dir = Path(output_dir) if output_dir else SCENARIO_OUTPUTS_DIR / "baseline"
+    target_dir = Path(output_dir) if output_dir else SCENARIO_OUTPUTS_DIR
     target_dir.mkdir(parents=True, exist_ok=True)
 
     outputs = {

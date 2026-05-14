@@ -10,6 +10,18 @@ import pandas as pd
 from ..common import build_run_manifest, write_json
 from ..config import resolve_surrogate_outputs_dir
 
+HTC_PRIORITY_DATASETS = frozenset({"htc_direct", "paper1_htc_scope"})
+HTC_MODEL_PRIORITY = (
+    "catboost",
+    "lightgbm",
+    "stacking",
+    "xgboost",
+    "extra_trees",
+    "rf",
+    "gradient_boosting",
+    "elastic_net",
+)
+
 
 def write_training_outputs(
     *,
@@ -123,17 +135,28 @@ def build_ranked_suite_summary_frame(rows: list[dict[str, object]]) -> pd.DataFr
     ranked_groups: list[pd.DataFrame] = []
     for _, subset in frame.groupby(["dataset_key", "target_column", "split_strategy"], dropna=False, sort=False):
         working = subset.copy()
+        dataset_key = str(working["dataset_key"].iloc[0])
         working["_validation_r2_sort"] = pd.to_numeric(working.get("validation_r2"), errors="coerce").fillna(float("-inf"))
         working["_validation_rmse_sort"] = pd.to_numeric(working.get("validation_rmse"), errors="coerce").fillna(float("inf"))
         working["_validation_mae_sort"] = pd.to_numeric(working.get("validation_mae"), errors="coerce").fillna(float("inf"))
+        working["_model_priority_sort"] = working["model_key"].map(
+            lambda value: _model_priority_rank(dataset_key=dataset_key, model_key=str(value))
+        )
         working = working.sort_values(
-            ["_validation_r2_sort", "_validation_rmse_sort", "_validation_mae_sort", "model_key"],
-            ascending=[False, True, True, True],
+            ["_model_priority_sort", "_validation_r2_sort", "_validation_rmse_sort", "_validation_mae_sort", "model_key"],
+            ascending=[True, False, True, True, True],
         ).reset_index(drop=True)
         working["selection_rank_within_dataset_target"] = range(1, len(working) + 1)
         working["is_selected_model"] = working["selection_rank_within_dataset_target"].eq(1)
         ranked_groups.append(
-            working.drop(columns=["_validation_r2_sort", "_validation_rmse_sort", "_validation_mae_sort"])
+            working.drop(
+                columns=[
+                    "_model_priority_sort",
+                    "_validation_r2_sort",
+                    "_validation_rmse_sort",
+                    "_validation_mae_sort",
+                ]
+            )
         )
 
     ranked = pd.concat(ranked_groups, ignore_index=True)
@@ -141,6 +164,15 @@ def build_ranked_suite_summary_frame(rows: list[dict[str, object]]) -> pd.DataFr
         ["dataset_key", "target_column", "split_strategy", "selection_rank_within_dataset_target", "model_key"],
         ascending=[True, True, True, True, True],
     ).reset_index(drop=True)
+
+
+def _model_priority_rank(*, dataset_key: str, model_key: str) -> int:
+    if dataset_key in HTC_PRIORITY_DATASETS:
+        try:
+            return HTC_MODEL_PRIORITY.index(model_key)
+        except ValueError:
+            return len(HTC_MODEL_PRIORITY)
+    return 0
 
 
 def build_selected_models_manifest(summary_frame: pd.DataFrame) -> pd.DataFrame:

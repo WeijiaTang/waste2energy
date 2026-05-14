@@ -30,7 +30,7 @@ def write_planning_outputs(
     bundle,
     readiness: dict[str, str],
 ) -> dict[str, str]:
-    target_dir = Path(output_dir) if output_dir else PLANNING_OUTPUTS_DIR / "baseline"
+    target_dir = Path(output_dir) if output_dir else PLANNING_OUTPUTS_DIR
     target_dir.mkdir(parents=True, exist_ok=True)
 
     outputs = {

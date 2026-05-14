@@ -32,16 +32,29 @@ def test_planning_baseline_smoke(tmp_path):
 
     assert "combined_uncertainty_ratio" in surrogate_predictions.columns
     assert surrogate_predictions["combined_uncertainty_ratio"].ge(0.0).all()
+    assert "product_char_yield_pct_uncertainty_method" in surrogate_predictions.columns
+    assert "product_char_yield_pct_uncertainty_calibration_count" in surrogate_predictions.columns
     assert set(optimization_diagnostics["solver_status"]) == {"optimal"}
     assert "candidate_cap_binding" in optimization_diagnostics.columns
     assert "subtype_cap_binding" in optimization_diagnostics.columns
     assert "constraint_relaxation_ratio" in optimization_diagnostics.columns
+    assert "interval_mean_top_ranked_case_id" in optimization_diagnostics.columns
+    assert "max_interval_top_ranked_case_id" in optimization_diagnostics.columns
+    assert "uncertainty_mode_case_switch_count" in optimization_diagnostics.columns
+    assert "uncertainty_mode_case_map" in optimization_diagnostics.columns
+    assert "uncertainty_mode_ranking_summary" in optimization_diagnostics.columns
     assert "planning_score_scope" in scored_cases.columns
     assert set(scored_cases["planning_score_scope"]) == {"scenario_local_optimizer"}
+    assert "planning_score_interval_mean" in scored_cases.columns
+    assert "planning_score_max_interval" in scored_cases.columns
+    assert "planning_rank_max_interval" in scored_cases.columns
+    assert "uncertainty_rank_span" in scored_cases.columns
     assert "scenario_external_evidence_source" in scored_cases.columns
     assert "surrogate_support_level" in scored_cases.columns
     assert "evidence_based_weight" in scored_cases.columns
     assert "planning_imputation_flag" in scored_cases.columns
+    assert "interval_mean_uncertainty_ratio" in scored_cases.columns
+    assert "interval_max_uncertainty_ratio" in scored_cases.columns
     assert "scenario_baseline_waste_treatment_emission_factor_kgco2e_per_metric_ton" in scored_cases.columns
     assert "planning_carbon_unit_basis" in scored_cases.columns
     assert set(scored_cases["planning_carbon_unit_basis"]) == {"kgco2e_per_metric_ton"}
@@ -55,6 +68,7 @@ def test_planning_baseline_smoke(tmp_path):
     ).all()
     assert run_config["scenario_external_evidence_table_path"]
     assert run_config["unit_registry"]["planning_mass_unit_basis"] == "metric_ton"
+    assert run_config["planning_config"]["uncertainty_penalty_mode"] == "prefer_interval_mean"
     assert portfolio_allocations["allocated_feed_ton_per_year"].gt(0.0).all()
 
 

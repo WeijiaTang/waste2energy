@@ -118,6 +118,12 @@ def build_parser() -> argparse.ArgumentParser:
         default=12,
         help="Approximate number of portfolio points sampled for Pareto analysis.",
     )
+    parser.add_argument(
+        "--uncertainty-penalty-mode",
+        choices=["prefer_interval_mean", "max_interval_ratio", "combined_only"],
+        default="prefer_interval_mean",
+        help="How planning resolves surrogate uncertainty into the robustness penalty.",
+    )
     return parser
 
 
@@ -152,6 +158,7 @@ def main() -> int:
                 optimization_method=args.optimization_method,
                 pyomo_solver_preference=args.pyomo_solver,
                 pareto_point_count=args.pareto_point_count,
+                uncertainty_penalty_mode=args.uncertainty_penalty_mode,
             ),
         )
     except Exception as exc:

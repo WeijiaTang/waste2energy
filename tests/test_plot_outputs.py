@@ -9,10 +9,16 @@ from scripts.plot.common import ensure_results_dir
 from scripts.plot.plotting.exports import build_plot_manifest, save_plot_figure_set
 from scripts.plot.plotting.paper1_planning_figures import (
     build_figure1_main,
+    build_figure2_evidence_ceiling,
     build_figure2_tradeoff,
     build_figure3_robustness,
-    build_sup_figure_s1_scenario_fingerprint,
-    build_sup_figure_s2_dominance_evidence_landscape,
+    build_figure3_benchmark_necessity,
+    build_sup_figure_dominance_landscape,
+)
+from scripts.plot.plotting.theme import (
+    ULTRA_PREMIUM_FONT_FAMILY,
+    ULTRA_PREMIUM_FONT_SIZE,
+    configure_publication_theme,
 )
 
 
@@ -104,41 +110,103 @@ def test_figure_builders_return_figures():
                 "stress_support_pct": 50.0,
                 "claim_color_group": "planning_ready",
                 "selected_in_baseline_portfolio": True,
+                "recommendation_confidence_score": 0.678,
+                "recommendation_confidence_tier": "moderate",
+                "scenario_transferability_ceiling": "guarded transfer",
+                "full_support_share_pct": 12.4,
+            },
+            {
+                "scenario_name": "high_supply_case",
+                "scenario_order": 2,
+                "scenario_display": "High supply",
+                "pathway": "pyrolysis",
+                "pathway_order": 1,
+                "pathway_display": "Pyrolysis",
+                "portfolio_share_pct": 87.9,
+                "stress_support_pct": 48.0,
+                "claim_color_group": "planning_ready",
+                "selected_in_baseline_portfolio": True,
+                "recommendation_confidence_score": 0.679,
+                "recommendation_confidence_tier": "moderate",
+                "scenario_transferability_ceiling": "guarded transfer",
+                "full_support_share_pct": 12.1,
+            },
+            {
+                "scenario_name": "policy_support_case",
+                "scenario_order": 3,
+                "scenario_display": "Policy support",
+                "pathway": "pyrolysis",
+                "pathway_order": 1,
+                "pathway_display": "Pyrolysis",
+                "portfolio_share_pct": 100.0,
+                "stress_support_pct": 65.0,
+                "claim_color_group": "planning_ready",
+                "selected_in_baseline_portfolio": True,
+                "recommendation_confidence_score": 0.797,
+                "recommendation_confidence_tier": "high",
+                "scenario_transferability_ceiling": "conditional, supported",
+                "full_support_share_pct": 0.0,
             }
         ]
     )
-    sup_s1_data = pd.DataFrame(
+    confidence_data = pd.DataFrame(
         [
             {
                 "scenario_name": "baseline_region_case",
-                "scenario_order": 1,
-                "scenario_display": "Baseline region",
                 "pathway": "pyrolysis",
-                "pathway_order": 1,
-                "pathway_display": "Pyrolysis",
-                "selected_in_baseline_portfolio": True,
-                "claim_color_group": "planning_ready",
-                "metric_key": "best_case_score_index",
-                "metric_display": "Score",
-                "metric_order": 0,
-                "metric_value": 0.91,
-                "normalized_value": 0.72,
+                "recommendation_confidence_score": 0.678,
+                "recommendation_confidence_tier": "moderate",
+                "support_score_component": 0.28,
+                "stress_support_score_component": 0.20,
+                "role_score_component": 0.20,
             },
             {
                 "scenario_name": "baseline_region_case",
-                "scenario_order": 1,
-                "scenario_display": "Baseline region",
-                "pathway": "pyrolysis",
-                "pathway_order": 1,
-                "pathway_display": "Pyrolysis",
-                "selected_in_baseline_portfolio": True,
-                "claim_color_group": "planning_ready",
-                "metric_key": "baseline_portfolio_share_pct",
-                "metric_display": "Share",
-                "metric_order": 1,
-                "metric_value": 87.6,
-                "normalized_value": 0.92,
+                "pathway": "htc",
+                "recommendation_confidence_score": 0.694,
+                "recommendation_confidence_tier": "moderate",
+                "support_score_component": 0.25,
+                "stress_support_score_component": 0.19,
+                "role_score_component": 0.25,
             },
+        ]
+    )
+    evidence_ceiling_data = pd.DataFrame(
+        [
+            {
+                "scenario": "Baseline region",
+                "surrogate_supported_share_pct": 12.4,
+                "transferability_ceiling": "guarded transfer",
+                "selected_pathways": "Pyrolysis + HTC",
+            }
+        ]
+    )
+    transfer_support_data = pd.DataFrame(
+        [
+            {
+                "pathway": "pyrolysis",
+                "reliability_summary": "0.625 (conditional)",
+                "leave_study_out_support_split": "1 supportive / 3 weak / 0 unsupported",
+                "manuscript_ceiling": "conditional_support",
+            },
+            {
+                "pathway": "htc",
+                "reliability_summary": "0.250 (auxiliary)",
+                "leave_study_out_support_split": "0 supportive / 4 weak / 4 unsupported",
+                "manuscript_ceiling": "auxiliary_only",
+            },
+        ]
+    )
+    benchmark_data = pd.DataFrame(
+        [
+            {
+                "benchmark_variant_display": "No robustness",
+                "scenario_name": "baseline_region_case",
+                "necessity_rank": 2,
+                "necessity_tier": "supports_core_innovation",
+                "pathway_shift_rate_pct": 100.0,
+                "significance_abbrev": "HC",
+            }
         ]
     )
     sup_s2_data = pd.DataFrame(
@@ -165,16 +233,45 @@ def test_figure_builders_return_figures():
     fig1 = build_figure1_main(figure1_data)
     fig2 = build_figure2_tradeoff(figure2_data)
     fig3 = build_figure3_robustness(figure3_data)
-    fig4 = build_sup_figure_s1_scenario_fingerprint(sup_s1_data)
-    fig5 = build_sup_figure_s2_dominance_evidence_landscape(sup_s2_data)
+    fig4 = build_figure2_evidence_ceiling(confidence_data, evidence_ceiling_data, transfer_support_data)
+    fig5 = build_figure3_benchmark_necessity(benchmark_data)
+    fig6 = build_sup_figure_dominance_landscape(sup_s2_data)
 
     assert fig1 is not None
     assert fig2 is not None
     assert fig3 is not None
     assert fig4 is not None
     assert fig5 is not None
+    assert fig6 is not None
     plt.close(fig1)
     plt.close(fig2)
     plt.close(fig3)
     plt.close(fig4)
     plt.close(fig5)
+    plt.close(fig6)
+
+
+def test_benchmark_necessity_figure_uses_kt_carbon_units():
+    benchmark_data = pd.DataFrame(
+        [
+            {
+                "benchmark_variant_display": "No robustness",
+                "scenario_name": "baseline_region_case",
+                "delta_portfolio_carbon_load_kgco2e": -18269435.16325231,
+            }
+        ]
+    )
+
+    fig = build_figure3_benchmark_necessity(benchmark_data)
+    colorbar_axis = fig.axes[-1]
+
+    assert colorbar_axis.get_ylabel() == "Delta Carbon Load (ktCO2e/y)"
+    plt.close(fig)
+
+
+def test_publication_theme_uses_ultra_premium_typography_defaults():
+    themed = configure_publication_theme()
+
+    assert themed.rcParams["font.size"] == ULTRA_PREMIUM_FONT_SIZE
+    assert themed.rcParams["font.family"][: len(ULTRA_PREMIUM_FONT_FAMILY)] == ULTRA_PREMIUM_FONT_FAMILY
+    assert themed.rcParams["savefig.dpi"] == 300
