@@ -11,7 +11,7 @@ import numpy as np
 import pandas as pd
 
 from .common import parse_manifest_timestamp
-from .config import BENCHMARK_OUTPUTS_DIR, OUTPUTS_ROOT, resolve_surrogate_outputs_dir
+from .config import BENCHMARK_OUTPUTS_DIR, FIGURES_TABLES_DIR, OUTPUTS_ROOT, resolve_surrogate_outputs_dir
 from .data import DATASET_KEYS, TARGET_COLUMNS
 from .evidence_policy import (
     SURROGATE_LED_SHARE_THRESHOLD,
@@ -134,6 +134,12 @@ def build_confirmatory_audit(
         active_scenario_dir,
         active_benchmark_dir,
     )
+    planning_artifact_consistency = build_planning_artifact_consistency_summary(
+        active_planning_dir,
+        figures_dir=FIGURES_TABLES_DIR,
+        audit_dir=active_outputs_root / "audit",
+        planning_claim_flags=planning_flags,
+    )
     audit_manifest = build_audit_manifest(
         ml_paths,
         active_operation_dir,
@@ -158,6 +164,7 @@ def build_confirmatory_audit(
         "operation_comparison_summary": operation_table,
         "operation_claim_flag_table": operation_flags,
         "artifact_inventory": artifact_inventory,
+        "planning_artifact_consistency_summary": planning_artifact_consistency,
         "audit_manifest": audit_manifest,
     }
 
@@ -994,6 +1001,105 @@ def build_planning_claim_flag_table(
     ).reset_index(drop=True)
 
 
+def build_planning_artifact_consistency_summary(
+    planning_dir: str | Path,
+    *,
+    figures_dir: str | Path | None = None,
+    audit_dir: str | Path | None = None,
+    planning_claim_flags: pd.DataFrame | None = None,
+    tolerance_pct_point: float = 0.1,
+) -> pd.DataFrame:
+    """Compare manuscript-facing allocation shares against portfolio_allocations."""
+    planning_root = Path(planning_dir)
+    figures_root = Path(figures_dir) if figures_dir else FIGURES_TABLES_DIR
+    audit_root = Path(audit_dir) if audit_dir else OUTPUTS_ROOT / "audit"
+    expected = _portfolio_share_reference(planning_root / "portfolio_allocations.csv")
+    if expected.empty:
+        return pd.DataFrame(
+            [
+                {
+                    "artifact_label": "portfolio_allocations.csv",
+                    "scenario_name": pd.NA,
+                    "pathway": pd.NA,
+                    "expected_share_pct": pd.NA,
+                    "observed_share_pct": pd.NA,
+                    "absolute_difference_pct_point": pd.NA,
+                    "consistency_status": "not_evaluated",
+                    "consistency_note": "Source portfolio_allocations.csv is missing or lacks scenario/pathway allocation data.",
+                }
+            ]
+        )
+
+    artifact_sources: list[tuple[str, pd.DataFrame]] = [
+        ("main_results_table.csv", _read_csv_if_exists(planning_root / "main_results_table.csv")),
+        (
+            "paper1_planning_results_table.csv",
+            _read_csv_if_exists(figures_root / "paper1_planning_results_table.csv"),
+        ),
+        (
+            "planning_claim_flag_table.csv",
+            planning_claim_flags.copy()
+            if planning_claim_flags is not None
+            else _read_csv_if_exists(audit_root / "planning_claim_flag_table.csv"),
+        ),
+    ]
+    rows: list[dict[str, object]] = []
+    for artifact_label, artifact in artifact_sources:
+        observed = _artifact_share_reference(artifact)
+        if observed.empty:
+            for _, ref_row in expected.iterrows():
+                rows.append(
+                    {
+                        "artifact_label": artifact_label,
+                        "scenario_name": ref_row["scenario_name"],
+                        "pathway": ref_row["pathway"],
+                        "expected_share_pct": ref_row["expected_share_pct"],
+                        "observed_share_pct": pd.NA,
+                        "absolute_difference_pct_point": pd.NA,
+                        "consistency_status": "missing_artifact_or_columns",
+                        "consistency_note": "Artifact is missing or lacks baseline_portfolio_share_pct.",
+                    }
+                )
+            continue
+        merged = expected.merge(observed, on=["scenario_name", "pathway"], how="left")
+        for _, row in merged.iterrows():
+            observed_share = (
+                0.0
+                if pd.isna(row.get("observed_share_pct"))
+                else _optional_float(row.get("observed_share_pct"))
+            )
+            expected_share = _optional_float(row.get("expected_share_pct"))
+            diff = (
+                abs(float(observed_share) - float(expected_share))
+                if pd.notna(observed_share) and pd.notna(expected_share)
+                else pd.NA
+            )
+            status = "pass" if pd.notna(diff) and float(diff) <= tolerance_pct_point else "fail"
+            rows.append(
+                {
+                    "artifact_label": artifact_label,
+                    "scenario_name": row["scenario_name"],
+                    "pathway": row["pathway"],
+                    "expected_share_pct": round(float(expected_share), 3)
+                    if pd.notna(expected_share)
+                    else pd.NA,
+                    "observed_share_pct": round(float(observed_share), 3)
+                    if pd.notna(observed_share)
+                    else pd.NA,
+                    "absolute_difference_pct_point": round(float(diff), 3)
+                    if pd.notna(diff)
+                    else pd.NA,
+                    "consistency_status": status,
+                    "consistency_note": (
+                        f"Allocation share differs by more than {tolerance_pct_point:.1f} percentage point."
+                        if status == "fail"
+                        else "Allocation share is aligned with portfolio_allocations.csv."
+                    ),
+                }
+            )
+    return pd.DataFrame(rows).sort_values(["artifact_label", "scenario_name", "pathway"]).reset_index(drop=True)
+
+
 def build_artifact_inventory(
     summary_paths: dict[str, Path],
     operation_dir: Path,
@@ -1572,6 +1678,63 @@ def _read_csv_if_exists(path: Path) -> pd.DataFrame:
         return pd.read_csv(path)
     except pd.errors.EmptyDataError:
         return pd.DataFrame()
+
+
+def _numeric_column(frame: pd.DataFrame, column: str, default: float = 0.0) -> pd.Series:
+    if column not in frame.columns:
+        return pd.Series(default, index=frame.index, dtype=float)
+    return pd.to_numeric(frame[column], errors="coerce").fillna(default)
+
+
+def _portfolio_share_reference(path: Path) -> pd.DataFrame:
+    allocations = _read_csv_if_exists(path)
+    if allocations.empty or not {"scenario_name", "pathway"}.issubset(allocations.columns):
+        return pd.DataFrame()
+    working = allocations.copy()
+    working["scenario_name"] = working["scenario_name"].astype(str)
+    working["pathway"] = working["pathway"].astype(str).str.lower()
+    if "allocated_feed_share" in working.columns:
+        working["_share_pct"] = _numeric_column(working, "allocated_feed_share") * 100.0
+    elif "allocated_feed_ton_per_year" in working.columns:
+        allocated = _numeric_column(working, "allocated_feed_ton_per_year")
+        scenario_total = allocated.groupby(working["scenario_name"]).transform("sum")
+        working["_share_pct"] = (allocated / scenario_total.where(scenario_total > 0)).fillna(0.0) * 100.0
+    else:
+        return pd.DataFrame()
+    reference = (
+        working.groupby(["scenario_name", "pathway"], dropna=False)["_share_pct"]
+        .sum()
+        .rename("expected_share_pct")
+        .reset_index()
+    )
+    scenario_names = reference["scenario_name"].drop_duplicates().tolist()
+    standard_rows = pd.DataFrame(
+        [
+            {"scenario_name": scenario_name, "pathway": pathway, "expected_share_pct": 0.0}
+            for scenario_name in scenario_names
+            for pathway in ("pyrolysis", "htc", "ad")
+        ]
+    )
+    return (
+        pd.concat([reference, standard_rows], ignore_index=True)
+        .groupby(["scenario_name", "pathway"], dropna=False)["expected_share_pct"]
+        .sum()
+        .reset_index()
+    )
+
+
+def _artifact_share_reference(frame: pd.DataFrame) -> pd.DataFrame:
+    if frame.empty or not {"scenario_name", "pathway", "baseline_portfolio_share_pct"}.issubset(frame.columns):
+        return pd.DataFrame()
+    working = frame.copy()
+    working["scenario_name"] = working["scenario_name"].astype(str)
+    working["pathway"] = working["pathway"].astype(str).str.lower()
+    working["observed_share_pct"] = _numeric_column(working, "baseline_portfolio_share_pct")
+    return (
+        working.groupby(["scenario_name", "pathway"], dropna=False)["observed_share_pct"]
+        .sum()
+        .reset_index()
+    )
 
 
 def _load_or_build_planning_recommendation_confidence(planning_dir: Path) -> pd.DataFrame:

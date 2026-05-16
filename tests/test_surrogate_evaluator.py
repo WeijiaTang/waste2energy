@@ -176,12 +176,12 @@ def test_surrogate_evaluator_prefers_selected_manifest_over_raw_test_ranking(tmp
     monkeypatch.setattr(
         evaluator,
         "_build_artifact_from_selected_manifest",
-        lambda row: row["selected_model_key"],
+        lambda row, *, source_root: row["selected_model_key"],
     )
     monkeypatch.setattr(
         evaluator,
         "_build_artifact_from_summary",
-        lambda row: row["model_key"],
+        lambda row, *, source_root: row["model_key"],
     )
 
     selected = evaluator._resolve_artifact(pathway="pyrolysis", target_column="product_char_yield_pct")
@@ -243,6 +243,10 @@ def test_surrogate_evaluator_reads_refit_artifact_paths_from_selected_manifest(t
 
 def test_surrogate_evaluator_honors_dataset_preference_order_before_metric_ranking(tmp_path, monkeypatch):
     outputs_root = Path(tmp_path)
+    monkeypatch.setattr(
+        "waste2energy.planning.surrogate_evaluator.BENCHMARK_OUTPUTS_DIR",
+        outputs_root / "empty_benchmark",
+    )
     manifest = pd.DataFrame(
         [
             {
@@ -277,12 +281,48 @@ def test_surrogate_evaluator_honors_dataset_preference_order_before_metric_ranki
     monkeypatch.setattr(
         evaluator,
         "_build_artifact_from_selected_manifest",
-        lambda row: f"{row['dataset_key']}::{row['selected_model_key']}",
+        lambda row, *, source_root: f"{row['dataset_key']}::{row['selected_model_key']}",
     )
 
     selected = evaluator._resolve_artifact(pathway="htc", target_column="product_char_yield_pct")
 
     assert selected == "paper1_htc_scope::rf"
+
+
+def test_surrogate_evaluator_filters_negative_test_r2_artifacts_when_gate_enabled(tmp_path, monkeypatch):
+    outputs_root = Path(tmp_path)
+    monkeypatch.setattr(
+        "waste2energy.planning.surrogate_evaluator.BENCHMARK_OUTPUTS_DIR",
+        outputs_root / "empty_benchmark",
+    )
+    pd.DataFrame(
+        [
+            {
+                "dataset_key": "pyrolysis_direct",
+                "target_column": "energy_recovery_pct",
+                "split_strategy": "strict_group",
+                "selected_model_key": "rf",
+                "artifact_role": "selected_model_refit",
+                "selection_status": "selected_on_validation_refit_train_plus_validation",
+                "selected_validation_r2": 0.70,
+                "selected_test_r2": -0.10,
+                "model_path": "dummy",
+                "run_config_path": "dummy",
+                "metrics_path": "dummy",
+            }
+        ]
+    ).to_csv(outputs_root / "selected_models_manifest_strict_group.csv", index=False)
+
+    evaluator = SurrogateEvaluator(outputs_root=outputs_root, minimum_artifact_test_r2=0.0)
+    monkeypatch.setattr(
+        evaluator,
+        "_build_artifact_from_selected_manifest",
+        lambda row, *, source_root: row["selected_model_key"],
+    )
+
+    selected = evaluator._resolve_artifact(pathway="pyrolysis", target_column="energy_recovery_pct")
+
+    assert selected is None
 
 
 def test_surrogate_evaluator_falls_back_when_model_backend_is_unavailable(monkeypatch):

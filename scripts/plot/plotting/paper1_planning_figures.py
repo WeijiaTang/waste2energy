@@ -26,7 +26,7 @@ def build_figure_score_comparison(frame: pd.DataFrame):
     plt = configure_publication_theme()
     fig, ax = plt.subplots(figsize=(8, 6))
     ordered = frame.sort_values(['scenario_order', 'pathway_order'])
-    pathways = ['pyrolysis', 'htc', 'ad']
+    pathways = ['pyrolysis', 'htc']
     for i, scenario in enumerate(SCENARIO_ORDER):
         scen_data = ordered[ordered['scenario_name'] == scenario]
         y_center = (2 - i) * 1.5
@@ -40,6 +40,7 @@ def build_figure_score_comparison(frame: pd.DataFrame):
         ax.text(-0.02, y_center, scenario_label(scenario), transform=ax.get_yaxis_transform(), ha='right', va='center', fontweight='bold', color='#475569')
     ax.set_yticks([])
     ax.set_xlabel('Planning Score Index (Normalized)', fontweight='bold')
+    ax.set_title("Thermochemical score diagnostic (AD retained as reference only)", fontweight="bold")
     style_axis(ax, grid_axis='x')
     handles = [Line2D([0], [0], marker='o', color='w', markerfacecolor=pathway_color(p), markersize=10, label=p.upper()) for p in pathways]
     ax.legend(handles=handles, loc='lower right', frameon=False)
@@ -96,22 +97,133 @@ def build_figure_allocation_stack(pathway_summary: pd.DataFrame):
 def build_figure_evidence_composition(confidence_df):
     plt = configure_publication_theme()
     fig, ax = plt.subplots(figsize=(8, 5))
-    modes = ['Strong Surrogate', 'Trained Fallback', 'Regional Proxy']
-    colors = ['#059669', '#D97706', '#94A3B8']
-    shares = {'Baseline region': [0.124, 0.752, 0.124], 'High supply': [0.121, 0.758, 0.121], 'Policy support': [0.0, 1.0, 0.0]}
-    y = np.arange(len(shares))
-    labels = list(shares.keys())
-    left = np.zeros(len(shares))
-    for i, mode in enumerate(modes):
-        vals = [shares[l][i] for l in labels]
-        ax.barh(y, vals, left=left, label=mode, color=colors[i], height=0.5, edgecolor='white')
-        left += vals
+    working = confidence_df.copy()
+    if working.empty or "allocated_feed_ton_per_year" not in working.columns:
+        ax.text(0.5, 0.5, "No allocated evidence-tier data available", ha="center", va="center")
+        ax.axis("off")
+        return fig
+
+    def _tier(row: pd.Series) -> str:
+        level = str(row.get("surrogate_support_level", "")).lower()
+        pathway = str(row.get("pathway", "")).lower()
+        if level == "surrogate_supported":
+            return "Surrogate-supported"
+        if "unsupported" in level or pathway == "ad":
+            return "Proxy/reference"
+        return "Fallback-backed"
+
+    working["evidence_tier"] = working.apply(_tier, axis=1)
+    working["allocated_feed_ton_per_year"] = pd.to_numeric(
+        working["allocated_feed_ton_per_year"],
+        errors="coerce",
+    ).fillna(0.0)
+    grouped = (
+        working.groupby(["scenario_name", "evidence_tier"], dropna=False)["allocated_feed_ton_per_year"]
+        .sum()
+        .reset_index()
+    )
+    totals = grouped.groupby("scenario_name")["allocated_feed_ton_per_year"].transform("sum").replace(0.0, np.nan)
+    grouped["share"] = (grouped["allocated_feed_ton_per_year"] / totals).fillna(0.0)
+    modes = ["Surrogate-supported", "Fallback-backed", "Proxy/reference"]
+    colors = ["#059669", "#D97706", "#94A3B8"]
+    scenarios = [s for s in SCENARIO_ORDER if s in set(grouped["scenario_name"].astype(str))]
+    y = np.arange(len(scenarios))
+    left = np.zeros(len(scenarios))
+    for mode, color in zip(modes, colors):
+        vals = []
+        for scenario in scenarios:
+            rows = grouped[(grouped["scenario_name"].astype(str) == scenario) & (grouped["evidence_tier"] == mode)]
+            vals.append(float(rows["share"].sum()) if not rows.empty else 0.0)
+        ax.barh(y, vals, left=left, label=mode, color=color, height=0.5, edgecolor='white')
+        for idx, value in enumerate(vals):
+            if value >= 0.08:
+                ax.text(left[idx] + value / 2, idx, f"{value * 100:.0f}%", ha="center", va="center", color="white", fontweight="bold", fontsize=8)
+        left += np.asarray(vals)
     ax.set_yticks(y)
-    ax.set_yticklabels(labels, fontweight='bold', color='#334155')
+    ax.set_yticklabels([scenario_label(s) for s in scenarios], fontweight='bold', color='#334155')
     ax.set_xlabel('Share of Allocated Throughput by Evidence Tier', fontweight='bold')
     ax.set_xlim(0, 1.0)
     ax.legend(loc='lower center', bbox_to_anchor=(0.5, -0.3), ncol=3, frameon=False)
     style_axis(ax, grid_axis='x')
+    plt.tight_layout()
+    return fig
+
+
+def build_figure_boundary_regime_map(ablation_df: pd.DataFrame):
+    plt = configure_publication_theme()
+    fig, ax = plt.subplots(figsize=(10, 5.8))
+    if ablation_df.empty:
+        ax.text(0.5, 0.5, "No boundary-regime data available", ha="center", va="center")
+        ax.axis("off")
+        return fig
+
+    row_specs = [
+        ("Locked baseline", "ad_complementarity", "ad_min_share_00pct"),
+        ("No product credit", "economic_baseline", "no_product_credit_baseline"),
+        ("Symmetric credits", "economic_baseline", "symmetric_product_credit_baseline"),
+        ("No pyrolysis credit", "coproduct_boundary", "no_pyrolysis_product_credit"),
+        ("Hydrochar 75%", "coproduct_boundary", "hydrochar_credit_75pct"),
+        ("Hydrochar 100%", "coproduct_boundary", "hydrochar_credit_100pct"),
+    ]
+    scenarios = [s for s in SCENARIO_ORDER if s in set(ablation_df["scenario_name"].astype(str))]
+    display_rows = []
+    for label, family, key in row_specs:
+        rows = ablation_df[
+            ablation_df["ablation_family"].astype(str).eq(family)
+            & ablation_df["ablation_key"].astype(str).eq(key)
+        ].copy()
+        if rows.empty:
+            continue
+        display_rows.append((label, rows))
+
+    if not display_rows or not scenarios:
+        ax.text(0.5, 0.5, "Boundary-regime rows not found", ha="center", va="center")
+        ax.axis("off")
+        return fig
+
+    tier_color = {
+        "pyrolysis": soften_hex(pathway_color("pyrolysis"), 0.18),
+        "htc": soften_hex(pathway_color("htc"), 0.18),
+        "ad": soften_hex(pathway_color("ad"), 0.18),
+        "mixed": "#E2E8F0",
+    }
+    for r, (label, rows) in enumerate(display_rows):
+        for c, scenario in enumerate(scenarios):
+            match = rows[rows["scenario_name"].astype(str).eq(scenario)]
+            if match.empty:
+                text = "n/a"
+                dominant = "mixed"
+            else:
+                row = match.iloc[0]
+                p = float(pd.to_numeric(pd.Series([row.get("pyrolysis_allocated_share_pct")]), errors="coerce").fillna(0).iloc[0])
+                h = float(pd.to_numeric(pd.Series([row.get("htc_allocated_share_pct")]), errors="coerce").fillna(0).iloc[0])
+                a = float(pd.to_numeric(pd.Series([row.get("ad_allocated_share_pct")]), errors="coerce").fillna(0).iloc[0])
+                text = f"P {p:.0f}\\nH {h:.0f}\\nA {a:.0f}"
+                vals = {"pyrolysis": p, "htc": h, "ad": a}
+                dominant = max(vals, key=vals.get)
+                if sorted(vals.values(), reverse=True)[0] < 70:
+                    dominant = "mixed"
+            rect = plt.Rectangle((c, r), 1, 1, facecolor=tier_color[dominant], edgecolor="white", linewidth=2)
+            ax.add_patch(rect)
+            ax.text(c + 0.5, r + 0.5, text, ha="center", va="center", fontsize=8.5, fontweight="bold", color="#1E293B")
+
+    ax.set_xlim(0, len(scenarios))
+    ax.set_ylim(0, len(display_rows))
+    ax.set_xticks(np.arange(len(scenarios)) + 0.5)
+    ax.set_xticklabels([scenario_label(s) for s in scenarios], fontweight="bold", color="#334155")
+    ax.set_yticks(np.arange(len(display_rows)) + 0.5)
+    ax.set_yticklabels([label for label, _ in display_rows], fontweight="bold", color="#334155")
+    ax.invert_yaxis()
+    ax.set_title("Boundary-regime diagnostic map", fontweight="bold", pad=14)
+    ax.tick_params(length=0)
+    for spine in ax.spines.values():
+        spine.set_visible(False)
+    handles = [
+        Line2D([0], [0], marker='s', color='w', markerfacecolor=tier_color["pyrolysis"], markersize=12, label="Pyrolysis-led"),
+        Line2D([0], [0], marker='s', color='w', markerfacecolor=tier_color["htc"], markersize=12, label="HTC-led"),
+        Line2D([0], [0], marker='s', color='w', markerfacecolor=tier_color["mixed"], markersize=12, label="Mixed"),
+    ]
+    ax.legend(handles=handles, loc="lower center", bbox_to_anchor=(0.5, -0.18), ncol=3, frameon=False)
     plt.tight_layout()
     return fig
 

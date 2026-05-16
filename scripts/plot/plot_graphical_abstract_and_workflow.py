@@ -66,7 +66,7 @@ def build_graphical_abstract():
     ax.set_ylim(0, 1)
     ax.axis("off")
 
-    ax.text(0.02, 0.94, "Evidence-qualified screening for mixed organic waste-to-energy management",
+    ax.text(0.02, 0.94, "Boundary-aware thermochemical screening for organic waste-to-energy management",
             fontsize=13, fontweight="bold", color="#0F172A", ha="left")
     ax.text(0.02, 0.89, "Decision support under uneven evidence, regional policy constraints, and coproduct-market uncertainty",
             fontsize=8.5, color="#475569", ha="left")
@@ -74,7 +74,7 @@ def build_graphical_abstract():
     xs = [0.03, 0.22, 0.41, 0.60, 0.79]
     y = 0.54
     w, h = 0.155, 0.22
-    _box(ax, (xs[0], y), w, h, "Evidence base", "150 prototype cases\nAD / pyrolysis / HTC", COLORS["gray"])
+    _box(ax, (xs[0], y), w, h, "Evidence base", "210 prototype cases\npyrolysis / HTC\nAD reference", COLORS["gray"])
     _box(ax, (xs[1], y), w, h, "Transfer audit", "Leave-study-out R²\nclaim ceilings", COLORS["green"])
     _box(ax, (xs[2], y), w, h, "Planning set", "450 scenario candidates\nno added evidence depth", COLORS["blue"])
     _box(ax, (xs[3], y), w, h, "Portfolio screen", "MILP constraints\nshare, diversity, carbon", COLORS["purple"])
@@ -89,9 +89,9 @@ def build_graphical_abstract():
     ax.text(0.08, 0.32, "Key decision insight", fontsize=10.5, fontweight="bold", color="#0F172A", ha="left")
 
     # Three result badges
-    _box(ax, (0.09, 0.15), 0.24, 0.12, "Conservative baseline", "pyrolysis-led screening anchor", COLORS["red"], fc="#FFF7ED")
-    _box(ax, (0.38, 0.15), 0.24, 0.12, "Hydrochar credit", "can reverse to HTC-led portfolios", COLORS["blue"], fc="#ECFEFF")
-    _box(ax, (0.67, 0.15), 0.22, 0.12, "AD benchmark", "proxy/evidence-limited; not a verdict", COLORS["green"], fc="#F0FDF4")
+    _box(ax, (0.09, 0.15), 0.24, 0.12, "Declared boundary", "asymmetric-credit screen", COLORS["red"], fc="#FFF7ED")
+    _box(ax, (0.38, 0.15), 0.24, 0.12, "Hydrochar credit", "shifts HTC participation", COLORS["blue"], fc="#ECFEFF")
+    _box(ax, (0.67, 0.15), 0.22, 0.12, "AD reference", "proxy/evidence-limited; not a verdict", COLORS["green"], fc="#F0FDF4")
     _arrow(ax, (0.33, 0.21), (0.38, 0.21), COLORS["line"])
     _arrow(ax, (0.62, 0.21), (0.67, 0.21), COLORS["line"])
 

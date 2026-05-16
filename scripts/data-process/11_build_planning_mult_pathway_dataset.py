@@ -10,6 +10,7 @@ ROOT = Path(__file__).resolve().parents[2]
 UNIFIED_DIR = ROOT / "data" / "processed" / "unified_features"
 SCENARIO_DIR = ROOT / "data" / "processed" / "scenario_inputs"
 MODEL_READY_DIR = ROOT / "data" / "processed" / "model_ready"
+FIGURES_TABLES_DIR = ROOT / "data" / "processed" / "figures_tables"
 RAW_MANURE_DIR = ROOT / "data" / "raw" / "ManurePyrolysisIAM" / "baseline_supplementary_tables"
 
 COMBINED_INPUT = UNIFIED_DIR / "wet_waste_biomass_opt_combined_standardized.csv"
@@ -33,6 +34,8 @@ OPTIMIZATION_OUTPUT = MODEL_READY_DIR / "optimization_input_dataset.csv"
 ASSUMPTIONS_OUTPUT = MODEL_READY_DIR / "optimization_input_dataset_assumptions.json"
 LEGACY_ASSUMPTIONS_OUTPUT = MODEL_READY_DIR / "mixed_waste_feature_assumptions.json"
 READINESS_OUTPUT = MODEL_READY_DIR / "optimization_pathway_readiness_summary.csv"
+AD_REFERENCE_OBSERVATION_OUTPUT = FIGURES_TABLES_DIR / "paper1_ad_reference_observation_table.csv"
+AD_REFERENCE_SUMMARY_OUTPUT = FIGURES_TABLES_DIR / "paper1_ad_reference_summary_by_group.csv"
 
 TARGET_REGION_ID = "us_ca"
 
@@ -264,6 +267,60 @@ def summarize_ad_literature_reference(frame: pd.DataFrame) -> dict[str, object]:
     }
 
 
+def export_ad_reference_tables(frame: pd.DataFrame) -> dict[str, str]:
+    """Export traceable AD observations as a reference layer, not primary optimizer rows."""
+    FIGURES_TABLES_DIR.mkdir(parents=True, exist_ok=True)
+    observation_columns = [
+        "sample_id",
+        "source_file",
+        "reference_label",
+        "study_id",
+        "doi",
+        "article_doi",
+        "feedstock_name",
+        "feedstock_group",
+        "specific_biogas_yield_m3_per_kg_odm",
+        "methane_concentration_pct",
+        "specific_methane_yield_m3_per_kg_odm",
+        "methane_yield_m3_per_wet_ton_proxy",
+        "ad_energy_yield_mj_per_wet_ton_proxy",
+        "basis",
+        "source_table",
+        "evidence_scope",
+        "conversion_note",
+        "notes",
+    ]
+    observations = frame[[column for column in observation_columns if column in frame.columns]].copy()
+    observations["planning_use"] = "reference_only_not_primary_optimizer"
+    observations["claim_boundary"] = (
+        "Traceable AD yield evidence; facility-level cost, RNG, digestate, and regional revenue "
+        "boundaries are not matched to the thermochemical optimizer."
+    )
+    observations.to_csv(AD_REFERENCE_OBSERVATION_OUTPUT, index=False)
+
+    summary_source = observations.assign(
+        _energy=pd.to_numeric(observations["ad_energy_yield_mj_per_wet_ton_proxy"], errors="coerce"),
+        _methane=pd.to_numeric(observations["specific_methane_yield_m3_per_kg_odm"], errors="coerce"),
+    )
+    summary = (
+        summary_source.groupby(["feedstock_group", "source_file"], dropna=False)
+        .agg(
+            observation_count=("sample_id", "count"),
+            energy_mj_per_wet_ton_median=("_energy", "median"),
+            energy_mj_per_wet_ton_p25=("_energy", lambda series: series.quantile(0.25)),
+            energy_mj_per_wet_ton_p75=("_energy", lambda series: series.quantile(0.75)),
+            methane_m3_per_kg_odm_median=("_methane", "median"),
+        )
+        .reset_index()
+        .sort_values(["feedstock_group", "source_file"])
+    )
+    summary["planning_use"] = "reference_only_not_primary_optimizer"
+    summary.to_csv(AD_REFERENCE_SUMMARY_OUTPUT, index=False)
+    return {
+        "ad_reference_observations": str(AD_REFERENCE_OBSERVATION_OUTPUT),
+        "ad_reference_summary": str(AD_REFERENCE_SUMMARY_OUTPUT),
+    }
+
 
 def load_pyrolysis_cost_reference() -> dict[str, dict[str, float]]:
     lookup: dict[str, dict[str, float]] = {}
@@ -349,6 +406,7 @@ def representative_conditions(
     *,
     include_heating_rate: bool,
     max_conditions: int = 4,
+    selection_strategy: str = "count",
     defaults: list[dict[str, float]] | None = None,
 ) -> pd.DataFrame:
     keys = ["process_temperature_c", "residence_time_min"]
@@ -359,15 +417,35 @@ def representative_conditions(
     if include_heating_rate:
         available = available.dropna(subset=["heating_rate_c_per_min"]).copy()
 
-    counts = (
-        available.groupby(keys, dropna=True)
-        .size()
-        .reset_index(name="count")
-        .sort_values(["count"] + keys, ascending=[False] + [True] * len(keys))
-    )
-    selected = counts.head(max_conditions).copy()
+    agg_spec: dict[str, object] = {"count": (keys[0], "size")}
+    if "reference_label" in available.columns:
+        agg_spec["condition_reference_count"] = ("reference_label", "nunique")
+        agg_spec["condition_reference_labels"] = (
+            "reference_label",
+            lambda values: "; ".join(sorted({str(value) for value in values if str(value).strip()})[:8]),
+        )
+    counts = available.groupby(keys, dropna=True).agg(**agg_spec).reset_index()
+    counts = counts.sort_values(["count"] + keys, ascending=[False] + [True] * len(keys)).reset_index(drop=True)
+    if selection_strategy == "diverse" and len(counts) > max_conditions:
+        ordered = counts.sort_values(keys + ["count"], ascending=[True] * len(keys) + [False]).reset_index(drop=True)
+        positions = pd.Series(
+            [round(value) for value in pd.Series(range(max_conditions)) * (len(ordered) - 1) / max(max_conditions - 1, 1)]
+        ).astype(int)
+        selected = ordered.iloc[positions.drop_duplicates().tolist()].copy()
+        if len(selected) < max_conditions:
+            remainder = counts[~counts.set_index(keys).index.isin(selected.set_index(keys).index)].head(
+                max_conditions - len(selected)
+            )
+            selected = pd.concat([selected, remainder], ignore_index=True)
+        selected = selected.sort_values(keys).head(max_conditions).copy()
+    else:
+        selected = counts.head(max_conditions).copy()
     if selected.empty:
         selected = pd.DataFrame(defaults or [])
+    if "condition_reference_count" not in selected.columns:
+        selected["condition_reference_count"] = 0
+    if "condition_reference_labels" not in selected.columns:
+        selected["condition_reference_labels"] = ""
     if "heating_rate_c_per_min" not in selected.columns:
         selected["heating_rate_c_per_min"] = pd.NA
     return selected.reset_index(drop=True)
@@ -479,6 +557,9 @@ def build_htc_candidates(
                     "process_temperature_c": float(condition["process_temperature_c"]),
                     "residence_time_min": float(condition["residence_time_min"]),
                     "heating_rate_c_per_min": pd.NA,
+                    "condition_source_count": int(condition.get("count", 0)),
+                    "condition_reference_count": int(condition.get("condition_reference_count", 0)),
+                    "condition_reference_labels": str(condition.get("condition_reference_labels", "")),
                 }
             )
             for column in TARGET_COLUMNS:
@@ -709,6 +790,8 @@ def build_prototypes() -> tuple[pd.DataFrame, dict[str, object]]:
     htc_conditions = representative_conditions(
         htc_food,
         include_heating_rate=False,
+        max_conditions=8,
+        selection_strategy="diverse",
         defaults=[
             {"process_temperature_c": 210.0, "residence_time_min": 30.0, "count": 0},
             {"process_temperature_c": 240.0, "residence_time_min": 30.0, "count": 0},
@@ -1219,10 +1302,12 @@ def build_assumptions_payload(
 def main() -> None:
     UNIFIED_DIR.mkdir(parents=True, exist_ok=True)
     MODEL_READY_DIR.mkdir(parents=True, exist_ok=True)
+    FIGURES_TABLES_DIR.mkdir(parents=True, exist_ok=True)
 
     california_reference = load_california_food_waste_reference()
     region_scenarios = load_region_scenarios()
     prototypes, metadata = build_prototypes()
+    ad_reference_outputs = export_ad_reference_tables(load_ad_literature_reference())
     optimization_df = build_optimization_rows(
         prototypes=prototypes,
         region_scenarios=region_scenarios,
@@ -1254,6 +1339,8 @@ def main() -> None:
     print(f"Wrote {READINESS_OUTPUT}")
     print(f"Wrote {ASSUMPTIONS_OUTPUT}")
     print(f"Wrote {LEGACY_ASSUMPTIONS_OUTPUT}")
+    for label, path in ad_reference_outputs.items():
+        print(f"Wrote {label}: {path}")
 
 
 if __name__ == "__main__":

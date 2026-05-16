@@ -21,7 +21,8 @@ from scripts.plot.plotting.paper1_planning_figures import (
     build_figure_evidence_composition,
     build_figure_confidence_decomposition,
     build_figure_necessity_matrix,
-    build_figure_mechanism_frontier
+    build_figure_mechanism_frontier,
+    build_figure_boundary_regime_map,
 )
 
 def build_parser() -> argparse.ArgumentParser:
@@ -44,14 +45,19 @@ def main() -> int:
     benchmark_df = pd.read_csv(root_data / 'paper1_benchmark_claim_summary.csv')
     pathway_summary_path = Path('D:/EnergyStorage/JOCP/outputs/planning/pathway_summary.csv')
     pathway_summary_df = pd.read_csv(pathway_summary_path)
+    portfolio_allocations_path = Path('D:/EnergyStorage/JOCP/outputs/planning/portfolio_allocations.csv')
+    portfolio_allocations_df = pd.read_csv(portfolio_allocations_path)
+    ablation_summary_path = Path('D:/EnergyStorage/JOCP/outputs/benchmark/targeted_planning_ablations/targeted_planning_ablations_summary.csv')
+    ablation_summary_df = pd.read_csv(ablation_summary_path)
 
     # Build and Save individual figures
     fig1 = build_figure_allocation_stack(pathway_summary_df)
     fig2 = build_figure_score_comparison(tables['figure1_main'])
-    fig3 = build_figure_evidence_composition(confidence_df)
+    fig3 = build_figure_evidence_composition(portfolio_allocations_df)
     fig4 = build_figure_confidence_decomposition(confidence_df)
     fig5 = build_figure_necessity_matrix(benchmark_df)
     fig6 = build_figure_mechanism_frontier(tables['figure1_main'])
+    fig_boundary = build_figure_boundary_regime_map(ablation_summary_df)
 
     outputs = {
         'paper1_fig1_allocation_stack': save_plot_figure_set(fig1, 'paper1_fig1_allocation_stack', output_dir=output_dir),
@@ -60,6 +66,7 @@ def main() -> int:
         'paper1_fig4_confidence_profile': save_plot_figure_set(fig4, 'paper1_fig4_confidence_profile', output_dir=output_dir),
         'paper1_fig5_necessity_matrix': save_plot_figure_set(fig5, 'paper1_fig5_necessity_matrix', output_dir=output_dir),
         'paper1_fig6_mechanism_frontier': save_plot_figure_set(fig6, 'paper1_fig6_mechanism_frontier', output_dir=output_dir),
+        'paper1_fig6_boundary_regime_map': save_plot_figure_set(fig_boundary, 'paper1_fig6_boundary_regime_map', output_dir=output_dir),
     }
 
     print(json.dumps({'output_dir': str(output_dir), 'figures': list(outputs.keys())}, indent=2))

@@ -10,6 +10,13 @@ from ..config import DEFAULT_OBJECTIVE_WEIGHT_PRESET, get_objective_weight_syste
 from .solve import PlanningConfig, run_planning_baseline
 
 
+def _parse_pathway_list(value: str) -> tuple[str, ...]:
+    pathways = tuple(part.strip().lower() for part in str(value).split(",") if part.strip())
+    if not pathways:
+        raise ValueError("--primary-optimization-pathways must contain at least one pathway.")
+    return pathways
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Run the Waste2Energy surrogate-driven robust planning baseline."
@@ -124,6 +131,21 @@ def build_parser() -> argparse.ArgumentParser:
         default="prefer_interval_mean",
         help="How planning resolves surrogate uncertainty into the robustness penalty.",
     )
+    parser.add_argument(
+        "--minimum-surrogate-artifact-test-r2",
+        type=float,
+        default=None,
+        help="Optional evidence gate: surrogate artifacts below this test R2 fall back to documented values.",
+    )
+    parser.add_argument(
+        "--primary-optimization-pathways",
+        default="pyrolysis,htc",
+        help=(
+            "Comma-separated pathways included in the primary unconstrained optimizer. "
+            "Default excludes AD from the main thermochemical comparison; AD can still "
+            "be included by explicit policy-floor diagnostics."
+        ),
+    )
     return parser
 
 
@@ -159,6 +181,8 @@ def main() -> int:
                 pyomo_solver_preference=args.pyomo_solver,
                 pareto_point_count=args.pareto_point_count,
                 uncertainty_penalty_mode=args.uncertainty_penalty_mode,
+                minimum_surrogate_artifact_test_r2=args.minimum_surrogate_artifact_test_r2,
+                primary_optimization_pathways=_parse_pathway_list(args.primary_optimization_pathways),
             ),
         )
     except Exception as exc:

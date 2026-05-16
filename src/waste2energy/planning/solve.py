@@ -58,6 +58,7 @@ class PlanningConfig:
     scenario_metric_variance_scale: float = 1.00
     min_pathway_share: tuple[tuple[str, float], ...] = field(default_factory=tuple)
     max_pathway_share: tuple[tuple[str, float], ...] = field(default_factory=tuple)
+    primary_optimization_pathways: tuple[str, ...] = ("pyrolysis", "htc")
     scenario_external_evidence_table_path: str | None = None
     scenario_external_evidence: tuple[ScenarioExternalEvidence, ...] = field(default_factory=tuple)
     optimization_method: str = "auto"
@@ -99,6 +100,7 @@ class PlanningConfig:
     unsupported_pathway_information_premium_usd_per_ton: float = (
         DEFAULT_PLANNING_EVIDENCE_POLICY.unsupported_pathway_information_premium_usd_per_ton
     )
+    minimum_surrogate_artifact_test_r2: float | None = None
 
     @property
     def energy_weight(self) -> float:
@@ -180,6 +182,7 @@ def execute_planning_pipeline(bundle, config: PlanningConfig) -> dict[str, objec
     surrogate_predictions = build_surrogate_predictions(
         planning_frame,
         pathway_model_priorities={"htc": active_config.htc_model_priority},
+        minimum_artifact_test_r2=active_config.minimum_surrogate_artifact_test_r2,
     )
     objective_frame, readiness, data_quality_summary, candidate_exclusions = assemble_objective_frame(
         base_frame=planning_frame,
@@ -188,8 +191,9 @@ def execute_planning_pipeline(bundle, config: PlanningConfig) -> dict[str, objec
         real_cost_columns=bundle.real_cost_columns,
         config=active_config,
     )
-    scenario_constraints = build_scenario_constraints(objective_frame, active_config)
-    scored = score_cases(objective_frame, active_config)
+    optimization_frame = _filter_primary_optimization_frame(objective_frame, active_config)
+    scenario_constraints = build_scenario_constraints(optimization_frame, active_config)
+    scored = score_cases(optimization_frame, active_config)
     scenario_recommendations = build_scenario_recommendations(scored, active_config.top_k_per_scenario)
     portfolio_allocations, diagnostics = build_scenario_portfolios(scored, scenario_constraints, active_config)
     pareto_candidates = build_portfolio_pareto_candidates(scored, scenario_constraints, active_config)
@@ -233,6 +237,37 @@ def score_cases(frame: pd.DataFrame, config: PlanningConfig) -> pd.DataFrame:
         ["scenario_name", "planning_score", "planning_energy_intensity_mj_per_ton"],
         ascending=[True, False, False],
     ).reset_index(drop=True)
+
+
+def _filter_primary_optimization_frame(frame: pd.DataFrame, config: PlanningConfig) -> pd.DataFrame:
+    """Return rows allowed in the primary unconstrained optimizer.
+
+    Baseline anchors are retained for accounting context. AD and other pathways can
+    still be included explicitly by diagnostics that set min/max pathway shares or
+    by passing a custom primary pathway list.
+    """
+    if frame.empty or "pathway" not in frame.columns:
+        return frame.copy()
+    allowed = {
+        str(pathway).strip().lower()
+        for pathway in config.primary_optimization_pathways
+        if str(pathway).strip()
+    }
+    allowed.add("baseline")
+    for pathway_name, _ in (*config.min_pathway_share, *config.max_pathway_share):
+        normalized = str(pathway_name).strip().lower()
+        if normalized:
+            allowed.add(normalized)
+    pathway_series = frame["pathway"].astype(str).str.strip().str.lower()
+    filtered = frame[pathway_series.isin(allowed)].copy()
+    if filtered.empty:
+        raise ValueError(
+            "Primary optimization pathway filter removed all candidate rows. "
+            f"Allowed pathways were: {sorted(allowed)}."
+        )
+    filtered["primary_optimization_pathway_scope"] = ",".join(sorted(allowed - {"baseline"}))
+    filtered["primary_optimization_candidate"] = pathway_series.loc[filtered.index].isin(allowed)
+    return filtered.reset_index(drop=True)
 
 
 def build_scenario_recommendations(scored: pd.DataFrame, top_k: int) -> pd.DataFrame:
@@ -675,6 +710,10 @@ def _validate_config(config: PlanningConfig) -> None:
             raise ValueError("max_pathway_share pathway names must be non-empty.")
         if not 0.0 <= float(share) <= 1.0:
             raise ValueError("max_pathway_share values must be within [0, 1].")
+    if not config.primary_optimization_pathways:
+        raise ValueError("primary_optimization_pathways must contain at least one pathway.")
+    if any(not str(pathway).strip() for pathway in config.primary_optimization_pathways):
+        raise ValueError("primary_optimization_pathways must not contain empty pathway names.")
     if config.constraint_relaxation_ratio <= 0.0:
         raise ValueError("constraint_relaxation_ratio must be positive.")
     if config.subtype_relaxation_ratio <= 0.0:

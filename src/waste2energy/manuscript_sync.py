@@ -430,7 +430,7 @@ def _build_uq_payload(
         pattern = "case-sensitive_pathway-stable"
         sentence = (
             f"Across {scenario_count} exported scenarios, alternative uncertainty definitions changed the top-ranked "
-            f"case in {case_sensitive_count} case(s) without changing pathway identity, so the current sensitivity is "
+            f"case in {case_sensitive_count} case(s) without changing the pathway family, so the current sensitivity is "
             "case-level rather than pathway-level."
         )
     else:
@@ -817,7 +817,7 @@ def _uq_table_note(diag: pd.Series, sensitivity: str) -> str:
     case_switch_count = _as_float(diag.get("uncertainty_mode_case_switch_count"))
     pathway_switch_count = _as_float(diag.get("uncertainty_mode_pathway_switch_count"))
     if pathway_switch_count > 1.0:
-        return "Alternative uncertainty definitions change pathway identity and should be discussed explicitly."
+        return "Alternative uncertainty definitions change the pathway family and should be discussed explicitly."
     if case_switch_count > 1.0:
         return f"Alternative uncertainty definitions shift the top-ranked case within a stable pathway family ({sensitivity})."
     return "The exported recommendation remains unchanged across the tested uncertainty definitions."
@@ -979,7 +979,7 @@ def _build_benchmark_section_templates(
         f"We observed that {benchmark['classic_sentence'].lower()} "
         f"The evidence-ablation result points in the same direction because {benchmark['evidence_sentence'].lower()} "
         f"By contrast, {benchmark['robustness_sentence'].lower()} "
-        "Taken together, these benchmark contrasts indicate that pathway identity is most sensitive to the evidence-aware "
+        "Taken together, these benchmark contrasts indicate that pathway-family composition is most sensitive to the evidence-aware "
         "formulation and to replacing the current method with a classic multi-objective optimizer, whereas robustness "
         "treatment remains decision-relevant but is not the sole pathway-flip driver. "
         f"{planning_uq_narrative.get('results_sentence', '')}"
@@ -1076,14 +1076,22 @@ def _write_priority_manuscript_tables(
         "scenario_parameter_tex": figures_dir / "paper1_scenario_parameter_table.tex",
         "optimization_output_csv": figures_dir / "paper1_optimization_output_table.csv",
         "optimization_output_tex": figures_dir / "paper1_optimization_output_table.tex",
+        "selected_candidate_audit_csv": figures_dir / "paper1_selected_candidate_audit_table.csv",
+        "selected_candidate_audit_tex": figures_dir / "paper1_selected_candidate_audit_table.tex",
+        "driver_decomposition_csv": figures_dir / "paper1_driver_decomposition_table.csv",
+        "driver_decomposition_tex": figures_dir / "paper1_driver_decomposition_table.tex",
         "uq_sensitivity_csv": figures_dir / "paper1_uq_sensitivity_table.csv",
         "uq_sensitivity_tex": figures_dir / "paper1_uq_sensitivity_table.tex",
         "cost_boundary_csv": figures_dir / "paper1_cost_boundary_table.csv",
         "cost_boundary_tex": figures_dir / "paper1_cost_boundary_table.tex",
+        "policy_cost_decomposition_csv": figures_dir / "paper1_policy_cost_decomposition_table.csv",
+        "policy_cost_decomposition_tex": figures_dir / "paper1_policy_cost_decomposition_table.tex",
         "product_credit_sensitivity_csv": figures_dir / "paper1_product_credit_sensitivity_table.csv",
         "product_credit_sensitivity_tex": figures_dir / "paper1_product_credit_sensitivity_table.tex",
         "targeted_ablation_csv": figures_dir / "paper1_targeted_ablation_table.csv",
         "targeted_ablation_tex": figures_dir / "paper1_targeted_ablation_table.tex",
+        "monte_carlo_uq_csv": figures_dir / "paper1_monte_carlo_uq_table.csv",
+        "monte_carlo_uq_tex": figures_dir / "paper1_monte_carlo_uq_table.tex",
         "htc_model_comparison_csv": figures_dir / "paper1_htc_model_comparison_table.csv",
         "htc_model_comparison_tex": figures_dir / "paper1_htc_model_comparison_table.tex",
         "htc_model_comparison_note_md": figures_dir / "paper1_htc_model_comparison_note.md",
@@ -1152,6 +1160,29 @@ def _write_priority_manuscript_tables(
         encoding="utf-8",
     )
 
+    selected_candidate_audit = _build_selected_candidate_audit_table(planning_dir=planning_dir)
+    outputs["selected_candidate_audit_csv"].write_text(
+        selected_candidate_audit.to_csv(index=False),
+        encoding="utf-8",
+    )
+    outputs["selected_candidate_audit_tex"].write_text(
+        _render_selected_candidate_audit_table(selected_candidate_audit),
+        encoding="utf-8",
+    )
+
+    driver_decomposition = _build_driver_decomposition_table(
+        planning_dir=planning_dir,
+        benchmark_dir=benchmark_dir,
+    )
+    outputs["driver_decomposition_csv"].write_text(
+        driver_decomposition.to_csv(index=False),
+        encoding="utf-8",
+    )
+    outputs["driver_decomposition_tex"].write_text(
+        _render_driver_decomposition_table(driver_decomposition),
+        encoding="utf-8",
+    )
+
     uq_sensitivity = _build_uq_sensitivity_table(planning_dir=planning_dir)
     outputs["uq_sensitivity_csv"].write_text(
         uq_sensitivity.to_csv(index=False),
@@ -1169,6 +1200,16 @@ def _write_priority_manuscript_tables(
     )
     outputs["cost_boundary_tex"].write_text(
         _render_cost_boundary_table(cost_boundary),
+        encoding="utf-8",
+    )
+
+    policy_cost_decomposition = _build_policy_cost_decomposition_table(planning_dir=planning_dir)
+    outputs["policy_cost_decomposition_csv"].write_text(
+        policy_cost_decomposition.to_csv(index=False),
+        encoding="utf-8",
+    )
+    outputs["policy_cost_decomposition_tex"].write_text(
+        _render_policy_cost_decomposition_table(policy_cost_decomposition),
         encoding="utf-8",
     )
 
@@ -1202,6 +1243,16 @@ def _write_priority_manuscript_tables(
     )
     outputs["targeted_ablation_tex"].write_text(
         _render_targeted_ablation_table(targeted_ablation),
+        encoding="utf-8",
+    )
+
+    monte_carlo_uq = _build_monte_carlo_uq_table(benchmark_dir=benchmark_dir)
+    outputs["monte_carlo_uq_csv"].write_text(
+        monte_carlo_uq.to_csv(index=False),
+        encoding="utf-8",
+    )
+    outputs["monte_carlo_uq_tex"].write_text(
+        _render_monte_carlo_uq_table(monte_carlo_uq),
         encoding="utf-8",
     )
 
@@ -1304,7 +1355,7 @@ def _build_ad_evidence_tier_table() -> pd.DataFrame:
         groups = ", ".join(sorted(subset["feedstock_group"].dropna().astype(str).unique()))
         rows.append({
             "evidence_tier": tier,
-            "feedstock_groups": groups.replace("_", r"\_"),
+            "feedstock_groups": groups.replace("_", " "),
             "observations": int(len(subset)),
             "median_methane_yield_m3_kg_odm": round(float(pd.to_numeric(subset["specific_methane_yield_m3_per_kg_odm"], errors="coerce").median()), 3),
             "role_in_planning": role_lookup[tier],
@@ -1329,7 +1380,6 @@ def _render_ad_evidence_tier_table(df: pd.DataFrame) -> str:
             "Tiers distinguish direct food-waste support from related co-digestion and industrial-organic observations. "
             "All rows remain methane-yield screening evidence, not facility-siting or full-scale AD design evidence."
         ),
-        formatters={"feedstock_groups": _literal_latex_formatter},
     )
 
 
@@ -1748,6 +1798,50 @@ def _build_optimization_output_table(*, planning_dir: Path) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
+def _build_selected_candidate_audit_table(*, planning_dir: Path) -> pd.DataFrame:
+    portfolio_allocations = _read_csv_if_exists(planning_dir / "portfolio_allocations.csv")
+    if portfolio_allocations.empty:
+        return pd.DataFrame(
+            [
+                {
+                    "scenario": "--",
+                    "selected_row": "--",
+                    "pathway": "--",
+                    "subtype": "--",
+                    "share_pct": 0.0,
+                    "evidence_class": "--",
+                    "operating_anchor": "--",
+                    "source_cost_trace": "--",
+                }
+            ]
+        )
+    rows: list[dict[str, object]] = []
+    working = portfolio_allocations.copy()
+    working["allocated_feed_share"] = _numeric_column(working, "allocated_feed_share", default=0.0)
+    if (
+        "allocated_feed_share" not in portfolio_allocations.columns
+        and "allocated_feed_ton_per_year" in working.columns
+        and "scenario_name" in working.columns
+    ):
+        allocated = _numeric_column(working, "allocated_feed_ton_per_year", default=0.0)
+        scenario_total = allocated.groupby(working["scenario_name"]).transform("sum")
+        working["allocated_feed_share"] = (allocated / scenario_total.where(scenario_total > 0)).fillna(0.0)
+    for _, row in working.sort_values(["scenario_name", "pathway", "allocated_feed_share"]).iterrows():
+        rows.append(
+            {
+                "scenario": SCENARIO_DISPLAY.get(str(row.get("scenario_name")), str(row.get("scenario_name"))),
+                "selected_row": _case_id_display(row.get("sample_id") or row.get("optimization_case_id")),
+                "pathway": _pathway_display(str(row.get("pathway", ""))),
+                "subtype": str(row.get("manure_subtype", "--")),
+                "share_pct": float(row.get("allocated_feed_share", 0.0)) * 100.0,
+                "evidence_class": _evidence_class_display(row.get("surrogate_support_level")),
+                "operating_anchor": _operating_anchor_display(row),
+                "source_cost_trace": _cost_trace_display(row.get("cost_model_source_trace")),
+            }
+        )
+    return pd.DataFrame(rows)
+
+
 def _build_uq_sensitivity_table(*, planning_dir: Path) -> pd.DataFrame:
     diagnostics = _read_csv_if_exists(planning_dir / "optimization_diagnostics.csv")
     main_results = _read_csv_if_exists(planning_dir / "main_results_table.csv")
@@ -1784,6 +1878,111 @@ def _build_uq_sensitivity_table(*, planning_dir: Path) -> pd.DataFrame:
             }
         )
     return pd.DataFrame(rows)
+
+
+def _render_selected_candidate_audit_table(df: pd.DataFrame) -> str:
+    return _render_latex_table(
+        df,
+        columns=[
+            ("scenario", "Scenario"),
+            ("selected_row", "Selected row"),
+            ("pathway", "Pathway"),
+            ("subtype", "Subtype"),
+            ("share_pct", "Share (\\%)"),
+            ("evidence_class", "Evidence class"),
+            ("operating_anchor", "Operating anchor"),
+            ("source_cost_trace", "Source/cost trace"),
+        ],
+        caption="Selected candidate rows in the declared deterministic portfolio.",
+        label="tab:selected-candidate-audit",
+        column_format="l l l l r l l >{\\raggedright\\arraybackslash}X",
+        notes=(
+            "Shares are candidate-level throughput shares. Candidate shares can differ from pathway shares because "
+            "multiple rows from the same pathway can be selected under the portfolio rule."
+        ),
+        formatters={"share_pct": lambda value: f"{_as_float(value):.1f}"},
+    )
+
+
+def _build_driver_decomposition_table(*, planning_dir: Path, benchmark_dir: Path) -> pd.DataFrame:
+    """Compact main-text diagnostic table for reviewer-requested allocation drivers."""
+    planning_allocations = _read_csv_if_exists(planning_dir / "portfolio_allocations.csv")
+    ablation_dir = _resolve_targeted_ablation_dir(benchmark_dir)
+    targeted = _read_csv_if_exists(ablation_dir / "targeted_planning_ablations_summary.csv")
+    cap_diagnostics = _read_csv_if_exists(ablation_dir / "portfolio_cap_diagnostics.csv")
+    benchmark_allocations = _read_csv_if_exists(benchmark_dir / "benchmark_allocations.csv")
+
+    rows = [
+        {
+            "diagnostic": "Declared asymmetric baseline",
+            "baseline_region": _share_profile_from_allocations(planning_allocations, "baseline_region_case"),
+            "high_supply": _share_profile_from_allocations(planning_allocations, "high_supply_case"),
+            "policy_support": _share_profile_from_allocations(planning_allocations, "policy_support_case"),
+            "driver_reading": "Reference screening boundary with biochar credit retained and hydrochar credit absent.",
+        },
+        {
+            "diagnostic": "No coproduct credit",
+            "baseline_region": _share_profile_from_targeted(targeted, "economic_baseline", "no_product_credit_baseline", "baseline_region_case"),
+            "high_supply": _share_profile_from_targeted(targeted, "economic_baseline", "no_product_credit_baseline", "high_supply_case"),
+            "policy_support": _share_profile_from_targeted(targeted, "economic_baseline", "no_product_credit_baseline", "policy_support_case"),
+            "driver_reading": "Credit removal changes the economic boundary; pyrolysis remains selected under remaining energy, cost, evidence, and constraints.",
+        },
+        {
+            "diagnostic": "Symmetric coproduct credit",
+            "baseline_region": _share_profile_from_targeted(targeted, "economic_baseline", "symmetric_product_credit_baseline", "baseline_region_case"),
+            "high_supply": _share_profile_from_targeted(targeted, "economic_baseline", "symmetric_product_credit_baseline", "high_supply_case"),
+            "policy_support": _share_profile_from_targeted(targeted, "economic_baseline", "symmetric_product_credit_baseline", "policy_support_case"),
+            "driver_reading": "Adding a matched hydrochar-credit boundary increases HTC participation in non-policy cases.",
+        },
+        {
+            "diagnostic": "Evidence penalty removed",
+            "baseline_region": _share_profile_from_benchmark(benchmark_allocations, "no_evidence_penalty", "baseline_region_case"),
+            "high_supply": _share_profile_from_benchmark(benchmark_allocations, "no_evidence_penalty", "high_supply_case"),
+            "policy_support": _share_profile_from_benchmark(benchmark_allocations, "no_evidence_penalty", "policy_support_case"),
+            "driver_reading": "Neutralizing evidence weights changes little in this run; this does not remove fallback dependence.",
+        },
+        {
+            "diagnostic": "Robustness utility removed",
+            "baseline_region": _share_profile_from_benchmark(benchmark_allocations, "no_robustness_penalty", "baseline_region_case"),
+            "high_supply": _share_profile_from_benchmark(benchmark_allocations, "no_robustness_penalty", "high_supply_case"),
+            "policy_support": _share_profile_from_benchmark(benchmark_allocations, "no_robustness_penalty", "policy_support_case"),
+            "driver_reading": "The objective specification materially affects screening outcomes and is not a transferable merit scale.",
+        },
+        {
+            "diagnostic": "Candidate/subtype caps relaxed",
+            "baseline_region": _share_profile_from_cap(cap_diagnostics, "candidate_and_subtype_caps_relaxed", "baseline_region_case"),
+            "high_supply": _share_profile_from_cap(cap_diagnostics, "candidate_and_subtype_caps_relaxed", "high_supply_case"),
+            "policy_support": _share_profile_from_cap(cap_diagnostics, "candidate_and_subtype_caps_relaxed", "policy_support_case"),
+            "driver_reading": "Cap relief shifts non-policy cases toward higher pyrolysis shares and confirms that the small HTC share is rule-induced.",
+        },
+    ]
+    return pd.DataFrame(rows)
+
+
+def _render_driver_decomposition_table(df: pd.DataFrame) -> str:
+    return _render_latex_table(
+        df,
+        columns=[
+            ("diagnostic", "Diagnostic"),
+            ("baseline_region", "Baseline-region"),
+            ("high_supply", "High-supply"),
+            ("policy_support", "Policy-support"),
+            ("driver_reading", "Driver reading"),
+        ],
+        caption=(
+            "Allocation-driver decomposition across targeted boundary, objective, and portfolio-rule diagnostics. "
+            "Entries are pathway throughput profiles from deterministic replanning runs and are intended to identify drivers, "
+            "not to rank technologies."
+        ),
+        label="tab:driver-decomposition",
+        column_format="p{0.17\\textwidth}p{0.12\\textwidth}p{0.12\\textwidth}p{0.12\\textwidth}>{\\raggedright\\arraybackslash}X",
+        notes=(
+            "P denotes pyrolysis and H denotes HTC. AD is omitted from cells unless positive. "
+            "The evidence-penalty and robustness-utility rows are objective-component ablations; the cap row is a declared "
+            "regularization stress, not an empirical deployment constraint."
+        ),
+        font_size="\\tiny",
+    )
 
 
 def _render_optimization_output_table(df: pd.DataFrame) -> str:
@@ -1836,7 +2035,7 @@ def _render_uq_sensitivity_table(df: pd.DataFrame) -> str:
         column_format="l l l l l r r l l X",
         notes=(
             "Case-switch count records how many distinct top-ranked cases appear across the tested uncertainty modes. "
-            "Pathway-switch count records whether uncertainty aggregation changes pathway identity or only within-pathway case ranking."
+            "Pathway-switch count records whether uncertainty aggregation changes the pathway family or only within-pathway case ranking."
         ),
         formatters={
             "case_switch_count": lambda value: f"{_as_float(value):.0f}",
@@ -1902,6 +2101,83 @@ def _render_cost_boundary_table(df: pd.DataFrame) -> str:
             "The table records what is priced into each pathway. "
             "Product-credit omissions are explicit boundary limits."
         ),
+    )
+
+
+def _build_policy_cost_decomposition_table(*, planning_dir: Path) -> pd.DataFrame:
+    allocations = _read_csv_if_exists(planning_dir / "portfolio_allocations.csv")
+    if allocations.empty:
+        return pd.DataFrame(
+            [
+                {
+                    "scenario": "--",
+                    "source_net_cost_musd_per_year": pd.NA,
+                    "information_premium_musd_per_year": pd.NA,
+                    "residual_carbon_price_musd_per_year": pd.NA,
+                    "uncertainty_uplift_musd_per_year": pd.NA,
+                    "final_net_cost_musd_per_year": pd.NA,
+                }
+            ]
+        )
+
+    rows: list[dict[str, object]] = []
+    for scenario_name in SCENARIO_ORDER:
+        subset = allocations[allocations.get("scenario_name", pd.Series(dtype=object)).astype(str) == scenario_name].copy()
+        if subset.empty:
+            continue
+        allocated = _numeric_column(subset, "allocated_feed_ton_per_year")
+        planning_cost = _numeric_column(subset, "planning_cost_intensity_proxy_or_real_per_ton")
+        carbon_price = _numeric_column(subset, "carbon_tax_cost_intensity_usd_per_ton")
+        information_premium = _numeric_column(subset, "information_deficit_premium_usd_per_ton")
+        effective_uncertainty = _numeric_column(subset, "effective_uncertainty_ratio")
+        robustness_multiplier = (1.0 + 0.35 * effective_uncertainty).clip(lower=1.0, upper=1.9)
+        cost_before_uncertainty = planning_cost / robustness_multiplier
+        source_net_cost = cost_before_uncertainty - carbon_price - information_premium
+        pre_uplift_total = (cost_before_uncertainty * allocated).sum()
+        final_total = (planning_cost * allocated).sum()
+        rows.append(
+            {
+                "scenario": SCENARIO_DISPLAY.get(scenario_name, scenario_name),
+                "source_net_cost_musd_per_year": source_net_cost.mul(allocated).sum() / 1_000_000.0,
+                "information_premium_musd_per_year": information_premium.mul(allocated).sum() / 1_000_000.0,
+                "residual_carbon_price_musd_per_year": carbon_price.mul(allocated).sum() / 1_000_000.0,
+                "uncertainty_uplift_musd_per_year": (final_total - pre_uplift_total) / 1_000_000.0,
+                "final_net_cost_musd_per_year": final_total / 1_000_000.0,
+            }
+        )
+    return pd.DataFrame(rows)
+
+
+def _render_policy_cost_decomposition_table(df: pd.DataFrame) -> str:
+    return _render_latex_table(
+        df,
+        columns=[
+            ("scenario", "Scenario"),
+            ("source_net_cost_musd_per_year", "Source net cost"),
+            ("information_premium_musd_per_year", "Info. premium"),
+            ("residual_carbon_price_musd_per_year", "Carbon charge"),
+            ("uncertainty_uplift_musd_per_year", "UQ uplift"),
+            ("final_net_cost_musd_per_year", "Final cost"),
+        ],
+        caption=(
+            "Diagnostic decomposition of the reported portfolio cost by scenario "
+            "(MUSD y$^{-1}$)."
+        ),
+        label="tab:policy-cost-decomposition",
+        column_format="l r r r r r",
+        notes=(
+            "The source net-cost term removes the explicitly modeled information premium, "
+            "residual-carbon price charge, and uncertainty uplift from the reported planning "
+            "cost. This decomposition explains the policy-support cost jump inside the "
+            "reported screening boundary and is not a universal techno-economic assessment."
+        ),
+        formatters={
+            "source_net_cost_musd_per_year": lambda value: f"{_as_float(value):.2f}",
+            "information_premium_musd_per_year": lambda value: f"{_as_float(value):.2f}",
+            "residual_carbon_price_musd_per_year": lambda value: f"{_as_float(value):.2f}",
+            "uncertainty_uplift_musd_per_year": lambda value: f"{_as_float(value):.2f}",
+            "final_net_cost_musd_per_year": lambda value: f"{_as_float(value):.2f}",
+        },
     )
 
 
@@ -2134,6 +2410,7 @@ def _render_product_credit_sensitivity_table(df: pd.DataFrame) -> str:
 def _build_product_credit_interpretation(
     *,
     economic_perturbation: str,
+    ablation_family: str = "",
     baseline_outcomes: dict[str, str],
     stressed_outcomes: dict[str, str],
 ) -> str:
@@ -2143,13 +2420,24 @@ def _build_product_credit_interpretation(
         if str(stressed_outcomes.get(scenario_name, "--")) != str(baseline_outcomes.get(scenario_name, "--"))
     ]
     if not changed_scenarios:
-        return "No pathway-set change relative to the baseline boundary; any effect is confined to share reweighting."
+        return "No pathway-set change relative to the baseline boundary; any effect is confined to share or objective-value reweighting."
     if len(changed_scenarios) == len(SCENARIO_ORDER):
         scenario_clause = "all three scenarios"
     else:
         scenario_clause = ", ".join(changed_scenarios)
+    if ablation_family in {"economic_baseline", "economic_symmetry", "coproduct_boundary"}:
+        stress_type = "boundary-sensitive accounting stress"
+    elif ablation_family in {"ad_complementarity", "pathway_cap_sensitivity"}:
+        stress_type = "policy-constraint stress"
+    elif ablation_family in {"surrogate_evidence_gate", "evidence_ladder_sensitivity", "evidence_sensitivity"}:
+        stress_type = "evidence-sensitivity stress"
+    elif ablation_family in {"algorithm", "objective_weight_sensitivity", "pathway_exclusion"}:
+        stress_type = "formulation stress"
+    else:
+        stress_type = "assumption-sensitive screening stress"
+    article = "an" if stress_type[0].lower() in {"a", "e", "i", "o", "u"} else "a"
     return (
-        f"Composition changes appear in {scenario_clause}; treat this as a boundary-sensitive accounting stress, "
+        f"Composition changes appear in {scenario_clause}; treat this as {article} {stress_type}, "
         "not as a pathway-proof result."
     )
 
@@ -2195,6 +2483,12 @@ def _build_targeted_ablation_table(*, benchmark_dir: Path) -> pd.DataFrame:
 
     for keys, frame in summary.groupby(group_columns, dropna=False):
         ablation_family, ablation_key, ablation_value = keys
+        priority = _targeted_ablation_main_text_priority(
+            ablation_family=str(ablation_family),
+            ablation_key=str(ablation_key),
+        )
+        if priority is None:
+            continue
         allocation_frame = grouped_allocations.get(keys, pd.DataFrame())
         stressed_outcomes = {
             scenario_name: _portfolio_outcome_label(allocation_frame, scenario_name)
@@ -2216,12 +2510,42 @@ def _build_targeted_ablation_table(*, benchmark_dir: Path) -> pd.DataFrame:
                         ablation_key=str(ablation_key),
                         ablation_value=ablation_value,
                     ),
+                    ablation_family=str(ablation_family),
                     baseline_outcomes=baseline_outcomes,
                     stressed_outcomes=stressed_outcomes,
                 ),
+                "_priority": priority,
             }
         )
-    return pd.DataFrame(rows)
+    if not rows:
+        return pd.DataFrame(
+            [
+                {
+                    "ablation": "targeted ablations unavailable",
+                    "baseline_region_outcome": "--",
+                    "high_supply_outcome": "--",
+                    "policy_support_outcome": "--",
+                    "interpretation": "Reviewer-facing targeted planning ablations were not found in the export.",
+                }
+            ]
+        )
+    return pd.DataFrame(rows).sort_values("_priority").drop(columns=["_priority"]).reset_index(drop=True)
+
+
+def _targeted_ablation_main_text_priority(*, ablation_family: str, ablation_key: str) -> int | None:
+    """Keep the main-text table compact; full exports remain in CSV."""
+    order = {
+        ("algorithm", "htc_xgboost_priority"): 10,
+        ("economic_baseline", "no_product_credit_baseline"): 20,
+        ("economic_baseline", "symmetric_product_credit_baseline"): 30,
+        ("surrogate_evidence_gate", "negative_r2_artifacts_fallback"): 40,
+        ("evidence_ladder_sensitivity", "evidence_ladder_mild"): 50,
+        ("evidence_ladder_sensitivity", "evidence_ladder_strict"): 60,
+        ("evidence_ladder_sensitivity", "evidence_ladder_binary_support_only"): 70,
+        ("ad_complementarity", "ad_min_share_20pct"): 100,
+        ("pathway_cap_sensitivity", "pyrolysis_max_share_080pct"): 110,
+    }
+    return order.get((ablation_family, ablation_key))
 
 
 def _render_targeted_ablation_table(df: pd.DataFrame) -> str:
@@ -2234,15 +2558,140 @@ def _render_targeted_ablation_table(df: pd.DataFrame) -> str:
             ("policy_support_outcome", "Policy-support outcome"),
             ("interpretation", "Interpretation"),
         ],
-        caption="Targeted planning ablations for legacy HTC model choice, evidence-utility intensity, and matched hydrochar-price symmetry.",
+        caption="Reviewer-facing targeted planning ablations. The table reports a compact subset of the full exported ablation matrix, emphasizing economic baselines, surrogate-evidence gating, evidence-ladder sensitivity, and policy-style participation constraints. Formal hydrochar, digestate, and pyrolysis-credit boundary sweeps are reported separately in the boundary-sensitivity table.",
         label="tab:targeted-ablation-summary",
-        column_format=">{\\raggedright\\arraybackslash}p{3.5cm} l l l >{\\raggedright\\arraybackslash}X",
+        column_format=">{\\raggedright\\arraybackslash}p{3.0cm} l l l >{\\raggedright\\arraybackslash}X",
         notes=(
             "The baseline comparison corresponds to the exported planning default with evidence-utility coefficient "
-            "$\\eta=0.15$. Outcome strings report pathway composition rather than a binary winner."
+            "$\\eta=0.15$. Outcome strings report pathway composition rather than a binary winner; full ablation rows are exported as CSV."
         ),
         formatters={"ablation": _literal_latex_formatter},
+        font_size="\\tiny",
     )
+
+
+def _build_monte_carlo_uq_table(*, benchmark_dir: Path) -> pd.DataFrame:
+    ablation_dir = _resolve_targeted_ablation_dir(benchmark_dir)
+    summary = _read_csv_if_exists(ablation_dir / "monte_carlo_uq_summary.csv")
+    if summary.empty:
+        return pd.DataFrame(
+            [
+                {
+                    "scenario": "--",
+                    "pathway": "unavailable",
+                    "occurrence_count": "--",
+                    "share_pct_median": pd.NA,
+                    "share_pct_p05_p95": "--",
+                    "cost_musd_per_year_median": pd.NA,
+                    "carbon_ktco2e_per_year_median": pd.NA,
+                }
+            ]
+        )
+    rows: list[dict[str, object]] = []
+    for _, row in summary.iterrows():
+        replicates = int(round(_as_float(row.get("monte_carlo_replicates")))) or 48
+        occurrence_count = int(round(_as_float(row.get("selection_probability")) * replicates))
+        rows.append(
+            {
+                "scenario": SCENARIO_DISPLAY.get(str(row.get("scenario_name")), str(row.get("scenario_name"))),
+                "pathway": _pathway_display(row.get("pathway")),
+                "occurrence_count": f"{occurrence_count}/{replicates}",
+                "share_pct_median": round(_as_float(row.get("share_pct_median")), 1),
+                "share_pct_p05_p95": (
+                    f"{_as_float(row.get('share_pct_p05')):.1f}--{_as_float(row.get('share_pct_p95')):.1f}"
+                ),
+                "cost_musd_per_year_median": round(_as_float(row.get("cost_musd_per_year_median")), 2),
+                "carbon_ktco2e_per_year_median": round(_as_float(row.get("carbon_ktco2e_per_year_median")), 2),
+            }
+        )
+    return pd.DataFrame(rows)
+
+
+def _render_monte_carlo_uq_table(df: pd.DataFrame) -> str:
+    if df.empty:
+        df = pd.DataFrame(
+            [
+                {
+                    "scenario": "--",
+                    "pathway": "unavailable",
+                    "occurrence_count": "--",
+                    "share_pct_median": pd.NA,
+                    "share_pct_p05_p95": "--",
+                    "cost_musd_per_year_median": pd.NA,
+                    "carbon_ktco2e_per_year_median": pd.NA,
+                }
+            ]
+        )
+    pathway_columns = [
+        ("scenario", "Scenario"),
+        ("pathway", "Pathway"),
+        ("occurrence_count", "Occurrence count"),
+        ("share_pct_median", "Median share (\\%)"),
+        ("share_pct_p05_p95", "5--95\\% share range"),
+    ]
+    portfolio_rows = (
+        df[["scenario", "cost_musd_per_year_median", "carbon_ktco2e_per_year_median"]]
+        .drop_duplicates(subset=["scenario"])
+        .reset_index(drop=True)
+    )
+    portfolio_rows["energy_pj_per_year_median"] = pd.NA
+
+    lines = [
+        "\\begin{table*}[!t]",
+        "\\centering",
+        "\\caption{Assumption-space stress-grid diagnostics over economic-boundary, evidence-ladder, objective-weight, capacity, carbon-budget, and surrogate-evidence-gate assumptions. Occurrence counts are not calibrated probabilities.}",
+        "\\label{tab:monte-carlo-uq-summary}",
+        "\\scriptsize",
+        "\\setlength{\\tabcolsep}{4pt}",
+        "\\begin{threeparttable}",
+        "\\textit{Panel A: pathway-selection frequencies and shares.}\\\\[2pt]",
+        "\\begin{tabularx}{\\textwidth}{l l r r l}",
+        "\\toprule",
+        " & ".join(header for _, header in pathway_columns) + " \\\\",
+        "\\midrule",
+    ]
+    for _, row in df.iterrows():
+        rendered_cells = []
+        for column_name, _ in pathway_columns:
+            rendered_cells.append(_default_latex_formatter(row.get(column_name)))
+        lines.append(" & ".join(rendered_cells) + " \\\\")
+    lines.extend(
+        [
+            "\\bottomrule",
+            "\\end{tabularx}",
+            "\\vspace{4pt}",
+            "\\textit{Panel B: portfolio-level diagnostics by scenario.}\\\\[2pt]",
+            "\\begin{tabularx}{\\textwidth}{l r r}",
+            "\\toprule",
+            "Scenario & Median cost (MUSD y$^{-1}$) & Median carbon (ktCO$_2$e y$^{-1}$) \\\\",
+            "\\midrule",
+        ]
+    )
+    for _, row in portfolio_rows.iterrows():
+        lines.append(
+            " & ".join(
+                [
+                    _default_latex_formatter(row.get("scenario")),
+                    _default_latex_formatter(row.get("cost_musd_per_year_median")),
+                    _default_latex_formatter(row.get("carbon_ktco2e_per_year_median")),
+                ]
+            )
+            + " \\\\"
+        )
+    lines.extend(
+        [
+            "\\bottomrule",
+            "\\end{tabularx}",
+            "\\begin{tablenotes}[flushleft]",
+            "\\footnotesize",
+            "\\item Occurrence counts summarize deterministic replanning samples under randomized assumption draws; multiple pathways can be selected in the same replicate, so pathway counts need not sum to the replicate count. Panel B reports portfolio-level medians once per scenario rather than repeating them on pathway rows. These values should be read as screening diagnostics rather than calibrated statistical probabilities.",
+            "\\end{tablenotes}",
+            "\\end{threeparttable}",
+            "\\end{table*}",
+            "",
+        ]
+    )
+    return "\n".join(lines)
 
 
 def _resolve_targeted_ablation_dir(benchmark_dir: Path) -> Path:
@@ -2262,12 +2711,32 @@ def _targeted_ablation_label(*, ablation_family: str, ablation_key: str, ablatio
         return "HTC selector forced back to XGBoost"
     if ablation_family == "economic_symmetry":
         return "Hydrochar price matched to the pyrolysis median product revenue"
+    if ablation_family == "economic_baseline":
+        labels = {
+            "no_product_credit_baseline": "No-product-credit economic baseline",
+            "symmetric_product_credit_baseline": "Symmetric product-credit economic baseline",
+        }
+        return labels.get(ablation_key, f"Economic baseline: {ablation_key}")
+    if ablation_family == "surrogate_evidence_gate":
+        return "Negative-$R^2$ surrogate evidence gate"
+    if ablation_family == "evidence_ladder_sensitivity":
+        return f"Evidence ladder: {str(ablation_value).replace('_', ' ')}"
     if ablation_family == "evidence_sensitivity":
         return f"Evidence-utility coefficient $\\eta={_as_float(ablation_value):.2f}$"
+    if ablation_family == "objective_weight_sensitivity":
+        labels = {
+            "balanced_cleaner_production": "Balanced cleaner-production weights",
+            "energy_priority": "Energy-priority weights",
+            "environment_priority": "Environment-priority weights",
+            "cost_guardrail": "Cost-guardrail weights",
+        }
+        return labels.get(str(ablation_key), f"Objective weights: {str(ablation_value).replace('_', ' ')}")
     if ablation_family == "ad_complementarity":
         return f"AD minimum share {_as_float(ablation_value) * 100:.0f}\\%"
     if ablation_family == "pathway_cap_sensitivity":
         return f"Pyrolysis maximum share {_as_float(ablation_value) * 100:.0f}\\%"
+    if ablation_family == "pathway_exclusion":
+        return "HTC excluded from candidate set"
     if ablation_family == "coproduct_boundary" and ablation_key.startswith("digestate_rng_credit"):
         multiplier = {
             "digestate_rng_credit_50pct": 0.5,
@@ -2275,7 +2744,16 @@ def _targeted_ablation_label(*, ablation_family: str, ablation_key: str, ablatio
             "digestate_rng_credit_200pct": 2.0,
             "digestate_rng_credit_300pct": 3.0,
         }.get(ablation_key, _as_float(ablation_value))
-        return f"AD coproduct credit {multiplier:.1f}$\times$ pyrolysis median"
+        return f"AD coproduct credit {multiplier:.1f}$\\times$ pyrolysis median"
+    if ablation_family == "coproduct_boundary" and ablation_key == "no_pyrolysis_product_credit":
+        return "No pyrolysis product credit"
+    if ablation_family == "coproduct_boundary" and ablation_key.startswith("hydrochar_credit"):
+        multiplier = {
+            "hydrochar_credit_50pct": 0.5,
+            "hydrochar_credit_75pct": 0.75,
+            "hydrochar_credit_100pct": 1.0,
+        }.get(ablation_key, _as_float(ablation_value))
+        return f"Hydrochar credit {multiplier:.2f}$\\times$ pyrolysis median"
     return f"{ablation_family}: {ablation_key}={ablation_value}"
 
 
@@ -2681,6 +3159,98 @@ def _allocation_profile_display(frame: pd.DataFrame) -> str:
     )
 
 
+def _share_profile_from_allocations(frame: pd.DataFrame, scenario_name: str) -> str:
+    grouped = _grouped_allocations_by_pathway(_scenario_allocations(frame, scenario_name))
+    total = sum(grouped.values())
+    if total <= 0.0:
+        return "--"
+    return _format_share_profile(
+        grouped.get("pyrolysis", 0.0) / total * 100.0,
+        grouped.get("htc", 0.0) / total * 100.0,
+        grouped.get("ad", 0.0) / total * 100.0,
+    )
+
+
+def _share_profile_from_targeted(
+    frame: pd.DataFrame,
+    ablation_family: str,
+    ablation_key: str,
+    scenario_name: str,
+) -> str:
+    if frame.empty:
+        return "--"
+    subset = frame[
+        frame.get("ablation_family", pd.Series(dtype="object")).astype(str).eq(ablation_family)
+        & frame.get("ablation_key", pd.Series(dtype="object")).astype(str).eq(ablation_key)
+        & frame.get("scenario_name", pd.Series(dtype="object")).astype(str).eq(scenario_name)
+    ]
+    if subset.empty:
+        return "--"
+    row = subset.iloc[0]
+    return _format_share_profile(
+        _as_float(row.get("pyrolysis_allocated_share_pct")),
+        _as_float(row.get("htc_allocated_share_pct")),
+        _as_float(row.get("ad_allocated_share_pct")),
+    )
+
+
+def _share_profile_from_cap(frame: pd.DataFrame, ablation_key: str, scenario_name: str) -> str:
+    if frame.empty:
+        return "--"
+    subset = frame[
+        frame.get("ablation_key", pd.Series(dtype="object")).astype(str).eq(ablation_key)
+        & frame.get("scenario_name", pd.Series(dtype="object")).astype(str).eq(scenario_name)
+    ]
+    if subset.empty:
+        return "--"
+    row = subset.iloc[0]
+    return _format_share_profile(
+        _as_float(row.get("pyrolysis_allocated_share_pct")),
+        _as_float(row.get("htc_allocated_share_pct")),
+        _as_float(row.get("ad_allocated_share_pct")),
+    )
+
+
+def _share_profile_from_benchmark(
+    frame: pd.DataFrame,
+    benchmark_variant: str,
+    scenario_name: str,
+) -> str:
+    if frame.empty:
+        return "--"
+    subset = frame[
+        frame.get("benchmark_variant", pd.Series(dtype="object")).astype(str).eq(benchmark_variant)
+        & frame.get("scenario_name", pd.Series(dtype="object")).astype(str).eq(scenario_name)
+    ].copy()
+    if subset.empty:
+        return "--"
+    grouped = _grouped_allocations_by_pathway(subset)
+    total = sum(grouped.values())
+    if total <= 0.0:
+        return "--"
+    return _format_share_profile(
+        grouped.get("pyrolysis", 0.0) / total * 100.0,
+        grouped.get("htc", 0.0) / total * 100.0,
+        grouped.get("ad", 0.0) / total * 100.0,
+    )
+
+
+def _format_share_profile(pyrolysis_pct: float, htc_pct: float, ad_pct: float = 0.0) -> str:
+    values = {
+        "P": max(0.0, float(pyrolysis_pct)),
+        "H": max(0.0, float(htc_pct)),
+        "AD": max(0.0, float(ad_pct)),
+    }
+    active = {label: value for label, value in values.items() if value >= 0.5}
+    if not active:
+        return "--"
+    if len(active) == 1:
+        label, value = next(iter(active.items()))
+        if value >= 99.5:
+            return f"{label}-only"
+    return " / ".join(f"{label} {value:.0f}" for label, value in active.items())
+
+
 def _support_profile_display(frame: pd.DataFrame) -> str:
     if frame.empty or "surrogate_support_level" not in frame.columns or "allocated_feed_ton_per_year" not in frame.columns:
         return "--"
@@ -2865,11 +3435,43 @@ def _as_float(value: object) -> float:
 def _support_level_display(level: str) -> str:
     mapping = {
         "surrogate_supported": "surrogate-supported",
-        "trained_surrogate_with_documented_fallback": "trained surrogate/fallback",
-        "documented_static_fallback": "documented static fallback",
-        "unsupported_pathway": "unsupported pathway",
+        "trained_surrogate_with_documented_fallback": "fallback-backed",
+        "documented_static_fallback": "fallback-backed",
+        "unsupported_pathway": "proxy-supported",
     }
     return mapping.get(str(level), str(level).replace("_", " "))
+
+
+def _evidence_class_display(level: object) -> str:
+    return _support_level_display(str(level))
+
+
+def _operating_anchor_display(row: pd.Series) -> str:
+    temperature = pd.to_numeric(pd.Series([row.get("process_temperature_c")]), errors="coerce").iloc[0]
+    residence = pd.to_numeric(pd.Series([row.get("residence_time_min")]), errors="coerce").iloc[0]
+    heating = pd.to_numeric(pd.Series([row.get("heating_rate_c_per_min")]), errors="coerce").iloc[0]
+    parts: list[str] = []
+    if pd.notna(temperature):
+        parts.append(f"{float(temperature):.0f} C")
+    if pd.notna(residence):
+        parts.append(f"{float(residence):.0f} min")
+    if pd.notna(heating):
+        parts.append(f"{float(heating):.0f} C min-1")
+    return " / ".join(parts) if parts else "regional proxy"
+
+
+def _cost_trace_display(value: object) -> str:
+    text = str(value or "").strip()
+    if not text or text.lower() == "nan":
+        return "--"
+    lowered = text.lower()
+    if "struhs" in lowered or "manurepyrolysisiam" in lowered:
+        return "Struhs/ManurePyrolysisIAM-derived"
+    if "fiori" in lowered or "gamaralalage" in lowered:
+        return "Fiori/Gamaralalage-derived HTC"
+    if "ad" in lowered or "epa" in lowered or "sailer" in lowered:
+        return "AD literature/proxy-derived"
+    return text.split(";")[0].strip()
 
 
 def _reliability_tier_display(tier: str) -> str:
@@ -2946,8 +3548,8 @@ def _aggregate_benchmark_variant_statistics(benchmark_stats: pd.DataFrame) -> pd
                 "directionally_consistent_count": int(tier_counts.get("directionally_consistent", 0)),
                 "suggestive_count": int(tier_counts.get("suggestive", 0)),
                 "unstable_count": int(tier_counts.get("unstable", 0)),
-                "pathway_shift_rate_mean": float(pd.to_numeric(subset.get("pathway_shift_rate", 0.0), errors="coerce").fillna(0.0).mean()),
-                "case_shift_rate_mean": float(pd.to_numeric(subset.get("case_shift_rate", 0.0), errors="coerce").fillna(0.0).mean()),
+                "pathway_shift_rate_mean": float(_numeric_column(subset, "pathway_shift_rate").mean()),
+                "case_shift_rate_mean": float(_numeric_column(subset, "case_shift_rate").mean()),
             }
         )
     return pd.DataFrame(rows)
@@ -3025,14 +3627,8 @@ def _select_primary_benchmark_row(frame: pd.DataFrame) -> pd.Series:
         .map(significance_rank)
         .fillna(significance_rank["not_available"])
     )
-    working["_pathway_shift_count"] = pd.to_numeric(
-        working.get("pathway_shift_scenario_count", 0),
-        errors="coerce",
-    ).fillna(0.0)
-    working["_case_shift_count"] = pd.to_numeric(
-        working.get("case_shift_scenario_count", 0),
-        errors="coerce",
-    ).fillna(0.0)
+    working["_pathway_shift_count"] = _numeric_column(working, "pathway_shift_scenario_count")
+    working["_case_shift_count"] = _numeric_column(working, "case_shift_scenario_count")
     working["_variant_priority"] = (
         working["benchmark_variant"].astype(str).map(variant_priority).fillna(len(variant_priority))
     )

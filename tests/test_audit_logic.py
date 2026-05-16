@@ -17,6 +17,7 @@ from waste2energy.audit import (
     build_ml_claim_flag_table,
     build_ml_refit_provenance_summary,
     build_operation_claim_flag_table,
+    build_planning_artifact_consistency_summary,
     build_pathway_reliability_summary,
     build_planning_claim_flag_table,
     build_planning_transferability_risk_summary,
@@ -273,6 +274,53 @@ def test_artifact_inventory_flags_stale_operation_comparison_outputs(tmp_path):
         "run_config.json",
     }
     assert benchmark_rows["exists"].all()
+
+
+def test_planning_artifact_consistency_flags_stale_allocation_tables(tmp_path):
+    planning_dir = tmp_path / "planning"
+    figures_dir = tmp_path / "figures_tables"
+    audit_dir = tmp_path / "audit"
+    for directory in (planning_dir, figures_dir, audit_dir):
+        directory.mkdir()
+
+    pd.DataFrame(
+        [
+            {"scenario_name": "baseline_region_case", "pathway": "pyrolysis", "allocated_feed_ton_per_year": 88.3},
+            {"scenario_name": "baseline_region_case", "pathway": "htc", "allocated_feed_ton_per_year": 11.7},
+        ]
+    ).to_csv(planning_dir / "portfolio_allocations.csv", index=False)
+    stale_rows = pd.DataFrame(
+        [
+            {"scenario_name": "baseline_region_case", "pathway": "pyrolysis", "baseline_portfolio_share_pct": 90.0},
+            {"scenario_name": "baseline_region_case", "pathway": "htc", "baseline_portfolio_share_pct": 10.0},
+            {"scenario_name": "baseline_region_case", "pathway": "ad", "baseline_portfolio_share_pct": 0.0},
+        ]
+    )
+    stale_rows.to_csv(planning_dir / "main_results_table.csv", index=False)
+    stale_rows.to_csv(figures_dir / "paper1_planning_results_table.csv", index=False)
+    stale_rows.to_csv(audit_dir / "planning_claim_flag_table.csv", index=False)
+
+    summary = build_planning_artifact_consistency_summary(
+        planning_dir,
+        figures_dir=figures_dir,
+        audit_dir=audit_dir,
+        tolerance_pct_point=0.1,
+    )
+
+    failed = summary[summary["consistency_status"] == "fail"]
+    assert not failed.empty
+    assert set(failed["artifact_label"]) == {
+        "main_results_table.csv",
+        "paper1_planning_results_table.csv",
+        "planning_claim_flag_table.csv",
+    }
+    pyrolysis = failed[
+        (failed["artifact_label"] == "main_results_table.csv")
+        & (failed["pathway"] == "pyrolysis")
+    ].iloc[0]
+    assert pyrolysis["expected_share_pct"] == 88.3
+    assert pyrolysis["observed_share_pct"] == 90.0
+    assert pyrolysis["absolute_difference_pct_point"] == 1.7
 
 
 def test_build_benchmark_claim_summary_flags_core_innovation_when_pathways_shift(tmp_path):

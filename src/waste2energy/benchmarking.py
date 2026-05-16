@@ -121,6 +121,51 @@ def build_default_benchmark_variants(base_config: PlanningConfig | None = None) 
             comparator_family="heuristic_baseline",
             allocation_mode="greedy",
         ),
+        BenchmarkVariant(
+            key="mcda_weighted_sum_comparator",
+            description="Classic MCDA weighted-sum comparator using scenario-local energy, environment, and cost utilities without MILP optimization.",
+            config=replace(
+                baseline,
+                robustness_factor=0.0,
+                evidence_utility_factor=0.0,
+                partial_surrogate_weight=1.0,
+                static_fallback_weight=1.0,
+                unsupported_pathway_weight=1.0,
+                partial_surrogate_uncertainty_multiplier=1.0,
+                static_fallback_uncertainty_multiplier=1.0,
+                unsupported_pathway_uncertainty_multiplier=1.0,
+                partial_surrogate_information_premium_usd_per_ton=0.0,
+                static_fallback_information_premium_usd_per_ton=0.0,
+                unsupported_pathway_information_premium_usd_per_ton=0.0,
+                enforce_candidate_cap=False,
+                enforce_subtype_cap=False,
+                enforce_max_selected=False,
+                enforce_min_distinct_subtypes=False,
+                max_candidate_share=1.0,
+                max_subtype_share=1.0,
+                min_distinct_subtypes=1,
+                max_portfolio_candidates=max(12, baseline.max_portfolio_candidates),
+            ),
+            comparator_family="mcda_baseline",
+            allocation_mode="mcda_weighted_sum",
+        ),
+        BenchmarkVariant(
+            key="topsis_comparator",
+            description="TOPSIS comparator over scenario-local energy, environment, cost, robustness, and evidence utilities without MILP optimization.",
+            config=replace(
+                baseline,
+                enforce_candidate_cap=False,
+                enforce_subtype_cap=False,
+                enforce_max_selected=False,
+                enforce_min_distinct_subtypes=False,
+                max_candidate_share=1.0,
+                max_subtype_share=1.0,
+                min_distinct_subtypes=1,
+                max_portfolio_candidates=max(12, baseline.max_portfolio_candidates),
+            ),
+            comparator_family="mcda_baseline",
+            allocation_mode="topsis",
+        ),
     ]
     return variants
 
@@ -299,6 +344,16 @@ def _execute_benchmark_variant(
         return execution
     if variant.allocation_mode == "greedy":
         return _replace_portfolio_with_greedy_baseline(execution=execution, config=variant.config)
+    if variant.allocation_mode == "mcda_weighted_sum":
+        return _replace_portfolio_with_score_column(
+            execution=execution,
+            config=variant.config,
+            score_column="weighted_score_per_ton",
+            solver_status="benchmark_mcda_weighted_sum",
+            solver_backend="documented_mcda_weighted_sum",
+        )
+    if variant.allocation_mode == "topsis":
+        return _replace_portfolio_with_topsis_baseline(execution=execution, config=variant.config)
     raise ValueError(f"Unsupported benchmark allocation mode: {variant.allocation_mode}")
 
 
@@ -350,6 +405,117 @@ def _replace_portfolio_with_greedy_baseline(
         "pathway_summary": pathway_summary,
         "optimization_diagnostics": diagnostics,
     }
+
+
+def _replace_portfolio_with_score_column(
+    *,
+    execution: dict[str, object],
+    config: PlanningConfig,
+    score_column: str,
+    solver_status: str,
+    solver_backend: str,
+) -> dict[str, object]:
+    scored = execution["scored"].copy()
+    if score_column not in scored.columns:
+        raise ValueError(f"Cannot build comparator portfolio: missing score column '{score_column}'.")
+    scored["weighted_score_per_ton"] = pd.to_numeric(scored[score_column], errors="coerce").fillna(0.0)
+    scored["optimization_score_per_ton"] = scored["weighted_score_per_ton"]
+    scenario_constraints = execution["scenario_constraints"]
+    recommendations = execution["scenario_recommendations"]
+    constraint_map = scenario_constraints.set_index("scenario_name").to_dict("index")
+
+    allocation_rows: list[pd.DataFrame] = []
+    diagnostics_rows: list[dict[str, object]] = []
+    for scenario_name, frame in scored.groupby("scenario_name", dropna=False):
+        allocation = _documented_allocation_fallback(frame, constraint_map.get(scenario_name, {}), config)
+        if not allocation.empty:
+            allocation["scenario_name"] = scenario_name
+            allocation_rows.append(allocation)
+        diagnostics_rows.append(
+            {
+                "scenario_name": scenario_name,
+                "solver_status": solver_status,
+                "solver_backend": solver_backend,
+            }
+        )
+
+    portfolio_allocations = (
+        pd.concat(allocation_rows, ignore_index=True) if allocation_rows else pd.DataFrame()
+    )
+    diagnostics = pd.DataFrame(diagnostics_rows).sort_values("scenario_name").reset_index(drop=True)
+    portfolio_summary = build_portfolio_summary(portfolio_allocations, scenario_constraints)
+    scenario_summary = build_scenario_summary(
+        scored=scored,
+        recommendations=recommendations,
+        portfolio_summary=portfolio_summary,
+        diagnostics=diagnostics,
+    )
+    pathway_summary = build_pathway_summary(
+        scored=scored,
+        portfolio_allocations=portfolio_allocations,
+    )
+    return {
+        **execution,
+        "scored": scored,
+        "portfolio_allocations": portfolio_allocations,
+        "portfolio_summary": portfolio_summary,
+        "scenario_summary": scenario_summary,
+        "pathway_summary": pathway_summary,
+        "optimization_diagnostics": diagnostics,
+    }
+
+
+def _replace_portfolio_with_topsis_baseline(
+    *,
+    execution: dict[str, object],
+    config: PlanningConfig,
+) -> dict[str, object]:
+    scored = execution["scored"].copy()
+    scored["topsis_score"] = 0.0
+    utility_columns = [
+        "energy_utility",
+        "environment_utility",
+        "cost_utility",
+        "robustness_utility",
+        "evidence_utility",
+    ]
+    utility_weights = np.asarray(
+        [
+            float(config.energy_weight),
+            float(config.environment_weight),
+            float(config.cost_weight),
+            float(config.robustness_factor),
+            float(config.evidence_utility_factor),
+        ],
+        dtype=float,
+    )
+    if utility_weights.sum() <= 0.0:
+        utility_weights = np.ones(len(utility_columns), dtype=float)
+    utility_weights = utility_weights / utility_weights.sum()
+    for _, scenario_index in scored.groupby("scenario_name", dropna=False).groups.items():
+        scenario = scored.loc[scenario_index, utility_columns].apply(pd.to_numeric, errors="coerce").fillna(0.0)
+        norm = np.sqrt((scenario.to_numpy(dtype=float) ** 2).sum(axis=0))
+        norm[norm <= 0.0] = 1.0
+        weighted = scenario.to_numpy(dtype=float) / norm * utility_weights
+        ideal = weighted.max(axis=0)
+        anti_ideal = weighted.min(axis=0)
+        distance_to_ideal = np.sqrt(((weighted - ideal) ** 2).sum(axis=1))
+        distance_to_anti = np.sqrt(((weighted - anti_ideal) ** 2).sum(axis=1))
+        denominator = distance_to_ideal + distance_to_anti
+        closeness = np.divide(
+            distance_to_anti,
+            denominator,
+            out=np.zeros_like(distance_to_anti),
+            where=denominator > 0.0,
+        )
+        scored.loc[scenario_index, "topsis_score"] = closeness
+    return _replace_portfolio_with_score_column(
+        execution={**execution, "scored": scored},
+        config=config,
+        score_column="topsis_score",
+        solver_status="benchmark_topsis",
+        solver_backend="documented_topsis",
+    )
 
 
 def _run_bootstrap_benchmark_analysis(

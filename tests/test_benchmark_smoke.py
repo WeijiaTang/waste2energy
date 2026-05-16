@@ -28,6 +28,8 @@ def test_benchmark_suite_smoke(tmp_path):
     assert "no_evidence_penalty" in result["benchmark_variant_keys"]
     assert "classic_multiobjective_optimizer" in result["benchmark_variant_keys"]
     assert "greedy_weighted_score_heuristic" in result["benchmark_variant_keys"]
+    assert "mcda_weighted_sum_comparator" in result["benchmark_variant_keys"]
+    assert "topsis_comparator" in result["benchmark_variant_keys"]
     assert "uncertainty_penalty_max_interval" in result["benchmark_variant_keys"]
     assert "uncertainty_penalty_combined_only" in result["benchmark_variant_keys"]
 
@@ -51,6 +53,10 @@ def test_benchmark_suite_smoke(tmp_path):
     assert "portfolio_pathway_shift" in shifts.columns
     assert shifts["benchmark_variant"].ne("baseline_evidence_aware").all()
     assert "effect_significance_tier" in statistical_summary.columns
+    assert summary[summary["benchmark_variant"].eq("mcda_weighted_sum_comparator")]["allocation_mode"].eq(
+        "mcda_weighted_sum"
+    ).all()
+    assert summary[summary["benchmark_variant"].eq("topsis_comparator")]["allocation_mode"].eq("topsis").all()
     assert "pathway_shift_rate_ci_lower" in statistical_summary.columns
     assert "case_shift_rate_ci_upper" in statistical_summary.columns
     assert "delta_portfolio_score_mass_empirical_p_value" in statistical_summary.columns

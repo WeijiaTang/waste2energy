@@ -62,6 +62,10 @@ def build_candidate_score_frame(
     scored["cost_utility"] = 1.0 - _normalize(scored["planning_cost_intensity_proxy_or_real_per_ton"])
     scored["evidence_utility"] = _normalize(scored["evidence_based_weight"])
     scored = _attach_uncertainty_mode_score_diagnostics(scored, config)
+    scored["optimization_score_per_ton"] = pd.to_numeric(
+        scored["weighted_score_per_ton"],
+        errors="coerce",
+    ).fillna(0.0)
     scored["planning_score_scope"] = "scenario_local_optimizer"
     return scored.sort_values(
         ["planning_score", "planning_energy_intensity_mj_per_ton"],
@@ -239,6 +243,7 @@ def build_pyomo_model(
         scored,
         columns=(
             "weighted_score_per_ton",
+            "optimization_score_per_ton",
             "planning_energy_intensity_mj_per_ton",
             "planning_environment_intensity_kgco2e_per_ton",
             "planning_cost_intensity_proxy_or_real_per_ton",
@@ -258,7 +263,7 @@ def build_pyomo_model(
     model.total_cost = pyo.Var(domain=pyo.NonNegativeReals)
     model.total_carbon_load = pyo.Var(domain=pyo.NonNegativeReals)
 
-    score_coeff = scored["weighted_score_per_ton"].tolist()
+    score_coeff = scored["optimization_score_per_ton"].tolist()
     energy_coeff = scored["planning_energy_intensity_mj_per_ton"].tolist()
     environment_coeff = scored["planning_environment_intensity_kgco2e_per_ton"].tolist()
     cost_coeff = scored["planning_cost_intensity_proxy_or_real_per_ton"].tolist()
@@ -358,13 +363,14 @@ def _solve_with_scipy_milp(
         scored,
         columns=(
             "weighted_score_per_ton",
+            "optimization_score_per_ton",
             "planning_carbon_load_kgco2e_per_ton",
         ),
         context="scipy milp assembly",
     )
 
     cost_vector = np.zeros(total_vars, dtype=float)
-    cost_vector[:n_cases] = -pd.to_numeric(scored["weighted_score_per_ton"], errors="coerce").to_numpy()
+    cost_vector[:n_cases] = -pd.to_numeric(scored["optimization_score_per_ton"], errors="coerce").to_numpy()
 
     lower_bounds = np.zeros(total_vars, dtype=float)
     upper_bounds = np.ones(total_vars, dtype=float)
@@ -480,7 +486,7 @@ def _documented_allocation_fallback(
     config: "PlanningConfig",
 ) -> pd.DataFrame:
     ordered = scored.sort_values(
-        ["weighted_score_per_ton", "planning_energy_intensity_mj_per_ton"],
+        ["optimization_score_per_ton", "planning_energy_intensity_mj_per_ton"],
         ascending=[False, False],
     ).copy()
     effective_budget = _required_constraint_value(scenario_constraint, "effective_processing_budget_ton_per_year")
@@ -489,7 +495,11 @@ def _documented_allocation_fallback(
     carbon_budget = _carbon_budget(scored, scenario_constraint, config)
     _require_numeric_columns(
         ordered,
-        columns=("weighted_score_per_ton", "planning_energy_intensity_mj_per_ton", "planning_carbon_load_kgco2e_per_ton"),
+        columns=(
+            "optimization_score_per_ton",
+            "planning_energy_intensity_mj_per_ton",
+            "planning_carbon_load_kgco2e_per_ton",
+        ),
         context="documented allocation fallback",
     )
 
@@ -568,7 +578,7 @@ def _build_allocation_frame(
     result["allocated_carbon_load_kgco2e"] = (
         result["allocated_feed_ton_per_year"] * result["planning_carbon_load_kgco2e_per_ton"]
     )
-    result["allocated_score_mass"] = result["allocated_feed_ton_per_year"] * result["weighted_score_per_ton"]
+    result["allocated_score_mass"] = result["allocated_feed_ton_per_year"] * result["optimization_score_per_ton"]
     result = result.sort_values(
         ["allocated_score_mass", "allocated_feed_ton_per_year"],
         ascending=[False, False],

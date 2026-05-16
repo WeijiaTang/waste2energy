@@ -67,12 +67,14 @@ class SurrogateEvaluator:
         fallback_uncertainty_ratio: float = 0.10,
         allow_documented_fallback: bool = True,
         pathway_model_priorities: dict[str, tuple[str, ...]] | None = None,
+        minimum_artifact_test_r2: float | None = None,
     ) -> None:
         self.outputs_root = Path(outputs_root) if outputs_root else resolve_surrogate_outputs_dir()
         self.preferred_split_strategy = preferred_split_strategy
         self.fallback_split_strategy = fallback_split_strategy
         self.fallback_uncertainty_ratio = fallback_uncertainty_ratio
         self.allow_documented_fallback = allow_documented_fallback
+        self.minimum_artifact_test_r2 = minimum_artifact_test_r2
         self.pathway_model_priorities = {
             key: tuple(value) for key, value in (pathway_model_priorities or PATHWAY_MODEL_PRIORITIES).items()
         }
@@ -235,41 +237,40 @@ class SurrogateEvaluator:
         datasets = PATHWAY_DATASET_PREFERENCES.get(pathway, ())
         selected: SurrogateArtifact | None = None
 
-        if pathway != "htc":
-            for source_root, manifest_path in self._selected_manifest_candidates(pathway):
-                if not manifest_path.exists():
-                    continue
-                manifest = pd.read_csv(manifest_path)
-                subset = manifest[
-                    manifest["dataset_key"].isin(datasets) & manifest["target_column"].eq(target_column)
-                ].copy()
-                if subset.empty:
-                    continue
-                subset = self._rank_candidate_rows(
-                    subset,
-                    pathway=pathway,
-                    datasets=datasets,
-                    metric_columns=("selected_validation_r2", "selected_test_r2"),
-                )
-                if subset.empty:
-                    continue
+        for source_root, manifest_path in self._selected_manifest_candidates(pathway):
+            if not manifest_path.exists():
+                continue
+            manifest = pd.read_csv(manifest_path)
+            subset = manifest[
+                manifest["dataset_key"].isin(datasets) & manifest["target_column"].eq(target_column)
+            ].copy()
+            if subset.empty:
+                continue
+            subset = self._rank_candidate_rows(
+                subset,
+                pathway=pathway,
+                datasets=datasets,
+                metric_columns=("selected_validation_r2", "selected_test_r2"),
+            )
+            if subset.empty:
+                continue
+            preferred_subset = subset[
+                subset.get("artifact_role", pd.Series([""] * len(subset), index=subset.index)).astype(str)
+                == "selected_model_refit"
+            ]
+            if preferred_subset.empty:
                 preferred_subset = subset[
-                    subset.get("artifact_role", pd.Series([""] * len(subset), index=subset.index)).astype(str)
-                    == "selected_model_refit"
+                    subset.get("selection_status", pd.Series([""] * len(subset), index=subset.index))
+                    .astype(str)
+                    .str.startswith("selected_on_validation")
                 ]
-                if preferred_subset.empty:
-                    preferred_subset = subset[
-                        subset.get("selection_status", pd.Series([""] * len(subset), index=subset.index))
-                        .astype(str)
-                        .str.startswith("selected_on_validation")
-                    ]
-                if not preferred_subset.empty:
-                    subset = preferred_subset
-                best = subset.iloc[0]
-                artifact = self._build_artifact_from_selected_manifest(best, source_root=source_root)
-                if artifact is not None:
-                    selected = artifact
-                    break
+            if not preferred_subset.empty:
+                subset = preferred_subset
+            best = subset.iloc[0]
+            artifact = self._build_artifact_from_selected_manifest(best, source_root=source_root)
+            if artifact is not None:
+                selected = artifact
+                break
 
         if selected is not None:
             self._artifact_cache[cache_key] = selected
@@ -483,18 +484,38 @@ class SurrogateEvaluator:
         ].copy()
         if working.empty:
             return working
+        working = self._apply_minimum_test_r2_gate(working)
+        if working.empty:
+            return working
         working["_model_priority_rank"] = working[model_column].astype(str).map(
             lambda value: self._model_priority_rank(pathway=pathway, model_key=value)
         )
         sort_columns = ["_model_priority_rank"]
         ascending = [True]
         for metric_column in metric_columns:
-            working[f"_{metric_column}_sort"] = pd.to_numeric(working.get(metric_column), errors="coerce").fillna(-np.inf)
+            if metric_column in working.columns:
+                metric_values = pd.to_numeric(working[metric_column], errors="coerce")
+            else:
+                metric_values = pd.Series(np.nan, index=working.index, dtype=float)
+            working[f"_{metric_column}_sort"] = metric_values.fillna(-np.inf)
             sort_columns.append(f"_{metric_column}_sort")
             ascending.append(False)
         sort_columns.append(model_column)
         ascending.append(True)
         return working.sort_values(sort_columns, ascending=ascending).reset_index(drop=True)
+
+    def _apply_minimum_test_r2_gate(self, working: pd.DataFrame) -> pd.DataFrame:
+        if self.minimum_artifact_test_r2 is None:
+            return working
+        test_metric_column = None
+        for candidate in ("selected_test_r2", "test_r2", "reporting_test_r2"):
+            if candidate in working.columns:
+                test_metric_column = candidate
+                break
+        if test_metric_column is None:
+            return working
+        test_r2 = pd.to_numeric(working[test_metric_column], errors="coerce")
+        return working[test_r2.ge(float(self.minimum_artifact_test_r2)).fillna(False)].copy()
 
     def _model_priority_rank(self, *, pathway: str, model_key: str) -> int:
         priorities = self.pathway_model_priorities.get(pathway, ())
@@ -774,8 +795,12 @@ def build_surrogate_predictions(
     frame: pd.DataFrame,
     *,
     pathway_model_priorities: dict[str, tuple[str, ...]] | None = None,
+    minimum_artifact_test_r2: float | None = None,
 ) -> pd.DataFrame:
-    evaluator = SurrogateEvaluator(pathway_model_priorities=pathway_model_priorities)
+    evaluator = SurrogateEvaluator(
+        pathway_model_priorities=pathway_model_priorities,
+        minimum_artifact_test_r2=minimum_artifact_test_r2,
+    )
     predictions = evaluator.evaluate(frame)
     uncertainty_columns = [f"{target}_uncertainty_ratio" for target in SURROGATE_TARGETS]
     predictions["combined_uncertainty_ratio"] = predictions[

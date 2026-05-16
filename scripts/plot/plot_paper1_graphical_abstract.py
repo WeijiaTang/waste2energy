@@ -126,7 +126,7 @@ def build_graphical_abstract():
     ax.text(
         0.02,
         0.965,
-        "Evidence-qualified portfolio screening for mixed organic waste-to-energy management",
+        "Boundary-aware thermochemical portfolio screening for organic waste management",
         fontsize=13.5,
         fontweight="bold",
         color=OCEAN["ink"],
@@ -149,7 +149,7 @@ def build_graphical_abstract():
     w = 0.158
     xs = [0.025, 0.215, 0.405, 0.595, 0.785]
     stages = [
-        ("1 Literature cases", "prototype rows\nPyrolysis | HTC | AD", OCEAN["blue_bg"], OCEAN["blue"]),
+        ("1 Literature cases", "210 prototype rows\nPyrolysis | HTC\nAD reference", OCEAN["blue_bg"], OCEAN["blue"]),
         ("2 Evidence audit", "leave-study-out\nclaim strength tier", OCEAN["teal_bg"], OCEAN["mint"]),
         ("3 Planning candidates", "scenario-specific\nregional portfolios", OCEAN["gold_bg"], "#B7791F"),
         ("4 Constrained screen", "share, carbon and\npolicy guardrails", OCEAN["gray_bg"], "#475569"),
@@ -182,30 +182,30 @@ def build_graphical_abstract():
         (0.055, 0.265),
         0.275,
         0.135,
-        "Conservative baseline",
-        "pyrolysis-led screening anchor\nunder evidence-qualified credits",
+        "Declared boundary",
+        "asymmetric-credit screen\nnot a pathway ranking",
         fc="#FFF8F4",
         ec=OCEAN["coral"],
         title_color=OCEAN["coral"],
         fontsize=7.5,
     )
     _mini_bar(ax, 0.085, 0.225, 0.215, 0.035, [0.89, 0.11], ["#A44A3F", "#0B525B"], ["Pyrolysis", ""])
-    ax.text(0.192, 0.207, "small HTC diversifier in synchronized baseline outputs", ha="center", va="top", fontsize=6.6, color=OCEAN["muted"])
+    ax.text(0.192, 0.207, "small HTC share is portfolio-rule-induced", ha="center", va="top", fontsize=6.6, color=OCEAN["muted"])
 
-    # Boundary reversal card
+    # Boundary-regime card
     _round_box(
         ax,
         (0.365, 0.265),
         0.275,
         0.135,
         "Hydrochar-credit boundary",
-        "can reverse thermochemical\nportfolio identity to HTC",
+        "materially shifts HTC\nparticipation under gating",
         fc="#ECFDF8",
         ec=OCEAN["teal"],
         title_color=OCEAN["teal"],
         fontsize=7.5,
     )
-    _mini_bar(ax, 0.395, 0.225, 0.215, 0.035, [1.0], ["#0B525B"], ["HTC"])
+    _mini_bar(ax, 0.395, 0.225, 0.215, 0.035, [0.78, 0.22], ["#A44A3F", "#0B525B"], ["Pyrolysis", "HTC"])
     _tag(ax, 0.502, 0.207, "market evidence is decision-critical", fc=OCEAN["teal"], fontsize=6.7, width=0.22)
 
     # AD benchmark card
@@ -214,7 +214,7 @@ def build_graphical_abstract():
         (0.675, 0.265),
         0.275,
         0.135,
-        "AD benchmark",
+        "AD reference",
         "management-relevant but\nproxy/evidence-limited here",
         fc="#F4F8EC",
         ec=OCEAN["green"],
@@ -242,20 +242,20 @@ def build_graphical_abstract():
     # Footer legend
     legend_y = 0.095
     ax.text(0.025, legend_y, "Pathway colors:", fontsize=7.8, color=OCEAN["muted"], ha="left", va="center", fontweight="bold")
-    legend_items = [("Pyrolysis", "#A44A3F"), ("HTC", "#0B525B"), ("AD", "#6D8F3C"), ("Unselected / outside claim", "#E2E8F0")]
+    legend_items = [("Pyrolysis", "#A44A3F"), ("HTC", "#0B525B"), ("AD", "#6D8F3C")]
     lx = 0.15
     for label, color in legend_items:
         ax.add_patch(Rectangle((lx, legend_y - 0.012), 0.018, 0.024, facecolor=color, edgecolor="#CBD5E1", linewidth=0.5))
         ax.text(lx + 0.024, legend_y, label, fontsize=7.4, color=OCEAN["muted"], ha="left", va="center")
-        lx += 0.155 if label != "Unselected / outside claim" else 0.23
+        lx += 0.155
 
     ax.text(
-        0.975,
-        0.095,
+        0.50,
+        0.045,
         "Use: pre-feasibility screening and evidence-gap prioritization, not facility siting.",
-        fontsize=7.3,
+        fontsize=7.0,
         color=OCEAN["muted"],
-        ha="right",
+        ha="center",
         va="center",
     )
     return fig
