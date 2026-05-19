@@ -83,12 +83,17 @@ def test_targeted_ablations_export_reviewer_requested_outputs(tmp_path, monkeypa
     summary = pd.read_csv(result["summary_csv"])
     cap_diagnostics = pd.read_csv(result["cap_diagnostics_csv"])
     monte_carlo_summary = pd.read_csv(result["monte_carlo_summary_csv"])
-    assert {"economic_baseline", "surrogate_evidence_gate", "evidence_ladder_sensitivity", "constraint_mechanism"}.issubset(
-        set(summary["ablation_family"])
-    )
+    assert {
+        "economic_baseline",
+        "surrogate_evidence_gate",
+        "evidence_ladder_sensitivity",
+        "constraint_mechanism",
+        "objective_weight_sweep",
+    }.issubset(set(summary["ablation_family"]))
     assert {"no_product_credit_baseline", "symmetric_product_credit_baseline"}.issubset(
         set(summary["ablation_key"])
     )
+    assert {"equal_weight", "cost_high"}.issubset(set(summary["ablation_key"]))
     assert not monte_carlo_summary.empty
     assert not cap_diagnostics.empty
     assert "candidate_cap_artifact_flag" in cap_diagnostics.columns

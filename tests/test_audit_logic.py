@@ -6,6 +6,7 @@ import json
 import warnings
 
 import pandas as pd
+import pytest
 
 import waste2energy.manuscript_sync as manuscript_sync_module
 from waste2energy.audit import (
@@ -1062,6 +1063,105 @@ def test_build_ml_claim_flag_table_augments_leave_study_out_with_htc_benchmark_c
     assert row["claim_status"] == "weak"
 
 
+def test_build_ml_claim_flag_table_uses_benchmark_metric_from_manifest(monkeypatch, tmp_path):
+    monkeypatch.setattr("waste2energy.audit.BENCHMARK_OUTPUTS_DIR", tmp_path / "empty_benchmark")
+    strict_summary = pd.DataFrame(columns=["dataset_key", "target_column", "model_key", "test_r2"])
+    leave_summary = pd.DataFrame(
+        [
+            {
+                "dataset_key": "htc_direct",
+                "target_column": "energy_recovery_pct",
+                "model_key": "catboost",
+                "validation_r2": 0.16,
+                "test_r2": 0.004,
+                "test_rmse": 1.0,
+                "test_mae": 0.8,
+            }
+        ]
+    )
+    manifest = pd.DataFrame(
+        [
+            {
+                "dataset_key": "htc_direct",
+                "target_column": "energy_recovery_pct",
+                "selected_model_key": "catboost",
+                "selection_metric_name": "validation_r2",
+                "selection_metric_value": 0.16,
+                "benchmark_test_r2": 0.004,
+                "selected_test_r2": -0.226,
+                "benchmark_test_rmse": 1.0,
+                "selected_test_rmse": 2.0,
+                "benchmark_test_mae": 0.8,
+                "selected_test_mae": 1.8,
+            }
+        ]
+    )
+    strict_summary_path = tmp_path / "strict_summary.csv"
+    leave_summary_path = tmp_path / "leave_summary.csv"
+    manifest_path = tmp_path / "selected_leave.csv"
+    strict_summary.to_csv(strict_summary_path, index=False)
+    leave_summary.to_csv(leave_summary_path, index=False)
+    manifest.to_csv(manifest_path, index=False)
+
+    result = build_ml_claim_flag_table(
+        {"strict_group": strict_summary_path, "leave_study_out": leave_summary_path},
+        {"leave_study_out": manifest_path},
+    )
+
+    row = result.loc[result["summary_label"] == "leave_study_out"].iloc[0]
+    assert row["best_test_r2"] == pytest.approx(0.004)
+    assert row["claim_status"] == "weak"
+
+
+def test_build_ml_claim_flag_table_keeps_summary_groups_missing_from_manifest(monkeypatch, tmp_path):
+    monkeypatch.setattr("waste2energy.audit.BENCHMARK_OUTPUTS_DIR", tmp_path / "empty_benchmark")
+    strict_summary = pd.DataFrame(columns=["dataset_key", "target_column", "model_key", "test_r2"])
+    leave_summary = pd.DataFrame(
+        [
+            {
+                "dataset_key": "pyrolysis_direct",
+                "target_column": "product_char_yield_pct",
+                "model_key": "rf",
+                "validation_r2": 0.75,
+                "test_r2": 0.70,
+                "test_rmse": 1.0,
+                "test_mae": 0.8,
+            }
+        ]
+    )
+    manifest = pd.DataFrame(
+        [
+            {
+                "dataset_key": "htc_direct",
+                "target_column": "energy_recovery_pct",
+                "selected_model_key": "catboost",
+                "selection_metric_name": "validation_r2",
+                "selection_metric_value": 0.16,
+                "benchmark_test_r2": 0.004,
+                "selected_test_r2": -0.226,
+            }
+        ]
+    )
+    strict_summary_path = tmp_path / "strict_summary.csv"
+    leave_summary_path = tmp_path / "leave_summary.csv"
+    manifest_path = tmp_path / "selected_leave.csv"
+    strict_summary.to_csv(strict_summary_path, index=False)
+    leave_summary.to_csv(leave_summary_path, index=False)
+    manifest.to_csv(manifest_path, index=False)
+
+    result = build_ml_claim_flag_table(
+        {"strict_group": strict_summary_path, "leave_study_out": leave_summary_path},
+        {"leave_study_out": manifest_path},
+    )
+
+    pyrolysis = result[
+        result["dataset_key"].eq("pyrolysis_direct")
+        & result["target_column"].eq("product_char_yield_pct")
+    ].iloc[0]
+    assert pyrolysis["best_test_r2"] == pytest.approx(0.70)
+    assert pyrolysis["claim_status"] == "supportive"
+
+
 def test_build_ml_refit_provenance_summary_reports_complete_trace(tmp_path):
     run_config_path = tmp_path / "run_config.json"
     run_config_path.write_text(
@@ -1141,6 +1241,58 @@ def test_planning_ml_consistency_flags_high_risk(tmp_path):
 
     assert row["risk_tier"] == "high_risk"
     assert row["unsupported_allocation_share"] == 0.7
+
+
+def test_planning_ml_consistency_reports_surrogate_feature_imputation_share(tmp_path):
+    planning_dir = tmp_path / "planning_imputation"
+    planning_dir.mkdir()
+    pd.DataFrame(
+        [
+            {
+                "scenario_name": "baseline_region_case",
+                "pathway": "pyrolysis",
+                "portfolio_allocated_feed_share": 0.9,
+            },
+            {
+                "scenario_name": "baseline_region_case",
+                "pathway": "htc",
+                "portfolio_allocated_feed_share": 0.1,
+            },
+        ]
+    ).to_csv(planning_dir / "pathway_summary.csv", index=False)
+    pd.DataFrame(
+        [
+            {
+                "scenario_name": "baseline_region_case",
+                "pathway": "pyrolysis",
+                "allocated_feed_ton_per_year": 90.0,
+                "surrogate_support_level": "surrogate_supported",
+                "surrogate_feature_imputation_flag": "True",
+                "surrogate_imputed_feature_columns": "feedstock_hhv_mj_per_kg",
+            },
+            {
+                "scenario_name": "baseline_region_case",
+                "pathway": "htc",
+                "allocated_feed_ton_per_year": 10.0,
+                "surrogate_support_level": "surrogate_supported",
+                "surrogate_feature_imputation_flag": "False",
+                "surrogate_imputed_feature_columns": "",
+            },
+        ]
+    ).to_csv(planning_dir / "portfolio_allocations.csv", index=False)
+    reliability = pd.DataFrame(
+        [
+            {"pathway": "pyrolysis", "reliability_score": 0.5},
+            {"pathway": "htc", "reliability_score": 0.4},
+        ]
+    )
+
+    summary = build_planning_ml_consistency_summary(planning_dir, reliability)
+    row = summary.iloc[0]
+
+    assert row["surrogate_supported_allocation_share"] == pytest.approx(1.0)
+    assert row["surrogate_feature_imputed_allocation_share"] == pytest.approx(0.9)
+    assert row["surrogate_imputed_feature_columns"] == "feedstock_hhv_mj_per_kg"
 
 
 def test_planning_ml_consistency_separates_missing_mapping_from_unsupported(tmp_path):
@@ -1442,6 +1594,39 @@ def test_manuscript_sync_writes_macros_and_relabels_ad_status(tmp_path):
     assert "\\newcommand{\\PlanningResultsDominanceSentence}{" in macros_text
     assert "the constrained portfolio is now HTC-dominant" in macros_text
     assert "\\newcommand{\\PlanningADStatus}{AD-limited}" in macros_text
+
+
+def test_manuscript_sync_copies_canonical_planning_artifacts(tmp_path):
+    planning_dir = tmp_path / "planning_artifacts"
+    figures_dir = tmp_path / "figures_artifacts"
+    planning_dir.mkdir()
+    figures_dir.mkdir()
+    pd.DataFrame(
+        [
+            {
+                "scenario_name": "baseline_region_case",
+                "pathway": "htc",
+                "baseline_portfolio_share_pct": 11.1,
+            }
+        ]
+    ).to_csv(planning_dir / "main_results_table.csv", index=False)
+    pd.DataFrame(
+        [
+            {
+                "scenario_name": "baseline_region_case",
+                "pathway": "htc",
+                "baseline_portfolio_share_pct": 0.0,
+            }
+        ]
+    ).to_csv(figures_dir / "paper1_planning_results_table.csv", index=False)
+
+    manuscript_sync_module._sync_planning_result_artifacts(
+        planning_dir=planning_dir,
+        figures_dir=figures_dir,
+    )
+
+    synchronized = pd.read_csv(figures_dir / "paper1_planning_results_table.csv")
+    assert synchronized.loc[0, "baseline_portfolio_share_pct"] == pytest.approx(11.1)
 
 
 def test_manuscript_sync_writes_mixed_dominance_sentence_when_scenarios_diverge(tmp_path):

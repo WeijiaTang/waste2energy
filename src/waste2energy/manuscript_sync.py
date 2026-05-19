@@ -63,6 +63,7 @@ def sync_planning_summary_to_latex(
     pathway_summary = _read_csv_if_exists(planning_root / "pathway_summary.csv")
     main_results_table = _read_csv_if_exists(planning_root / "main_results_table.csv")
     optimization_diagnostics = _read_csv_if_exists(planning_root / "optimization_diagnostics.csv")
+    _sync_planning_result_artifacts(planning_dir=planning_root, figures_dir=figures_root)
 
     ad_selected = False
     ad_allocated_share = 0.0
@@ -212,6 +213,23 @@ def sync_planning_summary_to_latex(
         "abstract_rewritten": abstract_rewritten,
         "macros_path": str(macros_file),
     }
+
+
+def _sync_planning_result_artifacts(*, planning_dir: Path, figures_dir: Path) -> None:
+    """Copy canonical planning result artifacts into the manuscript table directory."""
+
+    figures_dir.mkdir(parents=True, exist_ok=True)
+    artifact_map = {
+        "main_results_table.csv": "paper1_planning_results_table.csv",
+        "main_results_visual_metrics_long.csv": "paper1_planning_visual_metrics_long.csv",
+        "main_results_visual_annotations.csv": "paper1_planning_visual_annotations.csv",
+        "main_results_visual_manifest.json": "paper1_planning_visual_manifest.json",
+        "recommendation_confidence_summary.csv": "paper1_recommendation_confidence_summary.csv",
+    }
+    for source_name, target_name in artifact_map.items():
+        source = planning_dir / source_name
+        if source.exists():
+            (figures_dir / target_name).write_text(source.read_text(encoding="utf-8"), encoding="utf-8")
 
 
 def _read_csv_if_exists(path: Path) -> pd.DataFrame:
@@ -2263,7 +2281,11 @@ def _render_evidence_ceiling_table(df: pd.DataFrame) -> str:
     )
 
 
-def _build_product_credit_sensitivity_table(*, planning_dir: Path) -> pd.DataFrame:
+def _build_product_credit_sensitivity_table(
+    *,
+    planning_dir: Path,
+    allow_replanning: bool = False,
+) -> pd.DataFrame:
     portfolio_allocations = _read_csv_if_exists(planning_dir / "portfolio_allocations.csv")
     stress_specs = [
         {
@@ -2301,7 +2323,7 @@ def _build_product_credit_sensitivity_table(*, planning_dir: Path) -> pd.DataFra
             "modifier": ("ad", None, 200.0),
         },
     ]
-    if not (planning_dir / "run_config.json").exists():
+    if not allow_replanning or not (planning_dir / "run_config.json").exists():
         return _build_product_credit_sensitivity_placeholder_table(
             portfolio_allocations=portfolio_allocations,
             stress_specs=stress_specs,

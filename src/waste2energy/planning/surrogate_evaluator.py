@@ -87,6 +87,7 @@ class SurrogateEvaluator:
         predictions["surrogate_prediction_status"] = ""
         predictions["surrogate_feature_imputation_flag"] = False
         predictions["surrogate_missing_feature_columns"] = ""
+        predictions["surrogate_imputed_feature_columns"] = ""
         predictions["surrogate_fallback_reason"] = ""
 
         for target in SURROGATE_TARGETS:
@@ -113,20 +114,30 @@ class SurrogateEvaluator:
                         )
                     )
                 merged_payload = target_payloads[0]
+                diagnostic_columns = [
+                    "surrogate_prediction_status",
+                    "surrogate_feature_imputation_flag",
+                    "surrogate_missing_feature_columns",
+                    "surrogate_imputed_feature_columns",
+                    "surrogate_fallback_reason",
+                ]
                 for payload in target_payloads[1:]:
-                    merge_columns = [
-                        "surrogate_prediction_status",
-                        "surrogate_feature_imputation_flag",
-                        "surrogate_missing_feature_columns",
-                        "surrogate_fallback_reason",
-                    ]
-                    payload = payload.drop(columns=[column for column in merge_columns if column in payload.columns])
+                    payload = payload.drop(columns=[column for column in diagnostic_columns if column in payload.columns])
                     merged_payload = merged_payload.merge(
                         payload,
                         on=["optimization_case_id", "pathway"],
                         how="left",
                         validate="one_to_one",
                     )
+                diagnostics = self._aggregate_target_diagnostics(target_payloads)
+                merged_payload = merged_payload.drop(
+                    columns=[column for column in diagnostic_columns if column in merged_payload.columns]
+                ).merge(
+                    diagnostics,
+                    on=["optimization_case_id", "pathway"],
+                    how="left",
+                    validate="one_to_one",
+                )
                 for column in merged_payload.columns:
                     if column in {"optimization_case_id", "pathway"}:
                         continue
@@ -181,6 +192,7 @@ class SurrogateEvaluator:
                 prediction_status="documented_fallback_missing_required_feature",
                 missing_feature_columns=materialized["missing_required_feature_columns"],
                 feature_imputation_flag=materialized["feature_imputation_flag"],
+                imputed_feature_columns=materialized["imputed_feature_columns"],
             )
 
         try:
@@ -199,6 +211,7 @@ class SurrogateEvaluator:
                     "surrogate_prediction_status": ["trained_surrogate_prediction"] * len(frame),
                     "surrogate_feature_imputation_flag": materialized["feature_imputation_flag"].to_numpy(),
                     "surrogate_missing_feature_columns": materialized["missing_required_feature_columns"].to_numpy(),
+                    "surrogate_imputed_feature_columns": materialized["imputed_feature_columns"].to_numpy(),
                     "surrogate_fallback_reason": [""] * len(frame),
                     f"predicted_{target_column}": mean_values,
                     f"{target_column}_ci_lower": lower,
@@ -227,7 +240,59 @@ class SurrogateEvaluator:
                 prediction_status="documented_fallback_model_load_failure",
                 missing_feature_columns=materialized["missing_required_feature_columns"],
                 feature_imputation_flag=materialized["feature_imputation_flag"],
+                imputed_feature_columns=materialized["imputed_feature_columns"],
             )
+
+    def _aggregate_target_diagnostics(self, payloads: list[pd.DataFrame]) -> pd.DataFrame:
+        base = payloads[0][["optimization_case_id", "pathway"]].copy()
+        rows: list[dict[str, object]] = []
+        for row_position in range(len(base)):
+            statuses = [
+                str(payload.iloc[row_position].get("surrogate_prediction_status", "") or "")
+                for payload in payloads
+            ]
+            trained_count = sum(status == "trained_surrogate_prediction" for status in statuses)
+            if trained_count == len(statuses):
+                aggregate_status = "trained_surrogate_prediction"
+            elif trained_count > 0 or any(status == "trained_surrogate_with_documented_fallback" for status in statuses):
+                aggregate_status = "trained_surrogate_with_documented_fallback"
+            else:
+                aggregate_status = next((status for status in statuses if status), "documented_static_fallback")
+
+            rows.append(
+                {
+                    "optimization_case_id": base.iloc[row_position]["optimization_case_id"],
+                    "pathway": base.iloc[row_position]["pathway"],
+                    "surrogate_prediction_status": aggregate_status,
+                    "surrogate_feature_imputation_flag": any(
+                        bool(payload.iloc[row_position].get("surrogate_feature_imputation_flag", False))
+                        for payload in payloads
+                    ),
+                    "surrogate_missing_feature_columns": self._join_diagnostic_values(
+                        payload.iloc[row_position].get("surrogate_missing_feature_columns", "")
+                        for payload in payloads
+                    ),
+                    "surrogate_imputed_feature_columns": self._join_diagnostic_values(
+                        payload.iloc[row_position].get("surrogate_imputed_feature_columns", "")
+                        for payload in payloads
+                    ),
+                    "surrogate_fallback_reason": self._join_diagnostic_values(
+                        payload.iloc[row_position].get("surrogate_fallback_reason", "")
+                        for payload in payloads
+                    ),
+                }
+            )
+        return pd.DataFrame(rows)
+
+    @staticmethod
+    def _join_diagnostic_values(values: object) -> str:
+        parts: list[str] = []
+        for value in values:
+            for part in str(value or "").split("|"):
+                cleaned = part.strip()
+                if cleaned and cleaned.lower() != "nan" and cleaned not in parts:
+                    parts.append(cleaned)
+        return "|".join(parts)
 
     def _resolve_artifact(self, *, pathway: str, target_column: str) -> SurrogateArtifact | None:
         cache_key = (pathway, target_column)
@@ -620,11 +685,13 @@ class SurrogateEvaluator:
     ) -> dict[str, pd.DataFrame | pd.Series]:
         records: list[dict[str, float]] = []
         missing_columns: list[str] = []
+        imputed_columns: list[str] = []
         feature_imputation_flags: list[bool] = []
 
         for _, row in frame.iterrows():
             record: dict[str, float] = {}
             missing_for_row: list[str] = []
+            imputed_for_row: list[str] = []
             manure_subtype = str(row.get("manure_subtype", "") or "").strip().lower()
             feedstock_group = str(row.get("feedstock_group", "") or "").strip().lower()
             row_origin = self._infer_row_origin(row)
@@ -632,10 +699,20 @@ class SurrogateEvaluator:
                 if feature_name in row.index:
                     numeric_value = pd.to_numeric(pd.Series([row[feature_name]]), errors="coerce").iloc[0]
                     if pd.isna(numeric_value):
-                        missing_for_row.append(feature_name)
-                        record[feature_name] = np.nan
+                        derived_value = self._derive_feature_value(row, feature_name)
+                        if derived_value is None:
+                            missing_for_row.append(feature_name)
+                            record[feature_name] = np.nan
+                        else:
+                            record[feature_name] = float(derived_value)
+                            imputed_for_row.append(feature_name)
                     else:
                         record[feature_name] = float(numeric_value)
+                    continue
+                derived_value = self._derive_feature_value(row, feature_name)
+                if derived_value is not None:
+                    record[feature_name] = float(derived_value)
+                    imputed_for_row.append(feature_name)
                     continue
                 if feature_name.startswith("feedstock_group_"):
                     record[feature_name] = (
@@ -654,13 +731,46 @@ class SurrogateEvaluator:
                 record[feature_name] = np.nan
             records.append(record)
             missing_columns.append("|".join(sorted(set(missing_for_row))))
-            feature_imputation_flags.append(bool(missing_for_row))
+            imputed_columns.append("|".join(sorted(set(imputed_for_row))))
+            feature_imputation_flags.append(bool(missing_for_row or imputed_for_row))
 
         return {
             "feature_frame": pd.DataFrame(records, index=frame.index),
             "missing_required_feature_columns": pd.Series(missing_columns, index=frame.index, dtype="object"),
+            "imputed_feature_columns": pd.Series(imputed_columns, index=frame.index, dtype="object"),
             "feature_imputation_flag": pd.Series(feature_imputation_flags, index=frame.index, dtype=bool),
         }
+
+    def _derive_feature_value(self, row: pd.Series, feature_name: str) -> float | None:
+        if feature_name != "feedstock_hhv_mj_per_kg":
+            return None
+        required = {
+            "feedstock_carbon_pct": "carbon",
+            "feedstock_hydrogen_pct": "hydrogen",
+            "feedstock_nitrogen_pct": "nitrogen",
+            "feedstock_oxygen_pct": "oxygen",
+            "feedstock_ash_pct": "ash",
+        }
+        values: dict[str, float] = {}
+        for column, key in required.items():
+            if column not in row.index:
+                return None
+            value = pd.to_numeric(pd.Series([row[column]]), errors="coerce").iloc[0]
+            if pd.isna(value):
+                return None
+            values[key] = float(value)
+        # Channiwala-Parikh/Dulong-style HHV estimate from ultimate analysis
+        # mass percentages. Sulfur is unavailable in the planning input and is
+        # therefore treated as zero. The derived value is used only to
+        # materialize a trained-surrogate feature and is flagged as imputed.
+        hhv = (
+            0.3491 * values["carbon"]
+            + 1.1783 * values["hydrogen"]
+            - 0.1034 * values["oxygen"]
+            - 0.0151 * values["nitrogen"]
+            - 0.0211 * values["ash"]
+        )
+        return float(hhv) if np.isfinite(hhv) and hhv > 0.0 else None
 
     def _infer_row_origin(self, row: pd.Series) -> str:
         source_kind = str(row.get("source_dataset_kind", "") or "").lower()
@@ -684,6 +794,7 @@ class SurrogateEvaluator:
         payload["surrogate_prediction_status"] = "documented_static_fallback"
         payload["surrogate_feature_imputation_flag"] = False
         payload["surrogate_missing_feature_columns"] = ""
+        payload["surrogate_imputed_feature_columns"] = ""
         payload["surrogate_fallback_reason"] = reason
         uncertainty_columns = []
         for target in SURROGATE_TARGETS:
@@ -713,7 +824,10 @@ class SurrogateEvaluator:
         prediction_status: str,
         missing_feature_columns: pd.Series,
         feature_imputation_flag: pd.Series,
+        imputed_feature_columns: pd.Series | None = None,
     ) -> pd.DataFrame:
+        if imputed_feature_columns is None:
+            imputed_feature_columns = pd.Series([""] * len(frame), index=frame.index, dtype="object")
         if target_column in frame.columns:
             values = pd.to_numeric(frame[target_column], errors="coerce")
         else:
@@ -749,6 +863,7 @@ class SurrogateEvaluator:
                 "surrogate_prediction_status": status,
                 "surrogate_feature_imputation_flag": feature_imputation_flag.to_numpy(),
                 "surrogate_missing_feature_columns": missing_feature_columns.to_numpy(),
+                "surrogate_imputed_feature_columns": imputed_feature_columns.to_numpy(),
                 "surrogate_fallback_reason": fallback_reason,
                 f"predicted_{target_column}": values.to_numpy(),
                 f"{target_column}_ci_lower": lower,
@@ -808,10 +923,16 @@ def build_surrogate_predictions(
     ].mean(axis=1, skipna=True)
     predictions["surrogate_mode"] = np.where(
         predictions["pathway"].isin(tuple(SUPPORTED_SURROGATE_PATHWAYS)),
-        np.where(
-            predictions["surrogate_prediction_status"].astype(str).str.startswith("trained_surrogate"),
-            "trained_surrogate",
-            "trained_surrogate_with_documented_fallback",
+        np.select(
+            [
+                predictions["surrogate_prediction_status"].astype(str).eq("trained_surrogate_prediction"),
+                predictions["surrogate_prediction_status"].astype(str).eq("trained_surrogate_with_documented_fallback"),
+            ],
+            [
+                "trained_surrogate",
+                "trained_surrogate_with_documented_fallback",
+            ],
+            default="trained_surrogate_with_documented_fallback",
         ),
         "documented_static_fallback",
     )

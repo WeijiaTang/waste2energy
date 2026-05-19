@@ -14,6 +14,15 @@ from .inputs import PlanningInputBundle, load_planning_input_bundle
 from .solve import PlanningConfig, execute_planning_pipeline
 
 ETA_SWEEP_VALUES = (0.0, 0.15, 0.30, 0.50, 0.75, 1.0)
+OBJECTIVE_WEIGHT_SWEEP = (
+    ("equal_weight", 1.0, 1.0, 1.0),
+    ("energy_low", 0.30, 0.35, 0.35),
+    ("energy_high", 0.50, 0.30, 0.20),
+    ("environment_low", 0.45, 0.25, 0.30),
+    ("environment_high", 0.30, 0.50, 0.20),
+    ("cost_low", 0.45, 0.40, 0.15),
+    ("cost_high", 0.30, 0.25, 0.45),
+)
 EVIDENCE_LADDER_PRESETS = {
     "mild": {
         "partial_surrogate_weight": 0.85,
@@ -157,6 +166,25 @@ def run_targeted_planning_ablations(
             ablation_key=preset_name,
             ablation_value=preset_name,
             note="Switches among pre-registered objective-weight presets to test whether pathway choice reflects management priorities rather than a fixed score weighting.",
+        )
+
+    for sweep_key, energy_weight, environment_weight, cost_weight in OBJECTIVE_WEIGHT_SWEEP:
+        sweep_config = config.copy_with_weights(
+            energy_weight=float(energy_weight),
+            environment_weight=float(environment_weight),
+            cost_weight=float(cost_weight),
+        )
+        _append_execution_rows(
+            rows,
+            allocation_frames,
+            execution=execute_planning_pipeline(bundle=bundle, config=sweep_config),
+            ablation_family="objective_weight_sweep",
+            ablation_key=sweep_key,
+            ablation_value=f"E={energy_weight:.2f};G={environment_weight:.2f};C={cost_weight:.2f}",
+            note=(
+                "Reviewer-facing perturbation of the declared screening coefficients; "
+                "weights are normalized internally and are not calibrated preference probabilities."
+            ),
         )
 
     for min_share in (0.0, 0.10, 0.20):

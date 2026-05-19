@@ -595,6 +595,8 @@ def build_planning_ml_consistency_summary(
             risk_tier = "managed_risk"
             risk_note = "Planning allocation remains broadly aligned with available pathway-level ML evidence."
         surrogate_supported_share = pd.NA
+        surrogate_feature_imputed_share = pd.NA
+        surrogate_imputed_feature_columns = ""
         surrogate_led_consistency = "not_evaluated"
         if not portfolio_allocations.empty and "scenario_name" in portfolio_allocations.columns:
             scenario_allocations = portfolio_allocations[
@@ -612,6 +614,17 @@ def build_planning_ml_consistency_summary(
                         pd.Series([""] * len(scenario_allocations), index=scenario_allocations.index),
                     ).astype(str).eq("surrogate_supported")
                     surrogate_supported_share = float(allocated_feed.loc[support_mask].sum() / total_feed)
+                    imputed_flag = scenario_allocations.get(
+                        "surrogate_feature_imputation_flag",
+                        pd.Series([False] * len(scenario_allocations), index=scenario_allocations.index),
+                    ).map(_coerce_bool_flag)
+                    imputed_columns = scenario_allocations.get(
+                        "surrogate_imputed_feature_columns",
+                        pd.Series([""] * len(scenario_allocations), index=scenario_allocations.index),
+                    ).fillna("").astype(str)
+                    imputed_mask = imputed_flag | imputed_columns.str.len().gt(0)
+                    surrogate_feature_imputed_share = float(allocated_feed.loc[imputed_mask].sum() / total_feed)
+                    surrogate_imputed_feature_columns = _join_pipe_values(imputed_columns)
                     surrogate_led_consistency = (
                         "consistent" if surrogate_supported_share >= 0.80 else "inconsistent"
                     )
@@ -626,6 +639,8 @@ def build_planning_ml_consistency_summary(
                 "unsupported_allocation_share": unsupported_mass,
                 "weak_allocation_share": weak_mass,
                 "surrogate_supported_allocation_share": surrogate_supported_share,
+                "surrogate_feature_imputed_allocation_share": surrogate_feature_imputed_share,
+                "surrogate_imputed_feature_columns": surrogate_imputed_feature_columns,
                 "surrogate_led_consistency": surrogate_led_consistency,
                 "risk_tier": risk_tier,
                 "risk_note": risk_note,
@@ -1552,12 +1567,14 @@ def _read_ml_summary_frame(path: Path, label: str) -> pd.DataFrame:
     primary = _read_csv_if_exists(path)
     if label != "leave_study_out":
         return primary
+    nested_primary = _read_csv_if_exists(
+        path.parent / "leave_study_out" / "traditional_ml_suite_summary_leave_study_out.csv"
+    )
     supplement = _read_csv_if_exists(BENCHMARK_OUTPUTS_DIR / "htc_model_compare_lso" / "traditional_ml_suite_summary_leave_study_out.csv")
-    if primary.empty:
-        return supplement
-    if supplement.empty:
-        return primary
-    combined = pd.concat([supplement, primary], ignore_index=True)
+    frames = [frame for frame in (supplement, primary, nested_primary) if not frame.empty]
+    if not frames:
+        return pd.DataFrame()
+    combined = pd.concat(frames, ignore_index=True)
     dedupe_columns = [column for column in ["dataset_key", "target_column", "model_key"] if column in combined.columns]
     if dedupe_columns:
         combined = combined.drop_duplicates(subset=dedupe_columns, keep="first")
@@ -1575,7 +1592,48 @@ def _selected_or_best_frame(frame: pd.DataFrame, selected_manifest: pd.DataFrame
                 "selected_test_mae": "selected_test_mae",
             }
         )
-        return manifest.reset_index(drop=True)
+        # Manifest files may contain both the model-selection benchmark metric
+        # and a later refit/holdout metric. Manuscript validation tables report
+        # benchmark_* metrics when present, so audit flags must use the same
+        # evidence source instead of mixing benchmark and refit values.
+        for target, candidates in {
+            "selected_test_r2": ("benchmark_test_r2", "reporting_test_r2", "selected_test_r2", "test_r2", "refit_test_r2"),
+            "selected_test_rmse": (
+                "benchmark_test_rmse",
+                "reporting_test_rmse",
+                "selected_test_rmse",
+                "test_rmse",
+                "refit_test_rmse",
+            ),
+            "selected_test_mae": (
+                "benchmark_test_mae",
+                "reporting_test_mae",
+                "selected_test_mae",
+                "test_mae",
+                "refit_test_mae",
+            ),
+        }.items():
+            manifest[target] = _coalesce_numeric_columns(manifest, candidates)
+        manifest = manifest.reset_index(drop=True)
+        if frame.empty or not {"dataset_key", "target_column"}.issubset(frame.columns):
+            return manifest
+        manifest_pairs = set(
+            zip(
+                manifest.get("dataset_key", pd.Series(dtype="object")).astype(str),
+                manifest.get("target_column", pd.Series(dtype="object")).astype(str),
+            )
+        )
+        frame_pairs = list(
+            zip(
+                frame["dataset_key"].astype(str),
+                frame["target_column"].astype(str),
+            )
+        )
+        missing_frame = frame[[pair not in manifest_pairs for pair in frame_pairs]].copy()
+        summary_selected = _selected_from_summary_frame(missing_frame)
+        if summary_selected is None or summary_selected.empty:
+            return manifest
+        return pd.concat([manifest, summary_selected], ignore_index=True, sort=False)
 
     summary_selected = _selected_from_summary_frame(frame)
     if summary_selected is not None and not summary_selected.empty:
@@ -1596,13 +1654,24 @@ def _selected_or_best_frame(frame: pd.DataFrame, selected_manifest: pd.DataFrame
     return fallback
 
 
+def _coalesce_numeric_columns(frame: pd.DataFrame, columns: tuple[str, ...]) -> pd.Series:
+    result = pd.Series(pd.NA, index=frame.index, dtype="Float64")
+    for column in columns:
+        if column not in frame.columns:
+            continue
+        values = pd.to_numeric(frame[column], errors="coerce")
+        result = result.where(result.notna(), values)
+    return result
+
+
 def _selected_from_summary_frame(frame: pd.DataFrame) -> pd.DataFrame | None:
     if frame.empty or "model_key" not in frame.columns:
         return None
 
     selected = pd.DataFrame()
     if "is_selected_model" in frame.columns:
-        selected = frame[frame["is_selected_model"].astype(bool)].copy()
+        selected_mask = frame["is_selected_model"].map(_coerce_bool_flag).fillna(False)
+        selected = frame[selected_mask].copy()
 
     if selected.empty and "selection_rank_within_dataset_target" in frame.columns:
         ranked = frame.copy()
@@ -1658,6 +1727,15 @@ def _selected_from_summary_frame(frame: pd.DataFrame) -> pd.DataFrame | None:
     if "selection_metric_value" not in selected.columns:
         selected["selection_metric_value"] = pd.to_numeric(selected.get("validation_r2"), errors="coerce")
     return selected.reset_index(drop=True)
+
+
+def _coerce_bool_flag(value: object) -> bool:
+    if isinstance(value, bool):
+        return value
+    if pd.isna(value):
+        return False
+    text = str(value).strip().lower()
+    return text in {"1", "true", "yes", "y", "selected"}
 
 
 def _pathway_from_dataset_key(dataset_key: object) -> str:
@@ -1845,6 +1923,16 @@ def _mode_or_default(series: pd.Series, default: str) -> str:
     if mode.empty:
         return default
     return str(mode.iloc[0])
+
+
+def _join_pipe_values(series: pd.Series) -> str:
+    values: list[str] = []
+    for raw_value in series.fillna("").astype(str):
+        for part in raw_value.split("|"):
+            cleaned = part.strip()
+            if cleaned and cleaned.lower() != "nan" and cleaned not in values:
+                values.append(cleaned)
+    return "|".join(values)
 
 
 def _normalize_surrogate_support_levels(frame: pd.DataFrame) -> pd.DataFrame:

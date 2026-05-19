@@ -86,6 +86,144 @@ def test_surrogate_evaluator_uses_documented_fallback_when_required_feature_is_m
     assert predictions.loc[0, "predicted_product_char_yield_pct"] == 30.0
 
 
+def test_surrogate_evaluator_derives_feedstock_hhv_from_ultimate_analysis(monkeypatch):
+    frame = pd.DataFrame(
+        [
+            {
+                "optimization_case_id": "case-1",
+                "pathway": "pyrolysis",
+                "feedstock_hhv_mj_per_kg": pd.NA,
+                "feedstock_carbon_pct": 44.831,
+                "feedstock_hydrogen_pct": 6.269,
+                "feedstock_nitrogen_pct": 2.941,
+                "feedstock_oxygen_pct": 35.081,
+                "feedstock_ash_pct": 10.581,
+                "product_char_yield_pct": 30.0,
+                "product_char_hhv_mj_per_kg": 20.0,
+                "energy_recovery_pct": 55.0,
+                "carbon_retention_pct": 40.0,
+                "source_dataset_kind": "planning_candidate",
+                "sample_id": "planning::001",
+            }
+        ]
+    )
+
+    evaluator = SurrogateEvaluator()
+    artifact = type(
+        "Artifact",
+        (),
+        {
+            "model_key": "rf",
+            "dataset_key": "pyrolysis_direct",
+            "split_strategy": "strict_group",
+            "feature_columns": ("feedstock_hhv_mj_per_kg",),
+            "model_path": None,
+            "metrics_path": None,
+            "calibration_predictions_path": None,
+        },
+    )()
+
+    class DummyModel:
+        def predict(self, feature_frame):
+            assert feature_frame["feedstock_hhv_mj_per_kg"].notna().all()
+            return [33.0] * len(feature_frame)
+
+    monkeypatch.setattr(evaluator, "_resolve_artifact", lambda **kwargs: artifact)
+    monkeypatch.setattr(evaluator, "_load_model", lambda _artifact: DummyModel())
+    monkeypatch.setattr(evaluator, "_estimate_prediction_interval", lambda _artifact: (1.0, 1.0, "test", 1))
+
+    predictions = evaluator.evaluate(frame)
+
+    assert predictions.loc[0, "surrogate_prediction_status"] == "trained_surrogate_prediction"
+    assert predictions.loc[0, "surrogate_feature_imputation_flag"]
+    assert predictions.loc[0, "surrogate_missing_feature_columns"] == ""
+    assert predictions.loc[0, "surrogate_imputed_feature_columns"] == "feedstock_hhv_mj_per_kg"
+    assert predictions.loc[0, "predicted_product_char_yield_pct"] == 33.0
+
+
+def test_surrogate_evaluator_downgrades_when_any_target_uses_fallback(monkeypatch):
+    frame = pd.DataFrame(
+        [
+            {
+                "optimization_case_id": "case-1",
+                "pathway": "pyrolysis",
+                "feedstock_moisture_pct": 72.0,
+                "product_char_yield_pct": 30.0,
+                "product_char_hhv_mj_per_kg": 20.0,
+                "energy_recovery_pct": 55.0,
+                "carbon_retention_pct": 40.0,
+                "source_dataset_kind": "planning_candidate",
+                "sample_id": "planning::001",
+            }
+        ]
+    )
+
+    evaluator = SurrogateEvaluator()
+
+    def artifact_for_target(*, target_column, **_kwargs):
+        feature_columns = (
+            ("feature_that_cannot_be_derived",)
+            if target_column == "product_char_hhv_mj_per_kg"
+            else ("feedstock_moisture_pct",)
+        )
+        return type(
+            "Artifact",
+            (),
+            {
+                "model_key": "rf",
+                "dataset_key": "pyrolysis_direct",
+                "split_strategy": "strict_group",
+                "feature_columns": feature_columns,
+                "model_path": None,
+                "metrics_path": None,
+                "calibration_predictions_path": None,
+            },
+        )()
+
+    class DummyModel:
+        def predict(self, feature_frame):
+            return [33.0] * len(feature_frame)
+
+    monkeypatch.setattr(evaluator, "_resolve_artifact", artifact_for_target)
+    monkeypatch.setattr(evaluator, "_load_model", lambda _artifact: DummyModel())
+    monkeypatch.setattr(evaluator, "_estimate_prediction_interval", lambda _artifact: (1.0, 1.0, "test", 1))
+
+    predictions = evaluator.evaluate(frame)
+
+    assert predictions.loc[0, "surrogate_prediction_status"] == "trained_surrogate_with_documented_fallback"
+    assert "feature_that_cannot_be_derived" in predictions.loc[0, "surrogate_missing_feature_columns"]
+    assert "missing_required_feature" in predictions.loc[0, "surrogate_fallback_reason"]
+    assert predictions.loc[0, "predicted_product_char_yield_pct"] == 33.0
+    assert predictions.loc[0, "predicted_product_char_hhv_mj_per_kg"] == 20.0
+
+
+def test_build_surrogate_predictions_keeps_partial_fallback_mode(monkeypatch):
+    frame = pd.DataFrame(
+        [{"optimization_case_id": "case-1", "pathway": "pyrolysis"}]
+    )
+
+    def fake_evaluate(self, _frame):
+        payload = pd.DataFrame(
+            [
+                {
+                    "optimization_case_id": "case-1",
+                    "pathway": "pyrolysis",
+                    "surrogate_prediction_status": "trained_surrogate_with_documented_fallback",
+                }
+            ]
+        )
+        for target in SURROGATE_TARGETS:
+            payload[f"{target}_uncertainty_ratio"] = 0.1
+            payload[f"{target}_prediction_source"] = "test"
+        return payload
+
+    monkeypatch.setattr(SurrogateEvaluator, "evaluate", fake_evaluate)
+
+    predictions = build_surrogate_predictions(frame)
+
+    assert predictions.loc[0, "surrogate_mode"] == "trained_surrogate_with_documented_fallback"
+
+
 def test_surrogate_evaluator_missing_target_value_keeps_uncertainty_fields_missing(monkeypatch):
     frame = pd.DataFrame(
         [

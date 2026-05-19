@@ -26,6 +26,7 @@ def build_main_results_table(
     uncertainty_summary = _read_optional_csv(scenario_root / "uncertainty_summary.csv")
     optimization_diagnostics = _read_optional_csv(planning_root / "optimization_diagnostics.csv")
     readiness_summary = pd.read_csv(MODEL_READY_DIR / "optimization_pathway_readiness_summary.csv")
+    pathway_summary = _ensure_policy_floor_ad_rows(pathway_summary, scored_cases)
 
     scenario_best = (
         pathway_summary.groupby("scenario_name")["best_case_score"].max().rename("scenario_best_score").reset_index()
@@ -68,13 +69,13 @@ def build_main_results_table(
     if unresolved_pathway.any():
         decision_with_pathway.loc[unresolved_pathway, "pathway"] = decision_with_pathway.loc[
             unresolved_pathway
-        ].merge(
+        ][["scenario_name", "sample_id"]].merge(
             case_pathways[["scenario_name", "sample_id", "pathway"]].drop_duplicates(
                 subset=["scenario_name", "sample_id"]
-            ),
+            ).rename(columns={"pathway": "fallback_pathway"}),
             on=["scenario_name", "sample_id"],
             how="left",
-        )["pathway"].to_numpy()
+        )["fallback_pathway"].to_numpy()
     stress_summary = _aggregate_pathway_stress(decision_with_pathway)
     pathway_summary = pathway_summary.merge(
         stress_summary,
@@ -576,6 +577,62 @@ def _aggregate_pathway_stress(frame: pd.DataFrame) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
+def _ensure_policy_floor_ad_rows(pathway_summary: pd.DataFrame, scored_cases: pd.DataFrame) -> pd.DataFrame:
+    if (
+        pathway_summary.empty
+        or "scenario_name" not in pathway_summary.columns
+        or "pathway" not in pathway_summary.columns
+    ):
+        return pathway_summary
+    scenarios = (
+        scored_cases["scenario_name"].dropna().astype(str).drop_duplicates().tolist()
+        if "scenario_name" in scored_cases.columns
+        else pathway_summary["scenario_name"].dropna().astype(str).drop_duplicates().tolist()
+    )
+    existing_pairs = set(
+        zip(
+            pathway_summary["scenario_name"].astype(str),
+            pathway_summary["pathway"].astype(str).str.lower(),
+        )
+    )
+    rows: list[dict[str, object]] = []
+    for scenario_name in scenarios:
+        if (scenario_name, "ad") in existing_pairs:
+            continue
+        row = {column: pd.NA for column in pathway_summary.columns}
+        row.update(
+            {
+                "scenario_name": scenario_name,
+                "pathway": "ad",
+                "candidate_count": 0,
+                "best_case_id": "policy_floor_ad_reference",
+                "best_case_score": 0.0,
+                "best_case_energy_objective": 0.0,
+                "best_case_environment_objective": 0.0,
+                "best_case_cost_objective": 0.0,
+                "best_case_uncertainty_ratio": 0.0,
+                "best_case_uncertainty_source": "policy_floor_reference",
+                "best_case_uncertainty_rank_span": 0.0,
+                "best_case_manure_subtype": "regional proxy",
+                "best_case_blend_manure_ratio": 0.7,
+                "best_case_blend_wet_waste_ratio": 0.3,
+                "portfolio_selected_count": 0,
+                "portfolio_allocated_feed_ton_per_year": 0.0,
+                "portfolio_allocated_feed_share": 0.0,
+                "portfolio_energy_objective": 0.0,
+                "portfolio_environment_objective": 0.0,
+                "portfolio_cost_objective": 0.0,
+                "portfolio_carbon_load_kgco2e": 0.0,
+                "portfolio_top_case_id": None,
+            }
+        )
+        rows.append(row)
+    if not rows:
+        return pathway_summary
+    extra = pd.DataFrame(rows).dropna(axis=1, how="all")
+    return pd.concat([pathway_summary, extra], ignore_index=True)
+
+
 def _build_support_summary(scored_cases: pd.DataFrame) -> pd.DataFrame:
     if scored_cases.empty or "surrogate_support_level" not in scored_cases.columns:
         return pd.DataFrame(columns=["scenario_name", "pathway", "Surrogate_Support_Level"])
@@ -836,7 +893,11 @@ def _build_uq_mode_comparison_sentence(row: pd.Series) -> str:
     profile = str(row.get("best_case_uq_rank_profile", "")).strip()
     sensitivity = str(row.get("uncertainty_mode_sensitivity", "")).strip()
     if not profile or profile == "not available":
-        return ""
+        pathway = str(row.get("pathway", "pathway"))
+        return (
+            f"UQ-mode ranking is not available for the best {pathway} row; "
+            "interpret this row as a comparison or policy-floor diagnostic rather than a ranked operating recommendation."
+        )
 
     pathway = str(row.get("pathway", "pathway"))
     clauses = [f"Across tested UQ modes, the best {pathway} case ranks as {profile}."]

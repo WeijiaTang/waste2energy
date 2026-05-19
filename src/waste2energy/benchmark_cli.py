@@ -48,6 +48,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="Run only the benchmark variants and skip Q1-facing targeted planning ablations.",
     )
     parser.add_argument(
+        "--only-targeted-ablations",
+        action="store_true",
+        help="Run only Q1-facing targeted planning ablations; useful for HPC restarts after benchmark variants finish.",
+    )
+    parser.add_argument(
         "--targeted-monte-carlo-replicates",
         type=int,
         default=48,
@@ -65,6 +70,12 @@ def build_parser() -> argparse.ArgumentParser:
 def main() -> int:
     parser = build_parser()
     args = parser.parse_args()
+    if args.skip_targeted_ablations and args.only_targeted_ablations:
+        print(
+            "--skip-targeted-ablations and --only-targeted-ablations cannot be used together.",
+            file=sys.stderr,
+        )
+        return 2
     try:
         base_config = PlanningConfig(
             optimization_method=args.optimization_method,
@@ -72,13 +83,15 @@ def main() -> int:
             pareto_point_count=0,
             enable_pareto_export=False,
         )
-        result = run_planning_benchmark_suite(
-            dataset_path=args.dataset_path or None,
-            output_dir=args.output_dir or None,
-            base_config=base_config,
-            bootstrap_replicates=args.bootstrap_replicates,
-            bootstrap_random_seed=args.bootstrap_random_seed,
-        )
+        result: dict[str, object] = {}
+        if not args.only_targeted_ablations:
+            result = run_planning_benchmark_suite(
+                dataset_path=args.dataset_path or None,
+                output_dir=args.output_dir or None,
+                base_config=base_config,
+                bootstrap_replicates=args.bootstrap_replicates,
+                bootstrap_random_seed=args.bootstrap_random_seed,
+            )
         if not args.skip_targeted_ablations:
             targeted_output_dir = (
                 str(Path(args.output_dir) / "targeted_planning_ablations")

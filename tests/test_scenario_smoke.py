@@ -6,6 +6,7 @@ import pandas as pd
 import pytest
 
 from waste2energy.planning.reporting import (
+    _build_uq_mode_comparison_sentence,
     _build_results_sentence,
     _classify_results_row,
     _format_blend_label,
@@ -157,6 +158,21 @@ def test_reporting_sentence_mentions_missing_allocated_share_for_selected_pathwa
     sentence = _build_results_sentence(row)
 
     assert "allocated-share value is not available" in sentence
+
+
+def test_uq_mode_sentence_is_explicit_when_rank_profile_unavailable():
+    sentence = _build_uq_mode_comparison_sentence(
+        pd.Series(
+            {
+                "pathway": "ad",
+                "best_case_uq_rank_profile": "not available",
+                "uncertainty_mode_sensitivity": "not evaluated",
+            }
+        )
+    )
+
+    assert "not available" in sentence
+    assert "policy-floor diagnostic" in sentence
 
 
 def test_reporting_blend_label_exposes_missing_blend_ratios():
