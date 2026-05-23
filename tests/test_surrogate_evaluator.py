@@ -139,6 +139,8 @@ def test_surrogate_evaluator_derives_feedstock_hhv_from_ultimate_analysis(monkey
     assert predictions.loc[0, "surrogate_missing_feature_columns"] == ""
     assert predictions.loc[0, "surrogate_imputed_feature_columns"] == "feedstock_hhv_mj_per_kg"
     assert predictions.loc[0, "predicted_product_char_yield_pct"] == 33.0
+    assert predictions.loc[0, "product_char_yield_pct_surrogate_evidence_gate"] == "unknown"
+    assert not bool(predictions.loc[0, "product_char_yield_pct_surrogate_can_support_optimization"])
 
 
 def test_surrogate_evaluator_downgrades_when_any_target_uses_fallback(monkeypatch):
@@ -377,6 +379,9 @@ def test_surrogate_evaluator_reads_refit_artifact_paths_from_selected_manifest(t
     assert artifact.model_path == model_path
     assert artifact.run_config_path == run_config_path
     assert artifact.feature_columns == ("feedstock_hhv_mj_per_kg", "feedstock_moisture_pct")
+    assert artifact.evidence_gate == "conditional_transfer"
+    assert artifact.can_support_optimization
+    assert artifact.artifact_test_r2 == 0.5
 
 
 def test_surrogate_evaluator_honors_dataset_preference_order_before_metric_ranking(tmp_path, monkeypatch):

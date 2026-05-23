@@ -27,8 +27,14 @@ def test_planning_baseline_smoke(tmp_path):
     scored_cases = pd.read_csv(output_dir / "scored_cases.csv")
     scenario_constraints = pd.read_csv(output_dir / "scenario_constraints.csv")
     planning_data_quality_summary = pd.read_csv(output_dir / "planning_data_quality_summary.csv")
+    planning_data_contract_summary = pd.read_csv(output_dir / "planning_data_contract_summary.csv")
+    planning_data_contract_warnings = pd.read_csv(output_dir / "planning_data_contract_warnings.csv")
+    planning_data_contract_rows = pd.read_csv(output_dir / "planning_data_contract_rows.csv")
     scenario_external_evidence = pd.read_csv(output_dir / "scenario_external_evidence.csv")
     run_config = json.loads((output_dir / "run_config.json").read_text(encoding="utf-8"))
+    reproducibility_manifest = json.loads(
+        (output_dir / "reproducibility_manifest.json").read_text(encoding="utf-8")
+    )
 
     assert "combined_uncertainty_ratio" in surrogate_predictions.columns
     assert surrogate_predictions["combined_uncertainty_ratio"].ge(0.0).all()
@@ -60,6 +66,17 @@ def test_planning_baseline_smoke(tmp_path):
     assert set(scored_cases["planning_carbon_unit_basis"]) == {"kgco2e_per_metric_ton"}
     assert scenario_external_evidence["evidence_source"].astype(str).str.len().gt(0).all()
     assert planning_data_quality_summary["evaluated_candidate_count"].gt(0).all()
+    assert "evidence_provenance" in planning_data_contract_rows.columns
+    assert set(planning_data_contract_rows["evidence_provenance"]) == {"scenario_expanded_candidate"}
+    all_rows_contract = planning_data_contract_summary[
+        planning_data_contract_summary["summary_scope"].eq("all_planning_rows")
+    ].iloc[0]
+    assert int(all_rows_contract["row_count"]) == 630
+    assert int(all_rows_contract["independent_observation_count"]) == 0
+    assert int(all_rows_contract["scenario_expanded_count"]) == 630
+    assert "scenario_expanded_rows_must_not_be_counted_as_independent_evidence" in set(
+        planning_data_contract_warnings["warning"]
+    )
     assert "baseline_emission_factor_kgco2e_per_metric_ton" in scenario_constraints.columns
     assert "baseline_emission_factor_source_unit" in scenario_constraints.columns
     assert "carbon_budget_basis_note" in scenario_constraints.columns
@@ -67,8 +84,13 @@ def test_planning_baseline_smoke(tmp_path):
         scenario_constraints["baseline_emission_factor_kgco2e_per_short_ton_source"]
     ).all()
     assert run_config["scenario_external_evidence_table_path"]
+    assert "data_contract_summary" in run_config
+    assert "data_contract_warnings" in run_config
     assert run_config["unit_registry"]["planning_mass_unit_basis"] == "metric_ton"
     assert run_config["planning_config"]["uncertainty_penalty_mode"] == "prefer_interval_mean"
+    assert reproducibility_manifest["command"] == "waste2energy-plan"
+    assert reproducibility_manifest["inputs"][0]["sha256"]
+    assert any(output["path"].endswith("scored_cases.csv") for output in reproducibility_manifest["outputs"])
     assert portfolio_allocations["allocated_feed_ton_per_year"].gt(0.0).all()
 
 

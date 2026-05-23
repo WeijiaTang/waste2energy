@@ -11,6 +11,11 @@ import numpy as np
 import pandas as pd
 
 from ..config import BENCHMARK_OUTPUTS_DIR, resolve_surrogate_outputs_dir
+from .evidence_gates import (
+    UNKNOWN,
+    annotate_surrogate_gate_columns,
+    classify_surrogate_transferability,
+)
 
 
 SURROGATE_TARGETS = (
@@ -55,6 +60,11 @@ class SurrogateArtifact:
     metrics_path: Path
     calibration_predictions_path: Path | None
     feature_columns: tuple[str, ...]
+    evidence_gate: str = UNKNOWN
+    evidence_reason: str = "missing_transferability_metric"
+    can_support_optimization: bool = False
+    can_support_screening: bool = False
+    artifact_test_r2: float | None = None
 
 
 class SurrogateEvaluator:
@@ -99,6 +109,10 @@ class SurrogateEvaluator:
             predictions[f"{target}_uncertainty_method"] = ""
             predictions[f"{target}_uncertainty_calibration_count"] = np.nan
             predictions[f"{target}_prediction_source"] = ""
+            predictions[f"{target}_surrogate_evidence_gate"] = ""
+            predictions[f"{target}_surrogate_evidence_reason"] = ""
+            predictions[f"{target}_surrogate_can_support_optimization"] = False
+            predictions[f"{target}_surrogate_artifact_test_r2"] = np.nan
 
         grouped = frame.groupby(frame["pathway"].astype(str).str.strip().str.lower(), dropna=False)
         for pathway, pathway_frame in grouped:
@@ -222,6 +236,22 @@ class SurrogateEvaluator:
                     f"{target_column}_uncertainty_calibration_count": [calibration_count] * len(frame),
                     f"{target_column}_prediction_source": [
                         f"surrogate:{artifact.model_key}:{artifact.dataset_key}:{artifact.split_strategy}"
+                    ]
+                    * len(frame),
+                    f"{target_column}_surrogate_evidence_gate": [
+                        getattr(artifact, "evidence_gate", UNKNOWN)
+                    ]
+                    * len(frame),
+                    f"{target_column}_surrogate_evidence_reason": [
+                        getattr(artifact, "evidence_reason", "missing_transferability_metric")
+                    ]
+                    * len(frame),
+                    f"{target_column}_surrogate_can_support_optimization": [
+                        bool(getattr(artifact, "can_support_optimization", False))
+                    ]
+                    * len(frame),
+                    f"{target_column}_surrogate_artifact_test_r2": [
+                        getattr(artifact, "artifact_test_r2", np.nan)
                     ]
                     * len(frame),
                 }
@@ -383,11 +413,19 @@ class SurrogateEvaluator:
                     "dataset_key": dataset_key,
                     "target_column": target_column,
                     "split_strategy": split_strategy,
+                    "selected_test_r2": row.get("selected_test_r2"),
+                    "test_r2": row.get("test_r2"),
+                    "reporting_test_r2": row.get("reporting_test_r2"),
+                    "surrogate_evidence_gate": row.get("surrogate_evidence_gate"),
+                    "surrogate_evidence_reason": row.get("surrogate_evidence_reason"),
+                    "surrogate_can_support_optimization": row.get("surrogate_can_support_optimization"),
+                    "surrogate_can_support_screening": row.get("surrogate_can_support_screening"),
                 }
             )
             return self._build_artifact_from_summary(payload, source_root=source_root)
 
         payload = json.loads(run_config_path.read_text(encoding="utf-8"))
+        evidence = _artifact_evidence_from_row(row)
         return SurrogateArtifact(
             pathway=self._infer_pathway_from_dataset(dataset_key),
             target_column=target_column,
@@ -403,6 +441,11 @@ class SurrogateEvaluator:
                 row.get("predictions_path"),
             ),
             feature_columns=tuple(payload.get("feature_columns", [])),
+            evidence_gate=evidence.evidence_gate,
+            evidence_reason=evidence.evidence_reason,
+            can_support_optimization=evidence.can_support_optimization,
+            can_support_screening=evidence.can_support_screening,
+            artifact_test_r2=evidence.artifact_test_r2,
         )
 
     def _build_artifact_from_summary(self, row: pd.Series, *, source_root: Path) -> SurrogateArtifact | None:
@@ -426,6 +469,7 @@ class SurrogateEvaluator:
             return None
 
         payload = json.loads(run_config_path.read_text(encoding="utf-8"))
+        evidence = _artifact_evidence_from_row(row)
         return SurrogateArtifact(
             pathway=self._infer_pathway_from_dataset(dataset_key),
             target_column=target_column,
@@ -437,6 +481,11 @@ class SurrogateEvaluator:
             metrics_path=metrics_path,
             calibration_predictions_path=predictions_path if predictions_path.exists() else None,
             feature_columns=tuple(payload.get("feature_columns", [])),
+            evidence_gate=evidence.evidence_gate,
+            evidence_reason=evidence.evidence_reason,
+            can_support_optimization=evidence.can_support_optimization,
+            can_support_screening=evidence.can_support_screening,
+            artifact_test_r2=evidence.artifact_test_r2,
         )
 
     def _load_model(self, artifact: SurrogateArtifact):
@@ -549,6 +598,7 @@ class SurrogateEvaluator:
         ].copy()
         if working.empty:
             return working
+        working = annotate_surrogate_gate_columns(working)
         working = self._apply_minimum_test_r2_gate(working)
         if working.empty:
             return working
@@ -572,15 +622,12 @@ class SurrogateEvaluator:
     def _apply_minimum_test_r2_gate(self, working: pd.DataFrame) -> pd.DataFrame:
         if self.minimum_artifact_test_r2 is None:
             return working
-        test_metric_column = None
-        for candidate in ("selected_test_r2", "test_r2", "reporting_test_r2"):
-            if candidate in working.columns:
-                test_metric_column = candidate
-                break
-        if test_metric_column is None:
-            return working
-        test_r2 = pd.to_numeric(working[test_metric_column], errors="coerce")
-        return working[test_r2.ge(float(self.minimum_artifact_test_r2)).fillna(False)].copy()
+        annotated = annotate_surrogate_gate_columns(
+            working,
+            min_r2_for_screening=float(self.minimum_artifact_test_r2),
+            min_r2_for_optimization=max(0.30, float(self.minimum_artifact_test_r2)),
+        )
+        return annotated[annotated["surrogate_can_support_screening"].fillna(False)].copy()
 
     def _model_priority_rank(self, *, pathway: str, model_key: str) -> int:
         priorities = self.pathway_model_priorities.get(pathway, ())
@@ -881,6 +928,18 @@ class SurrogateEvaluator:
                     0,
                 ),
                 f"{target_column}_prediction_source": prediction_source,
+                f"{target_column}_surrogate_evidence_gate": np.where(
+                    values.isna(),
+                    "unknown",
+                    "static_fallback",
+                ),
+                f"{target_column}_surrogate_evidence_reason": np.where(
+                    values.isna(),
+                    "missing_target_value",
+                    reason,
+                ),
+                f"{target_column}_surrogate_can_support_optimization": [False] * len(frame),
+                f"{target_column}_surrogate_artifact_test_r2": [np.nan] * len(frame),
             }
         )
 
@@ -943,6 +1002,51 @@ def build_surrogate_predictions(
         }
     )
     return predictions
+
+
+@dataclass(frozen=True)
+class _ArtifactEvidence:
+    evidence_gate: str
+    evidence_reason: str
+    can_support_optimization: bool
+    can_support_screening: bool
+    artifact_test_r2: float | None
+
+
+def _artifact_evidence_from_row(row: pd.Series) -> _ArtifactEvidence:
+    metric_value = None
+    for metric_column in ("selected_test_r2", "test_r2", "reporting_test_r2"):
+        if metric_column in row.index and pd.notna(row.get(metric_column)):
+            metric_value = row.get(metric_column)
+            break
+    fallback = classify_surrogate_transferability(metric_value, row.get("split_strategy", "unknown"))
+    raw_gate = row.get("surrogate_evidence_gate", fallback.status)
+    raw_reason = row.get("surrogate_evidence_reason", fallback.reason)
+    gate = str(raw_gate if pd.notna(raw_gate) and str(raw_gate).strip() else fallback.status)
+    reason = str(raw_reason if pd.notna(raw_reason) and str(raw_reason).strip() else fallback.reason)
+    can_support_optimization = _optional_bool(
+        row.get("surrogate_can_support_optimization"),
+        fallback.can_support_optimization,
+    )
+    can_support_screening = _optional_bool(
+        row.get("surrogate_can_support_screening"),
+        fallback.can_support_screening,
+    )
+    return _ArtifactEvidence(
+        evidence_gate=gate,
+        evidence_reason=reason,
+        can_support_optimization=bool(can_support_optimization),
+        can_support_screening=bool(can_support_screening),
+        artifact_test_r2=fallback.test_r2,
+    )
+
+
+def _optional_bool(value: object, default: bool) -> bool:
+    if value is None or pd.isna(value):
+        return default
+    if isinstance(value, str):
+        return value.strip().lower() in {"true", "1", "yes", "y"}
+    return bool(value)
 
 
 def _optional_path(*values: object) -> Path | None:
