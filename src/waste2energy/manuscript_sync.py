@@ -216,7 +216,12 @@ def sync_planning_summary_to_latex(
 
 
 def _sync_planning_result_artifacts(*, planning_dir: Path, figures_dir: Path) -> None:
-    """Copy canonical planning result artifacts into the manuscript table directory."""
+    """Copy thermochemical main-result artifacts into the manuscript table directory.
+
+    AD remains in the planning export for biological-reference diagnostics, but
+    manuscript-facing primary optimizer tables/figures are restricted to the
+    thermochemical pathways (pyrolysis and HTC).
+    """
 
     figures_dir.mkdir(parents=True, exist_ok=True)
     artifact_map = {
@@ -229,7 +234,22 @@ def _sync_planning_result_artifacts(*, planning_dir: Path, figures_dir: Path) ->
     for source_name, target_name in artifact_map.items():
         source = planning_dir / source_name
         if source.exists():
-            (figures_dir / target_name).write_text(source.read_text(encoding="utf-8"), encoding="utf-8")
+            target = figures_dir / target_name
+            if source.suffix == ".csv":
+                frame = _read_csv_if_exists(source)
+                if "pathway" in frame.columns:
+                    frame = frame[frame["pathway"].astype(str).str.lower().isin(["pyrolysis", "htc"])].copy()
+                frame.to_csv(target, index=False)
+            elif source.suffix == ".json":
+                payload = json.loads(source.read_text(encoding="utf-8"))
+                csv_target = figures_dir / "paper1_planning_results_table.csv"
+                if csv_target.exists():
+                    payload["row_count"] = int(len(_read_csv_if_exists(csv_target)))
+                    payload["primary_pathway_scope"] = "thermochemical_only_pyrolysis_htc"
+                    payload["ad_reporting_scope"] = "biological_reference_policy_floor_diagnostics"
+                target.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+            else:
+                target.write_text(source.read_text(encoding="utf-8"), encoding="utf-8")
 
 
 def _read_csv_if_exists(path: Path) -> pd.DataFrame:
@@ -493,7 +513,7 @@ def _build_planning_uq_narrative(
         }
 
     selected = (
-        main_results_table[main_results_table["selected_in_baseline_portfolio"].fillna(False).astype(bool)].copy()
+        main_results_table[_coerce_bool_series(main_results_table["selected_in_baseline_portfolio"])].copy()
         if "selected_in_baseline_portfolio" in main_results_table.columns
         else pd.DataFrame()
     )
@@ -809,6 +829,19 @@ def _target_display(target_column: str) -> str:
     return TARGET_DISPLAY.get(str(target_column).strip(), str(target_column).replace("_", " "))
 
 
+def _hhv_dominance_display(conclusion: object) -> str:
+    value = str(conclusion or "").strip()
+    mapping = {
+        "not_pathway_dominant": "Pathway-stable",
+        "not_pathway_dominant_but_case_sensitive": "Pathway-stable; selected cases can switch",
+        "limited_share_sensitivity_not_pathway_dominant": "Small share shifts; pathway-stable",
+        "potentially_pathway_dominant": "Potentially pathway-dominant",
+        "not_evaluated": "Not evaluated",
+        "unavailable": "Unavailable",
+    }
+    return mapping.get(value, value.replace("_", " ") if value else "--")
+
+
 def _uq_mode_display(mode: str) -> str:
     mapping = {
         "prefer_interval_mean": "interval-mean",
@@ -1088,6 +1121,10 @@ def _write_priority_manuscript_tables(
         "surrogate_validation_tex": figures_dir / "paper1_surrogate_validation_table.tex",
         "transfer_support_csv": figures_dir / "paper1_transfer_support_table.csv",
         "transfer_support_tex": figures_dir / "paper1_transfer_support_table.tex",
+        "claim_strength_csv": figures_dir / "paper1_claim_strength_table.csv",
+        "claim_strength_tex": figures_dir / "paper1_claim_strength_table.tex",
+        "core_boundary_regime_csv": figures_dir / "paper1_core_boundary_regime_table.csv",
+        "core_boundary_regime_tex": figures_dir / "paper1_core_boundary_regime_table.tex",
         "evidence_ceiling_csv": figures_dir / "paper1_evidence_ceiling_table.csv",
         "evidence_ceiling_tex": figures_dir / "paper1_evidence_ceiling_table.tex",
         "scenario_parameter_csv": figures_dir / "paper1_scenario_parameter_table.csv",
@@ -1096,8 +1133,12 @@ def _write_priority_manuscript_tables(
         "optimization_output_tex": figures_dir / "paper1_optimization_output_table.tex",
         "selected_candidate_audit_csv": figures_dir / "paper1_selected_candidate_audit_table.csv",
         "selected_candidate_audit_tex": figures_dir / "paper1_selected_candidate_audit_table.tex",
+        "selected_row_fallback_csv": figures_dir / "paper1_selected_row_fallback_table.csv",
+        "selected_row_fallback_tex": figures_dir / "paper1_selected_row_fallback_table.tex",
         "driver_decomposition_csv": figures_dir / "paper1_driver_decomposition_table.csv",
         "driver_decomposition_tex": figures_dir / "paper1_driver_decomposition_table.tex",
+        "objective_weight_sweep_csv": figures_dir / "paper1_objective_weight_sweep_table.csv",
+        "objective_weight_sweep_tex": figures_dir / "paper1_objective_weight_sweep_table.tex",
         "uq_sensitivity_csv": figures_dir / "paper1_uq_sensitivity_table.csv",
         "uq_sensitivity_tex": figures_dir / "paper1_uq_sensitivity_table.tex",
         "cost_boundary_csv": figures_dir / "paper1_cost_boundary_table.csv",
@@ -1125,6 +1166,20 @@ def _write_priority_manuscript_tables(
         "ad_credit_tex": figures_dir / "paper1_ad_credit_sensitivity_table.tex",
         "pathway_cap_csv": figures_dir / "paper1_pathway_cap_sensitivity_table.csv",
         "pathway_cap_tex": figures_dir / "paper1_pathway_cap_sensitivity_table.tex",
+        "hhv_imputation_sensitivity_csv": figures_dir / "paper1_hhv_imputation_sensitivity_table.csv",
+        "hhv_imputation_sensitivity_tex": figures_dir / "paper1_hhv_imputation_sensitivity_table.tex",
+        "hhv_replanning_sensitivity_csv": figures_dir / "paper1_hhv_replanning_sensitivity_table.csv",
+        "hhv_replanning_sensitivity_tex": figures_dir / "paper1_hhv_replanning_sensitivity_table.tex",
+        "hhv_dominance_audit_csv": figures_dir / "paper1_hhv_dominance_audit_table.csv",
+        "hhv_dominance_audit_tex": figures_dir / "paper1_hhv_dominance_audit_table.tex",
+        "surrogate_extrapolation_audit_csv": figures_dir / "paper1_surrogate_extrapolation_audit_table.csv",
+        "surrogate_extrapolation_audit_tex": figures_dir / "paper1_surrogate_extrapolation_audit_table.tex",
+        "ad_boundary_fairness_audit_csv": figures_dir / "paper1_ad_boundary_fairness_audit_table.csv",
+        "ad_boundary_fairness_audit_tex": figures_dir / "paper1_ad_boundary_fairness_audit_table.tex",
+        "binding_constraint_audit_csv": figures_dir / "paper1_binding_constraint_audit_table.csv",
+        "binding_constraint_audit_tex": figures_dir / "paper1_binding_constraint_audit_table.tex",
+        "duplicate_candidate_audit_csv": figures_dir / "paper1_duplicate_candidate_audit_table.csv",
+        "duplicate_candidate_audit_tex": figures_dir / "paper1_duplicate_candidate_audit_table.tex",
     }
 
     for src_name, dst_name in [
@@ -1168,6 +1223,29 @@ def _write_priority_manuscript_tables(
         encoding="utf-8",
     )
 
+    claim_strength = _build_claim_strength_table(audit_dir=audit_dir)
+    outputs["claim_strength_csv"].write_text(
+        claim_strength.to_csv(index=False),
+        encoding="utf-8",
+    )
+    outputs["claim_strength_tex"].write_text(
+        _render_claim_strength_table(claim_strength),
+        encoding="utf-8",
+    )
+
+    core_boundary_regime = _build_core_boundary_regime_table(
+        planning_dir=planning_dir,
+        benchmark_dir=benchmark_dir,
+    )
+    outputs["core_boundary_regime_csv"].write_text(
+        core_boundary_regime.to_csv(index=False),
+        encoding="utf-8",
+    )
+    outputs["core_boundary_regime_tex"].write_text(
+        _render_core_boundary_regime_table(core_boundary_regime),
+        encoding="utf-8",
+    )
+
     optimization_output = _build_optimization_output_table(planning_dir=planning_dir)
     outputs["optimization_output_csv"].write_text(
         optimization_output.to_csv(index=False),
@@ -1188,6 +1266,16 @@ def _write_priority_manuscript_tables(
         encoding="utf-8",
     )
 
+    selected_row_fallback = _build_selected_row_fallback_table(planning_dir=planning_dir)
+    outputs["selected_row_fallback_csv"].write_text(
+        selected_row_fallback.to_csv(index=False),
+        encoding="utf-8",
+    )
+    outputs["selected_row_fallback_tex"].write_text(
+        _render_selected_row_fallback_table(selected_row_fallback),
+        encoding="utf-8",
+    )
+
     driver_decomposition = _build_driver_decomposition_table(
         planning_dir=planning_dir,
         benchmark_dir=benchmark_dir,
@@ -1198,6 +1286,16 @@ def _write_priority_manuscript_tables(
     )
     outputs["driver_decomposition_tex"].write_text(
         _render_driver_decomposition_table(driver_decomposition),
+        encoding="utf-8",
+    )
+
+    objective_weight_sweep = _build_objective_weight_sweep_table(benchmark_dir=benchmark_dir)
+    outputs["objective_weight_sweep_csv"].write_text(
+        objective_weight_sweep.to_csv(index=False),
+        encoding="utf-8",
+    )
+    outputs["objective_weight_sweep_tex"].write_text(
+        _render_objective_weight_sweep_table(objective_weight_sweep),
         encoding="utf-8",
     )
 
@@ -1330,6 +1428,76 @@ def _write_priority_manuscript_tables(
             encoding="utf-8",
         )
 
+    hhv_imputation_sensitivity = _build_hhv_imputation_sensitivity_table(audit_dir=audit_dir)
+    outputs["hhv_imputation_sensitivity_csv"].write_text(
+        hhv_imputation_sensitivity.to_csv(index=False),
+        encoding="utf-8",
+    )
+    outputs["hhv_imputation_sensitivity_tex"].write_text(
+        _render_hhv_imputation_sensitivity_table(hhv_imputation_sensitivity),
+        encoding="utf-8",
+    )
+
+    hhv_replanning_sensitivity = _build_hhv_replanning_sensitivity_table(audit_dir=audit_dir)
+    outputs["hhv_replanning_sensitivity_csv"].write_text(
+        hhv_replanning_sensitivity.to_csv(index=False),
+        encoding="utf-8",
+    )
+    outputs["hhv_replanning_sensitivity_tex"].write_text(
+        _render_hhv_replanning_sensitivity_table(hhv_replanning_sensitivity),
+        encoding="utf-8",
+    )
+
+    hhv_dominance_audit = _build_hhv_dominance_audit_table(audit_dir=audit_dir)
+    outputs["hhv_dominance_audit_csv"].write_text(
+        hhv_dominance_audit.to_csv(index=False),
+        encoding="utf-8",
+    )
+    outputs["hhv_dominance_audit_tex"].write_text(
+        _render_hhv_dominance_audit_table(hhv_dominance_audit),
+        encoding="utf-8",
+    )
+
+    surrogate_extrapolation_audit = _build_surrogate_extrapolation_audit_table(audit_dir=audit_dir)
+    outputs["surrogate_extrapolation_audit_csv"].write_text(
+        surrogate_extrapolation_audit.to_csv(index=False),
+        encoding="utf-8",
+    )
+    outputs["surrogate_extrapolation_audit_tex"].write_text(
+        _render_surrogate_extrapolation_audit_table(surrogate_extrapolation_audit),
+        encoding="utf-8",
+    )
+
+    ad_boundary_fairness_audit = _build_ad_boundary_fairness_audit_table(audit_dir=audit_dir)
+    outputs["ad_boundary_fairness_audit_csv"].write_text(
+        ad_boundary_fairness_audit.to_csv(index=False),
+        encoding="utf-8",
+    )
+    outputs["ad_boundary_fairness_audit_tex"].write_text(
+        _render_ad_boundary_fairness_audit_table(ad_boundary_fairness_audit),
+        encoding="utf-8",
+    )
+
+    binding_constraint_audit = _build_binding_constraint_audit_table(audit_dir=audit_dir)
+    outputs["binding_constraint_audit_csv"].write_text(
+        binding_constraint_audit.to_csv(index=False),
+        encoding="utf-8",
+    )
+    outputs["binding_constraint_audit_tex"].write_text(
+        _render_binding_constraint_audit_table(binding_constraint_audit),
+        encoding="utf-8",
+    )
+
+    duplicate_candidate_audit = _build_duplicate_candidate_audit_table(audit_dir=audit_dir)
+    outputs["duplicate_candidate_audit_csv"].write_text(
+        duplicate_candidate_audit.to_csv(index=False),
+        encoding="utf-8",
+    )
+    outputs["duplicate_candidate_audit_tex"].write_text(
+        _render_duplicate_candidate_audit_table(duplicate_candidate_audit),
+        encoding="utf-8",
+    )
+
     return {key: str(value) for key, value in outputs.items()}
 
 
@@ -1379,6 +1547,459 @@ def _build_ad_evidence_tier_table() -> pd.DataFrame:
             "role_in_planning": role_lookup[tier],
         })
     return pd.DataFrame(rows)
+
+
+def _build_hhv_imputation_sensitivity_table(*, audit_dir: Path) -> pd.DataFrame:
+    frame = _read_csv_if_exists(audit_dir / "hhv_imputation_sensitivity.csv")
+    if frame.empty:
+        return pd.DataFrame(
+            [
+                {
+                    "scenario": "--",
+                    "pathway": "--",
+                    "stress_case": "unavailable",
+                    "allocated_share_pct": pd.NA,
+                    "baseline_hhv": pd.NA,
+                    "stressed_hhv": pd.NA,
+                    "evidence_tier": "unavailable",
+                }
+            ]
+        )
+    selected = frame[
+        frame.get("stress_case", pd.Series([""] * len(frame), index=frame.index))
+        .astype(str)
+        .isin(["composition-derived baseline", "HHV imputation -10%", "HHV imputation +10%"])
+    ].copy()
+    if selected.empty:
+        selected = frame.copy()
+    selected["scenario"] = selected["scenario_name"].astype(str).map(SCENARIO_DISPLAY).fillna(
+        selected["scenario_name"].astype(str)
+    )
+    selected["pathway"] = selected["pathway"].map(_pathway_display)
+    return selected.rename(
+        columns={
+            "baseline_composition_hhv_mj_per_kg": "baseline_hhv",
+            "stressed_hhv_mj_per_kg": "stressed_hhv",
+        }
+    )[
+        [
+            "scenario",
+            "pathway",
+            "stress_case",
+            "allocated_share_pct",
+            "baseline_hhv",
+            "stressed_hhv",
+            "evidence_tier",
+        ]
+    ].reset_index(drop=True)
+
+
+def _render_hhv_imputation_sensitivity_table(df: pd.DataFrame) -> str:
+    return _render_latex_table(
+        df,
+        columns=[
+            ("scenario", "Scenario"),
+            ("pathway", "Pathway"),
+            ("stress_case", "HHV stress"),
+            ("allocated_share_pct", "Affected share (\\%)"),
+            ("baseline_hhv", "Baseline HHV"),
+            ("stressed_hhv", "Stressed HHV"),
+            ("evidence_tier", "Evidence tier"),
+        ],
+        caption="Feedstock-HHV imputation sensitivity for selected surrogate-supported rows.",
+        label="tab:hhv-imputation-sensitivity",
+        column_format=r"l l >{\raggedright\arraybackslash}p{3.0cm} r r r >{\raggedright\arraybackslash}p{3.1cm}",
+        notes=(
+            "The stress rows perturb composition-derived feedstock_hhv_mj_per_kg inputs by \\(\\pm 10\\%\\). "
+            "They disclose dependence on an imputed key feature and do not constitute independent surrogate validation."
+        ),
+        formatters={
+            "allocated_share_pct": lambda value: f"{_as_float(value):.1f}",
+            "baseline_hhv": lambda value: f"{_as_float(value):.2f}" if pd.notna(value) else "--",
+            "stressed_hhv": lambda value: f"{_as_float(value):.2f}" if pd.notna(value) else "--",
+        },
+        font_size="\\tiny",
+    )
+
+
+def _build_hhv_replanning_sensitivity_table(*, audit_dir: Path) -> pd.DataFrame:
+    frame = _read_csv_if_exists(audit_dir / "hhv_replanning_sensitivity.csv")
+    if frame.empty:
+        return pd.DataFrame(
+            [
+                {
+                    "scenario": "--",
+                    "pathway": "--",
+                    "stress_case": "unavailable",
+                    "baseline_share_pct": pd.NA,
+                    "stressed_share_pct": pd.NA,
+                    "share_change_pct_point": pd.NA,
+                    "replanning_status": "unavailable",
+                }
+            ]
+        )
+    selected = frame[
+        frame.get("stress_case", pd.Series([""] * len(frame), index=frame.index))
+        .astype(str)
+        .isin(["HHV replanning -10%", "HHV replanning baseline-derived", "HHV replanning +10%"])
+    ].copy()
+    if selected.empty:
+        selected = frame.copy()
+    selected["scenario"] = selected["scenario_name"].astype(str).map(SCENARIO_DISPLAY).fillna(
+        selected["scenario_name"].astype(str)
+    )
+    selected["pathway"] = selected["pathway"].map(_pathway_display)
+    return selected[
+        [
+            "scenario",
+            "pathway",
+            "stress_case",
+            "baseline_share_pct",
+            "stressed_share_pct",
+            "share_change_pct_point",
+            "replanning_status",
+        ]
+    ].reset_index(drop=True)
+
+
+def _render_hhv_replanning_sensitivity_table(df: pd.DataFrame) -> str:
+    return _render_latex_table(
+        df,
+        columns=[
+            ("scenario", "Scenario"),
+            ("pathway", "Pathway"),
+            ("stress_case", "HHV replanning stress"),
+            ("baseline_share_pct", "Baseline share (\\%)"),
+            ("stressed_share_pct", "Replanned share (\\%)"),
+            ("share_change_pct_point", "$\\Delta$ share (pp)"),
+            ("replanning_status", "Status"),
+        ],
+        caption="True replanning sensitivity after perturbing composition-derived feedstock HHV.",
+        label="tab:hhv-replanning-sensitivity",
+        column_format=r"l l >{\raggedright\arraybackslash}p{3.0cm} r r r l",
+        notes=(
+            "Rows are regenerated by rerunning the surrogate-evaluated optimizer after explicitly materializing "
+            "feedstock_hhv_mj_per_kg at the stated perturbation. This tests portfolio stability under HHV-imputation stress."
+        ),
+        formatters={
+            "baseline_share_pct": lambda value: f"{_as_float(value):.1f}",
+            "stressed_share_pct": lambda value: f"{_as_float(value):.1f}",
+            "share_change_pct_point": lambda value: f"{_as_float(value):+.1f}",
+        },
+        font_size="\\tiny",
+    )
+
+
+def _build_hhv_dominance_audit_table(*, audit_dir: Path) -> pd.DataFrame:
+    frame = _read_csv_if_exists(audit_dir / "hhv_dominance_audit.csv")
+    if frame.empty:
+        return pd.DataFrame(
+            [
+                {
+                    "scenario": "--",
+                    "affected_imputed_share_pct": pd.NA,
+                    "max_abs_pathway_share_change_pct_point": pd.NA,
+                    "selected_case_changed": pd.NA,
+                    "hhv_dominance_conclusion": "Unavailable",
+                }
+            ]
+        )
+    working = frame.copy()
+    working["scenario"] = working["scenario_name"].astype(str).map(SCENARIO_DISPLAY).fillna(
+        working["scenario_name"].astype(str)
+    )
+    if "hhv_dominance_conclusion" not in working.columns:
+        working["hhv_dominance_conclusion"] = "unavailable"
+    working["hhv_dominance_conclusion"] = working["hhv_dominance_conclusion"].map(
+        _hhv_dominance_display
+    )
+    if "selected_case_changed" in working.columns:
+        working["selected_case_changed"] = working["selected_case_changed"].map(
+            lambda value: "yes" if _coerce_bool_flag(value) else "no"
+        )
+    columns = [
+        "scenario",
+        "affected_imputed_share_pct",
+        "max_abs_pathway_share_change_pct_point",
+        "selected_case_changed",
+        "hhv_dominance_conclusion",
+    ]
+    return working[[column for column in columns if column in working.columns]].reset_index(drop=True)
+
+
+def _render_hhv_dominance_audit_table(df: pd.DataFrame) -> str:
+    return _render_latex_table(
+        df,
+        columns=[
+            ("scenario", "Scenario"),
+            ("affected_imputed_share_pct", "HHV-imputed share (\\%)"),
+            ("max_abs_pathway_share_change_pct_point", "Max $|\\Delta|$ share (pp)"),
+            ("selected_case_changed", "Case switch"),
+            ("hhv_dominance_conclusion", "Conclusion"),
+        ],
+        caption="HHV-imputation dominance audit from true replanning stresses.",
+        label="tab:hhv-dominance-audit",
+        column_format=r"l r r l >{\raggedright\arraybackslash}p{4.2cm}",
+        notes=(
+            "The audit answers whether composition-derived feedstock HHV controls pathway selection. "
+            "Case switches are reported separately from pathway-share dominance."
+        ),
+        formatters={
+            "affected_imputed_share_pct": lambda value: f"{_as_float(value):.1f}",
+            "max_abs_pathway_share_change_pct_point": lambda value: f"{_as_float(value):.1f}",
+            "selected_case_changed": lambda value: "yes" if _coerce_bool_flag(value) else "no",
+        },
+        font_size="\\tiny",
+    )
+
+
+def _build_surrogate_extrapolation_audit_table(*, audit_dir: Path) -> pd.DataFrame:
+    frame = _read_csv_if_exists(audit_dir / "surrogate_extrapolation_audit.csv")
+    if frame.empty:
+        return pd.DataFrame(
+            [
+                {
+                    "scenario": "--",
+                    "pathway": "--",
+                    "allocated_share_pct": pd.NA,
+                    "min_leave_study_out_test_r2": pd.NA,
+                    "weakest_leave_study_out_claim_status": "unavailable",
+                    "within_training_range_all_features": pd.NA,
+                    "extrapolation_evidence_ceiling": "unavailable",
+                }
+            ]
+        )
+    working = frame.copy()
+    working["scenario"] = working["scenario_name"].astype(str).map(SCENARIO_DISPLAY).fillna(
+        working["scenario_name"].astype(str)
+    )
+    working["pathway"] = working["pathway"].map(_pathway_display)
+    columns = [
+        "scenario",
+        "pathway",
+        "allocated_share_pct",
+        "min_leave_study_out_test_r2",
+        "weakest_leave_study_out_claim_status",
+        "within_training_range_all_features",
+        "out_of_range_feature_count",
+        "extrapolation_evidence_ceiling",
+    ]
+    return working[[column for column in columns if column in working.columns]].reset_index(drop=True)
+
+
+def _render_surrogate_extrapolation_audit_table(df: pd.DataFrame) -> str:
+    return _render_latex_table(
+        df,
+        columns=[
+            ("scenario", "Scenario"),
+            ("pathway", "Pathway"),
+            ("allocated_share_pct", "Share (\\%)"),
+            ("min_leave_study_out_test_r2", "Min LSO $R^2$"),
+            ("weakest_leave_study_out_claim_status", "Weakest LSO"),
+            ("within_training_range_all_features", "In-range"),
+            ("out_of_range_feature_count", "OOR features"),
+            ("extrapolation_evidence_ceiling", "Claim ceiling"),
+        ],
+        caption="Surrogate extrapolation audit for selected thermochemical allocations.",
+        label="tab:surrogate-extrapolation-audit",
+        column_format=r"l l r r l l r >{\raggedright\arraybackslash}p{4.0cm}",
+        notes=(
+            "Leave-study-out performance and feature-range checks cap interpretation at screening-diagnostic scope; "
+            "they are not facility-level external validation."
+        ),
+        formatters={
+            "allocated_share_pct": lambda value: f"{_as_float(value):.1f}",
+            "min_leave_study_out_test_r2": lambda value: f"{_as_float(value):.2f}" if pd.notna(value) else "--",
+            "out_of_range_feature_count": lambda value: "--" if pd.isna(value) else f"{int(_as_float(value))}",
+        },
+        font_size="\\tiny",
+    )
+
+
+def _build_ad_boundary_fairness_audit_table(*, audit_dir: Path) -> pd.DataFrame:
+    frame = _read_csv_if_exists(audit_dir / "ad_boundary_fairness_audit.csv")
+    if frame.empty:
+        return pd.DataFrame(
+            [
+                {
+                    "scenario": "--",
+                    "primary_optimizer_ad_share_pct": pd.NA,
+                    "ad_min_10pct_floor_share_pct": pd.NA,
+                    "ad_min_20pct_floor_share_pct": pd.NA,
+                    "digestate_rng_credit_max_ad_share_pct": pd.NA,
+                    "ad_boundary_evidence_status": "unavailable",
+                    "ad_role_conclusion": "unavailable",
+                }
+            ]
+        )
+    working = frame.copy()
+    working["scenario"] = working["scenario_name"].astype(str).map(SCENARIO_DISPLAY).fillna(
+        working["scenario_name"].astype(str)
+    )
+    columns = [
+        "scenario",
+        "primary_optimizer_ad_share_pct",
+        "ad_min_10pct_floor_share_pct",
+        "ad_min_20pct_floor_share_pct",
+        "digestate_rng_credit_max_ad_share_pct",
+        "ad_policy_floor_feasible",
+        "ad_boundary_evidence_status",
+        "ad_role_conclusion",
+    ]
+    return working[[column for column in columns if column in working.columns]].reset_index(drop=True)
+
+
+def _render_ad_boundary_fairness_audit_table(df: pd.DataFrame) -> str:
+    return _render_latex_table(
+        df,
+        columns=[
+            ("scenario", "Scenario"),
+            ("primary_optimizer_ad_share_pct", "Primary AD (\\%)"),
+            ("ad_min_10pct_floor_share_pct", "10\\% floor AD (\\%)"),
+            ("ad_min_20pct_floor_share_pct", "20\\% floor AD (\\%)"),
+            ("digestate_rng_credit_max_ad_share_pct", "Max credit AD (\\%)"),
+            ("ad_policy_floor_feasible", "Floor feasible"),
+            ("ad_boundary_evidence_status", "Evidence status"),
+            ("ad_role_conclusion", "Conclusion"),
+        ],
+        caption="AD boundary-fairness audit separating evidence asymmetry from technology-inferiority claims.",
+        label="tab:ad-boundary-fairness-audit",
+        column_format=r"l r r r r l >{\raggedright\arraybackslash}p{2.5cm} >{\raggedright\arraybackslash}p{3.5cm}",
+        notes=(
+            "AD is retained as a biological-reference/policy-floor diagnostic. Zero primary share is interpreted as a "
+            "non-commensurate evidence/cost/revenue boundary choice, not as a thermochemical superiority verdict."
+        ),
+        formatters={
+            "primary_optimizer_ad_share_pct": lambda value: f"{_as_float(value):.1f}",
+            "ad_min_10pct_floor_share_pct": lambda value: f"{_as_float(value):.1f}",
+            "ad_min_20pct_floor_share_pct": lambda value: f"{_as_float(value):.1f}",
+            "digestate_rng_credit_max_ad_share_pct": lambda value: f"{_as_float(value):.1f}",
+        },
+        font_size="\\tiny",
+    )
+
+
+def _build_binding_constraint_audit_table(*, audit_dir: Path) -> pd.DataFrame:
+    frame = _read_csv_if_exists(audit_dir / "binding_constraint_audit.csv")
+    if frame.empty:
+        return pd.DataFrame([{"scenario": "--", "binding_constraints": "unavailable"}])
+    rows: list[dict[str, object]] = []
+    for _, row in frame.iterrows():
+        binding = []
+        for column, label in [
+            ("candidate_cap_binding", "candidate cap"),
+            ("subtype_cap_binding", "subtype cap"),
+            ("residual_carbon_constraint_binding", "carbon"),
+            ("min_distinct_subtypes_binding", "min-subtype"),
+            ("max_selected_binding", "max-selected"),
+        ]:
+            if str(row.get(column)).lower() in {"true", "1", "yes"}:
+                binding.append(label)
+        rows.append(
+            {
+                "scenario": SCENARIO_DISPLAY.get(str(row.get("scenario_name")), str(row.get("scenario_name"))),
+                "binding_constraints": ", ".join(binding) if binding else "none",
+                "baseline_profile": (
+                    f"P {_as_float(row.get('baseline_pyrolysis_share_pct')):.1f} / "
+                    f"H {_as_float(row.get('baseline_htc_share_pct')):.1f}"
+                ),
+                "cap_relaxed_profile": (
+                    f"P {_as_float(row.get('cap_relaxed_pyrolysis_share_pct')):.1f} / "
+                    f"H {_as_float(row.get('cap_relaxed_htc_share_pct')):.1f}"
+                ),
+                "pyrolysis_shift_pct_point": _as_float(row.get("cap_relaxed_pyrolysis_share_change_pct_point")),
+                "carbon_slack_ktco2e": _as_float(row.get("residual_carbon_slack_kgco2e")) / 1_000_000.0,
+                "interpretation": row.get("interpretation", ""),
+            }
+        )
+    return pd.DataFrame(rows)
+
+
+def _render_binding_constraint_audit_table(df: pd.DataFrame) -> str:
+    return _render_latex_table(
+        df,
+        columns=[
+            ("scenario", "Scenario"),
+            ("binding_constraints", "Binding constraints"),
+            ("baseline_profile", "Baseline"),
+            ("cap_relaxed_profile", "Cap relaxed"),
+            ("pyrolysis_shift_pct_point", "$\\Delta$P (pp)"),
+            ("carbon_slack_ktco2e", "Carbon slack (kt)"),
+        ],
+        caption="Binding-constraint audit for the exported thermochemical portfolios.",
+        label="tab:binding-constraint-audit",
+        column_format="l l l l r r",
+        notes=(
+            "The cap-relaxed profile relaxes candidate/subtype mechanics and disables subtype-diversity forcing in the "
+            "targeted ablation export; it is used to diagnose whether the 90/10-style composition is mechanically induced."
+        ),
+        formatters={
+            "pyrolysis_shift_pct_point": lambda value: f"{_as_float(value):+.1f}",
+            "carbon_slack_ktco2e": lambda value: f"{_as_float(value):.1f}",
+        },
+        font_size="\\tiny",
+    )
+
+
+def _build_duplicate_candidate_audit_table(*, audit_dir: Path) -> pd.DataFrame:
+    frame = _read_csv_if_exists(audit_dir / "duplicate_candidate_audit.csv")
+    if frame.empty:
+        return pd.DataFrame(
+            [
+                {
+                    "scenario": "--",
+                    "rows_in_group": 0,
+                    "allocated_share_pct": 0.0,
+                    "manure_subtypes": "",
+                    "operating_condition": "",
+                    "audit_finding": "unavailable",
+                }
+            ]
+        )
+    working = frame.copy()
+    working["scenario"] = working.get("scenario_name", pd.Series([""] * len(working), index=working.index)).astype(str).map(
+        SCENARIO_DISPLAY
+    ).fillna(working.get("scenario_name", pd.Series([""] * len(working), index=working.index)).astype(str))
+    if "audit_finding" in working.columns:
+        finding_display = {
+            "duplicate_operating_and_target_signature": "Same operating anchor and predicted targets",
+            "no_duplicate_operating_and_target_signature": "No duplicate signature detected",
+        }
+        working["audit_finding"] = working["audit_finding"].astype(str).map(
+            lambda value: finding_display.get(value, value.replace("_", " "))
+        )
+    columns = [
+        "scenario",
+        "rows_in_group",
+        "allocated_share_pct",
+        "manure_subtypes",
+        "operating_condition",
+        "audit_finding",
+    ]
+    return working[[column for column in columns if column in working.columns]].reset_index(drop=True)
+
+
+def _render_duplicate_candidate_audit_table(df: pd.DataFrame) -> str:
+    return _render_latex_table(
+        df,
+        columns=[
+            ("scenario", "Scenario"),
+            ("rows_in_group", "Rows"),
+            ("allocated_share_pct", "Share (\\%)"),
+            ("manure_subtypes", "Subtype labels"),
+            ("operating_condition", "Operating condition"),
+            ("audit_finding", "Finding"),
+        ],
+        caption="Duplicate selected-pyrolysis operating-condition and target-signature audit.",
+        label="tab:duplicate-candidate-audit",
+        column_format=r"l r r >{\raggedright\arraybackslash}p{2.5cm} >{\raggedright\arraybackslash}p{3.6cm} >{\raggedright\arraybackslash}p{3.0cm}",
+        notes=(
+            "Duplicate groups use rounded operating conditions and predicted targets. A positive finding means selected rows "
+            "should not be presented as independent thermochemical regimes merely because subtype labels differ."
+        ),
+        formatters={"allocated_share_pct": lambda value: f"{_as_float(value):.1f}"},
+        font_size="\\tiny",
+    )
 
 
 def _render_ad_evidence_tier_table(df: pd.DataFrame) -> str:
@@ -1532,6 +2153,29 @@ def _build_surrogate_validation_table(*, audit_dir: Path, benchmark_dir: Path) -
             claim_flags=claim_flags,
         ),
     ]
+    existing_keys = {
+        (
+            str(row.get("validation_tier")),
+            str(row.get("dataset_scope")),
+            str(row.get("target")),
+        )
+        for row in rows
+    }
+    for fallback_row in _build_surrogate_validation_rows_from_audit(
+        claim_flags=claim_flags,
+        summary_label="leave_study_out",
+        validation_tier="leave-study-out",
+        dataset_key="pyrolysis_direct",
+        dataset_scope_label="Pyrolysis direct observations",
+    ):
+        key = (
+            str(fallback_row.get("validation_tier")),
+            str(fallback_row.get("dataset_scope")),
+            str(fallback_row.get("target")),
+        )
+        if key not in existing_keys:
+            rows.append(fallback_row)
+            existing_keys.add(key)
     if not rows:
         return pd.DataFrame(
             [
@@ -1631,6 +2275,40 @@ def _build_surrogate_validation_rows_from_frame(
                 "validation_r2": validation_r2,
                 "test_r2": test_r2,
                 "interpretation": interpretation,
+            }
+        )
+    return rows
+
+
+def _build_surrogate_validation_rows_from_audit(
+    *,
+    claim_flags: pd.DataFrame,
+    summary_label: str,
+    validation_tier: str,
+    dataset_key: str,
+    dataset_scope_label: str,
+) -> list[dict[str, object]]:
+    if claim_flags.empty:
+        return []
+    default_series = pd.Series([""] * len(claim_flags), index=claim_flags.index, dtype="object")
+    subset = claim_flags[
+        claim_flags.get("summary_label", default_series).astype(str).eq(summary_label)
+        & claim_flags.get("dataset_key", default_series).astype(str).eq(dataset_key)
+    ].copy()
+    if subset.empty:
+        return []
+    rows: list[dict[str, object]] = []
+    for _, row in subset.iterrows():
+        validation_r2 = pd.to_numeric(pd.Series([row.get("selection_metric_value")]), errors="coerce").iloc[0]
+        rows.append(
+            {
+                "validation_tier": validation_tier,
+                "dataset_scope": dataset_scope_label,
+                "target": _target_display(str(row.get("target_column", ""))),
+                "best_model": _model_display_name(str(row.get("best_model_key", ""))),
+                "validation_r2": float(validation_r2) if pd.notna(validation_r2) else pd.NA,
+                "test_r2": _as_float(row.get("best_test_r2")),
+                "interpretation": str(row.get("claim_status", "")).strip() or "not evaluated",
             }
         )
     return rows
@@ -1794,6 +2472,135 @@ def _render_transfer_support_table(df: pd.DataFrame) -> str:
     )
 
 
+def _build_claim_strength_table(*, audit_dir: Path) -> pd.DataFrame:
+    consistency = _read_csv_if_exists(audit_dir / "planning_ml_consistency_summary.csv")
+    if not consistency.empty and "surrogate_supported_allocation_share" in consistency.columns:
+        min_supported = (
+            pd.to_numeric(consistency["surrogate_supported_allocation_share"], errors="coerce")
+            .fillna(0.0)
+            .min()
+            * 100.0
+        )
+    else:
+        min_supported = 0.0
+    support_basis = (
+        f"Selected allocations are {min_supported:.0f}% surrogate-supported in the synchronized audit"
+        if min_supported > 0
+        else "Selected-row audit and synchronized planning exports"
+    )
+    return pd.DataFrame(
+        [
+            {
+                "claim": "Pyrolysis receives most throughput under declared asymmetric credit plus diversification rules.",
+                "supported": "Yes, within boundary",
+                "evidence_basis": "Deterministic optimizer, boundary-regime diagnostics, and selected-row audit",
+                "limitation": "Depends on declared biochar/hydrochar accounting, HHV feature materialization for pyrolysis, and portfolio caps.",
+            },
+            {
+                "claim": "The deterministic selected rows are evaluated by trained surrogates.",
+                "supported": "Yes, with disclosure",
+                "evidence_basis": support_basis,
+                "limitation": "Feature imputation and weak cross-study transfer still cap interpretation; this is not plant-performance prediction.",
+            },
+            {
+                "claim": "HTC participation changes under symmetric/product-credit and stress regimes.",
+                "supported": "Yes, boundary-conditioned",
+                "evidence_basis": "Boundary-regime map and 256-replicate stress grid",
+                "limitation": "Hydrochar market evidence and leave-study-out transfer support remain uncertain.",
+            },
+            {
+                "claim": "The small baseline HTC share is standalone competitiveness evidence.",
+                "supported": "No",
+                "evidence_basis": "Candidate-cap and ranking-only diagnostics",
+                "limitation": "The share is an auxiliary portfolio-rule allocation.",
+            },
+            {
+                "claim": "AD is inferior to thermochemical pathways.",
+                "supported": "No",
+                "evidence_basis": "AD reference table and policy-floor diagnostics",
+                "limitation": "AD lacks a matched facility-level cost, RNG, digestate, leakage, and regional revenue model.",
+            },
+            {
+                "claim": "Results support facility siting or deployment selection.",
+                "supported": "No",
+                "evidence_basis": "Scope statement and cost-boundary table",
+                "limitation": "Transport networks, permitting, financing, market absorption, and site constraints are outside scope.",
+            },
+        ]
+    )
+
+
+def _render_claim_strength_table(df: pd.DataFrame) -> str:
+    return _render_latex_table(
+        df,
+        columns=[
+            ("claim", "Claim"),
+            ("supported", "Supported?"),
+            ("evidence_basis", "Evidence basis"),
+            ("limitation", "Limitation"),
+        ],
+        caption="Claim-strength table used to bound manuscript interpretation.",
+        label="tab:claim-strength",
+        column_format="p{4.0cm} p{2.3cm} p{3.6cm} X",
+        notes="The table separates supported screening statements from claims that are outside the current evidence boundary.",
+    )
+
+
+def _build_core_boundary_regime_table(*, planning_dir: Path, benchmark_dir: Path) -> pd.DataFrame:
+    planning_allocations = _read_csv_if_exists(planning_dir / "portfolio_allocations.csv")
+    ablation_dir = _resolve_targeted_ablation_dir(benchmark_dir)
+    targeted = _read_csv_if_exists(ablation_dir / "targeted_planning_ablations_summary.csv")
+    return pd.DataFrame(
+        [
+            {
+                "boundary_regime": "Declared asymmetric credit + diversification rule",
+                "baseline_region": _share_profile_from_allocations(planning_allocations, "baseline_region_case"),
+                "high_supply": _share_profile_from_allocations(planning_allocations, "high_supply_case"),
+                "policy_support": _share_profile_from_allocations(planning_allocations, "policy_support_case"),
+                "interpretation": "Reference row for the exported baseline economic boundary; subsequent rows report counterfactual changes relative to these scenario outcomes.",
+            },
+            {
+                "boundary_regime": "No coproduct credit",
+                "baseline_region": _share_profile_from_targeted(targeted, "economic_baseline", "no_product_credit_baseline", "baseline_region_case"),
+                "high_supply": _share_profile_from_targeted(targeted, "economic_baseline", "no_product_credit_baseline", "high_supply_case"),
+                "policy_support": _share_profile_from_targeted(targeted, "economic_baseline", "no_product_credit_baseline", "policy_support_case"),
+                "interpretation": "Credit removal changes the accounting boundary; read pathway changes as boundary-sensitive diagnostics, not as pathway-proof results.",
+            },
+            {
+                "boundary_regime": "Symmetric coproduct credit",
+                "baseline_region": _share_profile_from_targeted(targeted, "economic_baseline", "symmetric_product_credit_baseline", "baseline_region_case"),
+                "high_supply": _share_profile_from_targeted(targeted, "economic_baseline", "symmetric_product_credit_baseline", "high_supply_case"),
+                "policy_support": _share_profile_from_targeted(targeted, "economic_baseline", "symmetric_product_credit_baseline", "policy_support_case"),
+                "interpretation": "Matched hydrochar-credit accounting increases HTC participation in non-policy cases under this diagnostic boundary.",
+            },
+            {
+                "boundary_regime": "Pyrolysis maximum share 80%",
+                "baseline_region": _share_profile_from_targeted(targeted, "pathway_cap_sensitivity", "pyrolysis_max_share_080pct", "baseline_region_case"),
+                "high_supply": _share_profile_from_targeted(targeted, "pathway_cap_sensitivity", "pyrolysis_max_share_080pct", "high_supply_case"),
+                "policy_support": _share_profile_from_targeted(targeted, "pathway_cap_sensitivity", "pyrolysis_max_share_080pct", "policy_support_case"),
+                "interpretation": "Composition changes in all scenarios under an imposed pathway-cap stress; this is a policy-constraint diagnostic, not an empirical deployment constraint.",
+            },
+        ]
+    )
+
+
+def _render_core_boundary_regime_table(df: pd.DataFrame) -> str:
+    return _render_latex_table(
+        df,
+        columns=[
+            ("boundary_regime", "Boundary regime"),
+            ("baseline_region", "Baseline-region"),
+            ("high_supply", "High-supply"),
+            ("policy_support", "Policy-support"),
+            ("interpretation", "Interpretation"),
+        ],
+        caption="Co-primary boundary regimes used to interpret pathway allocation.",
+        label="tab:core-boundary-regimes",
+        column_format="p{3.0cm} p{2.6cm} p{2.6cm} p{2.5cm} X",
+        notes="These regimes are interpreted as boundary-conditioned screens rather than ranked technology outcomes.",
+    )
+
+
 def _build_optimization_output_table(*, planning_dir: Path) -> pd.DataFrame:
     portfolio_summary = _read_csv_if_exists(planning_dir / "portfolio_summary.csv")
     portfolio_allocations = _read_csv_if_exists(planning_dir / "portfolio_allocations.csv")
@@ -1860,6 +2667,92 @@ def _build_selected_candidate_audit_table(*, planning_dir: Path) -> pd.DataFrame
     return pd.DataFrame(rows)
 
 
+def _selected_prediction_status(row: pd.Series) -> str:
+    level = str(row.get("surrogate_support_level", "")).strip().lower()
+    mode = str(row.get("surrogate_mode", row.get("surrogate_prediction_status", ""))).strip().lower()
+    raw_imputed = row.get("surrogate_feature_imputation_flag", False)
+    if pd.isna(raw_imputed):
+        imputed = False
+    elif isinstance(raw_imputed, str):
+        imputed = raw_imputed.strip().lower() in {"true", "1", "yes", "y"}
+    else:
+        imputed = bool(raw_imputed)
+    if level == "surrogate_supported" or mode == "trained_surrogate":
+        return "surrogate, feature-imputed" if imputed else "surrogate"
+    if "fallback" in mode or "fallback" in level:
+        return "fallback"
+    if "proxy" in level or str(row.get("pathway", "")).strip().lower() == "ad":
+        return "proxy/reference"
+    return level or mode or "--"
+
+
+def _selected_prediction_source(row: pd.Series) -> str:
+    mode = str(row.get("surrogate_mode", row.get("surrogate_prediction_status", ""))).strip()
+    imputed_columns = str(row.get("surrogate_imputed_feature_columns", "")).strip()
+    if imputed_columns and imputed_columns.lower() != "nan":
+        return f"{mode or 'trained surrogate'}; imputed {imputed_columns}"
+    reason = str(row.get("surrogate_fallback_reason", "")).strip()
+    if reason and reason.lower() != "nan":
+        return reason
+    return mode or "trained surrogate with interval export"
+
+
+def _build_selected_row_fallback_table(*, planning_dir: Path) -> pd.DataFrame:
+    """Synchronize selected-row prediction status from the current portfolio export."""
+
+    portfolio_allocations = _read_csv_if_exists(planning_dir / "portfolio_allocations.csv")
+    if portfolio_allocations.empty:
+        return pd.DataFrame(
+            [
+                {
+                    "pathway": "--",
+                    "row": "--",
+                    "status": "--",
+                    "char_yield": 0.0,
+                    "char_hhv": 0.0,
+                    "energy_recovery": 0.0,
+                    "carbon_retention": 0.0,
+                    "rule": "Current portfolio allocation file unavailable.",
+                }
+            ]
+        )
+    working = portfolio_allocations.copy()
+    working["allocated_feed_ton_per_year"] = _numeric_column(
+        working,
+        "allocated_feed_ton_per_year",
+        default=0.0,
+    )
+    working = working[working["allocated_feed_ton_per_year"] > 0].copy()
+    if working.empty:
+        return pd.DataFrame()
+    working["_row_display"] = working.apply(
+        lambda row: _case_id_display(row.get("sample_id") or row.get("optimization_case_id")),
+        axis=1,
+    )
+    # Keep one row per selected candidate identity to avoid repeating the same
+    # prediction status across scenarios.
+    deduped = (
+        working.sort_values(["pathway", "_row_display", "scenario_name"])
+        .drop_duplicates(subset=["pathway", "_row_display"], keep="first")
+        .copy()
+    )
+    rows: list[dict[str, object]] = []
+    for _, row in deduped.iterrows():
+        rows.append(
+            {
+                "pathway": _pathway_display(str(row.get("pathway", ""))),
+                "row": row.get("_row_display", "--"),
+                "status": _selected_prediction_status(row),
+                "char_yield": _as_float(row.get("product_char_yield_pct")),
+                "char_hhv": _as_float(row.get("product_char_hhv_mj_per_kg")),
+                "energy_recovery": _as_float(row.get("energy_recovery_pct")),
+                "carbon_retention": _as_float(row.get("carbon_retention_pct")),
+                "rule": _selected_prediction_source(row),
+            }
+        )
+    return pd.DataFrame(rows)
+
+
 def _build_uq_sensitivity_table(*, planning_dir: Path) -> pd.DataFrame:
     diagnostics = _read_csv_if_exists(planning_dir / "optimization_diagnostics.csv")
     main_results = _read_csv_if_exists(planning_dir / "main_results_table.csv")
@@ -1868,7 +2761,7 @@ def _build_uq_sensitivity_table(*, planning_dir: Path) -> pd.DataFrame:
         diag = _scenario_frame_row(diagnostics, scenario_name)
         main = _scenario_frame(main_results, scenario_name)
         if not main.empty and "selected_in_baseline_portfolio" in main.columns:
-            selected = main[main["selected_in_baseline_portfolio"].fillna(False).astype(bool)].copy()
+            selected = main[_coerce_bool_series(main["selected_in_baseline_portfolio"])].copy()
         else:
             selected = pd.DataFrame()
         support_values = (
@@ -1922,6 +2815,37 @@ def _render_selected_candidate_audit_table(df: pd.DataFrame) -> str:
     )
 
 
+def _render_selected_row_fallback_table(df: pd.DataFrame) -> str:
+    return _render_latex_table(
+        df,
+        columns=[
+            ("pathway", "Pathway"),
+            ("row", "Row"),
+            ("status", "Prediction status"),
+            ("char_yield", "Char yield (\\%)"),
+            ("char_hhv", "Char HHV (MJ kg$^{-1}$)"),
+            ("energy_recovery", "Energy recovery (\\%)"),
+            ("carbon_retention", "Carbon retention (\\%)"),
+            ("rule", "Source or rule"),
+        ],
+        caption="Prediction status of unique candidate rows selected in the deterministic portfolio.",
+        label="tab:selected-row-fallbacks",
+        column_format="l l l r r r r X",
+        notes=(
+            "The table is synchronized from the current portfolio allocation export. "
+            "Feature-imputed rows use trained surrogate predictions after materializing the listed input "
+            "feature from available ultimate-analysis fields; this is disclosed separately from fallback-backed "
+            "target substitution."
+        ),
+        formatters={
+            "char_yield": lambda value: f"{_as_float(value):.1f}",
+            "char_hhv": lambda value: f"{_as_float(value):.1f}",
+            "energy_recovery": lambda value: f"{_as_float(value):.1f}",
+            "carbon_retention": lambda value: f"{_as_float(value):.1f}",
+        },
+    )
+
+
 def _build_driver_decomposition_table(*, planning_dir: Path, benchmark_dir: Path) -> pd.DataFrame:
     """Compact main-text diagnostic table for reviewer-requested allocation drivers."""
     planning_allocations = _read_csv_if_exists(planning_dir / "portfolio_allocations.csv")
@@ -1957,7 +2881,7 @@ def _build_driver_decomposition_table(*, planning_dir: Path, benchmark_dir: Path
             "baseline_region": _share_profile_from_benchmark(benchmark_allocations, "no_evidence_penalty", "baseline_region_case"),
             "high_supply": _share_profile_from_benchmark(benchmark_allocations, "no_evidence_penalty", "high_supply_case"),
             "policy_support": _share_profile_from_benchmark(benchmark_allocations, "no_evidence_penalty", "policy_support_case"),
-            "driver_reading": "Neutralizing evidence weights changes little in this run; this does not remove fallback dependence.",
+            "driver_reading": "Neutralizing evidence weights changes little in this run; this does not remove feature-imputation or transfer-evidence limits.",
         },
         {
             "diagnostic": "Robustness utility removed",
@@ -2122,6 +3046,95 @@ def _render_cost_boundary_table(df: pd.DataFrame) -> str:
     )
 
 
+def _build_objective_weight_sweep_table(*, benchmark_dir: Path) -> pd.DataFrame:
+    ablation_dir = _resolve_targeted_ablation_dir(benchmark_dir)
+    targeted = _read_csv_if_exists(ablation_dir / "targeted_planning_ablations_summary.csv")
+    if targeted.empty:
+        return pd.DataFrame(
+            [
+                {
+                    "scenario": "--",
+                    "tested_variants": 0,
+                    "pyrolysis_range_pct": "--",
+                    "htc_range_pct": "--",
+                    "pathway_sets": "--",
+                    "interpretation": "Objective-weight sweep unavailable.",
+                }
+            ]
+        )
+    sweep = targeted[
+        targeted.get("ablation_family", pd.Series([""] * len(targeted), index=targeted.index))
+        .astype(str)
+        .isin(["objective_weight_sweep", "objective_weight_sensitivity"])
+    ].copy()
+    if sweep.empty:
+        return pd.DataFrame(
+            [
+                {
+                    "scenario": "--",
+                    "tested_variants": 0,
+                    "pyrolysis_range_pct": "--",
+                    "htc_range_pct": "--",
+                    "pathway_sets": "--",
+                    "interpretation": "No objective-weight sweep rows were exported.",
+                }
+            ]
+        )
+    rows: list[dict[str, object]] = []
+    for scenario_name in SCENARIO_ORDER:
+        subset = sweep[sweep["scenario_name"].astype(str).eq(scenario_name)].copy()
+        if subset.empty:
+            continue
+        pyrolysis = pd.to_numeric(subset.get("pyrolysis_allocated_share_pct"), errors="coerce")
+        htc = pd.to_numeric(subset.get("htc_allocated_share_pct"), errors="coerce")
+        pathway_sets = sorted(
+            {
+                _selected_pathway_set_display(str(value))
+                for value in subset.get("selected_pathways", pd.Series([""] * len(subset), index=subset.index)).dropna()
+            }
+        )
+        pathway_set_text = "; ".join(pathway_sets) if pathway_sets else "--"
+        pyrolysis_stable = pyrolysis.notna().all() and pyrolysis.ge(80.0).all()
+        policy_only = scenario_name == "policy_support_case" and pathway_set_text == "pyrolysis"
+        if pyrolysis_stable or policy_only:
+            interpretation = "Pathway family stable across declared weight variants"
+        else:
+            interpretation = "Weight-sensitive pathway composition"
+        rows.append(
+            {
+                "scenario": SCENARIO_DISPLAY.get(scenario_name, scenario_name),
+                "tested_variants": int(len(subset)),
+                "pyrolysis_range_pct": _range_pct_display(pyrolysis),
+                "htc_range_pct": _range_pct_display(htc),
+                "pathway_sets": pathway_set_text,
+                "interpretation": interpretation,
+            }
+        )
+    return pd.DataFrame(rows)
+
+
+def _render_objective_weight_sweep_table(df: pd.DataFrame) -> str:
+    return _render_latex_table(
+        df,
+        columns=[
+            ("scenario", "Scenario"),
+            ("tested_variants", "Variants"),
+            ("pyrolysis_range_pct", "Pyrolysis range (\\%)"),
+            ("htc_range_pct", "HTC range (\\%)"),
+            ("pathway_sets", "Selected set(s)"),
+            ("interpretation", "Interpretation"),
+        ],
+        caption="Objective-weight sweep for declared energy, environmental, and cost coefficients.",
+        label="tab:objective-weight-sweep",
+        column_format=r"l r l l l >{\raggedright\arraybackslash}X",
+        notes=(
+            "Rows summarize pre-registered coefficient presets and normalized objective-weight sweeps. "
+            "They do not include the separate robustness-utility removal ablation in Table~\\ref{tab:driver-decomposition}."
+        ),
+        font_size="\\tiny",
+    )
+
+
 def _build_policy_cost_decomposition_table(*, planning_dir: Path) -> pd.DataFrame:
     allocations = _read_csv_if_exists(planning_dir / "portfolio_allocations.csv")
     if allocations.empty:
@@ -2186,7 +3199,9 @@ def _render_policy_cost_decomposition_table(df: pd.DataFrame) -> str:
         notes=(
             "The source net-cost term removes the explicitly modeled information premium, "
             "residual-carbon price charge, and uncertainty uplift from the reported planning "
-            "cost. This decomposition explains the policy-support cost jump inside the "
+            "cost. Near-zero final costs in the non-policy cases reflect this exported "
+            "row-level net-cost accounting and UQ uplift decomposition; they are not a "
+            "post hoc financial break-even constraint. This decomposition explains the policy-support cost jump inside the "
             "reported screening boundary and is not a universal techno-economic assessment."
         ),
         formatters={
@@ -2228,10 +3243,11 @@ def _build_evidence_ceiling_table(*, planning_dir: Path, audit_dir: Path) -> pd.
         surrogate_supported_share = 0.0
         if total_allocated > 0.0 and not scenario_allocations.empty:
             support_mask = scenario_allocations.get("is_surrogate_supported", pd.Series(False, index=scenario_allocations.index))
+            support_mask = _coerce_bool_series(support_mask, index=scenario_allocations.index)
             surrogate_supported_share = (
                 _as_float(
                     pd.to_numeric(
-                        scenario_allocations.loc[support_mask.astype(bool), "allocated_feed_ton_per_year"],
+                        scenario_allocations.loc[support_mask, "allocated_feed_ton_per_year"],
                         errors="coerce",
                     ).fillna(0.0).sum()
                 )
@@ -2609,6 +3625,8 @@ def _build_monte_carlo_uq_table(*, benchmark_dir: Path) -> pd.DataFrame:
                 }
             ]
         )
+    if "pathway" in summary.columns:
+        summary = summary[summary["pathway"].astype(str).str.lower().isin(["pyrolysis", "htc"])].copy()
     rows: list[dict[str, object]] = []
     for _, row in summary.iterrows():
         replicates = int(round(_as_float(row.get("monte_carlo_replicates")))) or 48
@@ -3270,7 +4288,25 @@ def _format_share_profile(pyrolysis_pct: float, htc_pct: float, ad_pct: float = 
         label, value = next(iter(active.items()))
         if value >= 99.5:
             return f"{label}-only"
-    return " / ".join(f"{label} {value:.0f}" for label, value in active.items())
+    return " / ".join(f"{label} {value:.1f}" for label, value in active.items())
+
+
+def _range_pct_display(values: pd.Series) -> str:
+    numeric = pd.to_numeric(values, errors="coerce").dropna()
+    if numeric.empty:
+        return "--"
+    minimum = float(numeric.min())
+    maximum = float(numeric.max())
+    if abs(maximum - minimum) < 0.05:
+        return f"{minimum:.1f}"
+    return f"{minimum:.1f}--{maximum:.1f}"
+
+
+def _selected_pathway_set_display(value: str) -> str:
+    parts = [part.strip().lower() for part in str(value or "").split("|") if part.strip()]
+    if not parts:
+        return "--"
+    return "+".join(_pathway_display(part) for part in sorted(parts))
 
 
 def _support_profile_display(frame: pd.DataFrame) -> str:
@@ -3452,6 +4488,22 @@ def _as_float(value: object) -> float:
     series = pd.to_numeric(pd.Series([value]), errors="coerce")
     parsed = series.iloc[0]
     return float(parsed) if pd.notna(parsed) else 0.0
+
+
+def _coerce_bool_flag(value: object) -> bool:
+    if isinstance(value, bool):
+        return value
+    if pd.isna(value):
+        return False
+    return str(value).strip().lower() in {"1", "true", "yes", "y", "selected"}
+
+
+def _coerce_bool_series(values: object, *, index: pd.Index | None = None) -> pd.Series:
+    if isinstance(values, pd.Series):
+        series = values.copy()
+    else:
+        series = pd.Series(values, index=index)
+    return series.map(_coerce_bool_flag)
 
 
 def _support_level_display(level: str) -> str:

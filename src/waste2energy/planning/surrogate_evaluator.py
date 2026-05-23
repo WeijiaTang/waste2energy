@@ -10,7 +10,7 @@ import joblib
 import numpy as np
 import pandas as pd
 
-from ..config import BENCHMARK_OUTPUTS_DIR, resolve_surrogate_outputs_dir
+from ..config import BENCHMARK_OUTPUTS_DIR, OUTPUTS_ROOT, resolve_surrogate_outputs_dir
 from .evidence_gates import (
     UNKNOWN,
     annotate_surrogate_gate_columns,
@@ -38,6 +38,15 @@ PATHWAY_MODEL_PRIORITIES: dict[str, tuple[str, ...]] = {
         "xgboost",
         "extra_trees",
         "rf",
+        "gradient_boosting",
+        "elastic_net",
+    ),
+    "pyrolysis": (
+        "catboost",
+        "extra_trees",
+        "rf",
+        "xgboost",
+        "lightgbm",
         "gradient_boosting",
         "elastic_net",
     ),
@@ -79,20 +88,23 @@ class SurrogateEvaluator:
         pathway_model_priorities: dict[str, tuple[str, ...]] | None = None,
         minimum_artifact_test_r2: float | None = None,
     ) -> None:
+        self._using_default_outputs_root = outputs_root is None
         self.outputs_root = Path(outputs_root) if outputs_root else resolve_surrogate_outputs_dir()
         self.preferred_split_strategy = preferred_split_strategy
         self.fallback_split_strategy = fallback_split_strategy
         self.fallback_uncertainty_ratio = fallback_uncertainty_ratio
         self.allow_documented_fallback = allow_documented_fallback
         self.minimum_artifact_test_r2 = minimum_artifact_test_r2
-        self.pathway_model_priorities = {
-            key: tuple(value) for key, value in (pathway_model_priorities or PATHWAY_MODEL_PRIORITIES).items()
-        }
+        merged_priorities = {key: tuple(value) for key, value in PATHWAY_MODEL_PRIORITIES.items()}
+        for key, value in (pathway_model_priorities or {}).items():
+            merged_priorities[key] = tuple(value)
+        self.pathway_model_priorities = merged_priorities
         self._artifact_cache: dict[tuple[str, str], SurrogateArtifact | None] = {}
         self._model_cache: dict[Path, object] = {}
 
     def evaluate(self, frame: pd.DataFrame) -> pd.DataFrame:
-        predictions = frame[["optimization_case_id", "pathway"]].copy()
+        identifier_columns = _identifier_columns(frame)
+        predictions = frame[identifier_columns].copy()
         predictions["pathway"] = predictions["pathway"].astype(str).str.strip().str.lower()
         predictions["surrogate_prediction_status"] = ""
         predictions["surrogate_feature_imputation_flag"] = False
@@ -139,7 +151,7 @@ class SurrogateEvaluator:
                     payload = payload.drop(columns=[column for column in diagnostic_columns if column in payload.columns])
                     merged_payload = merged_payload.merge(
                         payload,
-                        on=["optimization_case_id", "pathway"],
+                        on=_identifier_columns(merged_payload, payload),
                         how="left",
                         validate="one_to_one",
                     )
@@ -148,12 +160,12 @@ class SurrogateEvaluator:
                     columns=[column for column in diagnostic_columns if column in merged_payload.columns]
                 ).merge(
                     diagnostics,
-                    on=["optimization_case_id", "pathway"],
+                    on=_identifier_columns(merged_payload, diagnostics),
                     how="left",
                     validate="one_to_one",
                 )
                 for column in merged_payload.columns:
-                    if column in {"optimization_case_id", "pathway"}:
+                    if column in set(identifier_columns):
                         continue
                     predictions.loc[pathway_index, column] = merged_payload[column].to_numpy()
             else:
@@ -163,7 +175,7 @@ class SurrogateEvaluator:
                     reason=f"unsupported_pathway:{pathway or 'unknown'}",
                 )
                 for column in fallback_frame.columns:
-                    if column in {"optimization_case_id", "pathway"}:
+                    if column in set(identifier_columns):
                         continue
                     predictions.loc[pathway_index, column] = fallback_frame[column].to_numpy()
 
@@ -220,8 +232,7 @@ class SurrogateEvaluator:
             ratio = np.abs(upper - lower) / np.maximum(np.abs(mean_values), 1.0)
             return pd.DataFrame(
                 {
-                    "optimization_case_id": frame["optimization_case_id"].to_numpy(),
-                    "pathway": frame["pathway"].astype(str).str.strip().str.lower().to_numpy(),
+                    **_identifier_payload(frame),
                     "surrogate_prediction_status": ["trained_surrogate_prediction"] * len(frame),
                     "surrogate_feature_imputation_flag": materialized["feature_imputation_flag"].to_numpy(),
                     "surrogate_missing_feature_columns": materialized["missing_required_feature_columns"].to_numpy(),
@@ -274,7 +285,8 @@ class SurrogateEvaluator:
             )
 
     def _aggregate_target_diagnostics(self, payloads: list[pd.DataFrame]) -> pd.DataFrame:
-        base = payloads[0][["optimization_case_id", "pathway"]].copy()
+        identifier_columns = _identifier_columns(*payloads)
+        base = payloads[0][identifier_columns].copy()
         rows: list[dict[str, object]] = []
         for row_position in range(len(base)):
             statuses = [
@@ -291,8 +303,7 @@ class SurrogateEvaluator:
 
             rows.append(
                 {
-                    "optimization_case_id": base.iloc[row_position]["optimization_case_id"],
-                    "pathway": base.iloc[row_position]["pathway"],
+                    **{column: base.iloc[row_position][column] for column in identifier_columns},
                     "surrogate_prediction_status": aggregate_status,
                     "surrogate_feature_imputation_flag": any(
                         bool(payload.iloc[row_position].get("surrogate_feature_imputation_flag", False))
@@ -577,8 +588,16 @@ class SurrogateEvaluator:
         roots: list[Path] = []
         if pathway == "htc":
             roots.append(BENCHMARK_OUTPUTS_DIR / "htc_model_compare_lso")
+        if pathway == "pyrolysis" and self._using_default_outputs_root:
+            roots.extend(
+                [
+                    OUTPUTS_ROOT / "_catboost_suite_strict_group",
+                    OUTPUTS_ROOT / "_lightgbm_suite_strict_group",
+                    OUTPUTS_ROOT / "_baseline5_suite_strict_group",
+                ]
+            )
         roots.append(self.outputs_root)
-        return roots
+        return [root for root in _deduplicate_paths(roots) if root.exists()]
 
     def _rank_candidate_rows(
         self,
@@ -837,7 +856,8 @@ class SurrogateEvaluator:
         pathway: str,
         reason: str,
     ) -> pd.DataFrame:
-        payload = frame[["optimization_case_id", "pathway"]].copy()
+        identifier_columns = _identifier_columns(frame)
+        payload = frame[identifier_columns].copy()
         payload["surrogate_prediction_status"] = "documented_static_fallback"
         payload["surrogate_feature_imputation_flag"] = False
         payload["surrogate_missing_feature_columns"] = ""
@@ -854,7 +874,7 @@ class SurrogateEvaluator:
                 feature_imputation_flag=pd.Series([False] * len(frame), index=frame.index, dtype=bool),
             )
             for column in fallback.columns:
-                if column in {"optimization_case_id", "pathway"}:
+                if column in set(identifier_columns):
                     continue
                 payload[column] = fallback[column].to_numpy()
             uncertainty_columns.append(f"{target}_uncertainty_ratio")
@@ -905,8 +925,7 @@ class SurrogateEvaluator:
         )
         return pd.DataFrame(
             {
-                "optimization_case_id": frame["optimization_case_id"].to_numpy(),
-                "pathway": frame["pathway"].astype(str).str.strip().str.lower().to_numpy(),
+                **_identifier_payload(frame),
                 "surrogate_prediction_status": status,
                 "surrogate_feature_imputation_flag": feature_imputation_flag.to_numpy(),
                 "surrogate_missing_feature_columns": missing_feature_columns.to_numpy(),
@@ -1072,6 +1091,35 @@ def _deduplicate_candidate_paths(
         seen.add(key)
         deduplicated.append((source_root, path))
     return deduplicated
+
+
+def _deduplicate_paths(values: list[Path]) -> list[Path]:
+    deduplicated: list[Path] = []
+    seen: set[str] = set()
+    for path in values:
+        key = str(path)
+        if key in seen:
+            continue
+        seen.add(key)
+        deduplicated.append(path)
+    return deduplicated
+
+
+def _identifier_columns(*frames: pd.DataFrame) -> list[str]:
+    columns = ["optimization_case_id", "pathway"]
+    if frames and all("scenario_name" in frame.columns for frame in frames):
+        columns.append("scenario_name")
+    return columns
+
+
+def _identifier_payload(frame: pd.DataFrame) -> dict[str, np.ndarray]:
+    payload: dict[str, np.ndarray] = {
+        "optimization_case_id": frame["optimization_case_id"].to_numpy(),
+        "pathway": frame["pathway"].astype(str).str.strip().str.lower().to_numpy(),
+    }
+    if "scenario_name" in frame.columns:
+        payload["scenario_name"] = frame["scenario_name"].to_numpy()
+    return payload
 
 
 def _artifact_location_for_model(

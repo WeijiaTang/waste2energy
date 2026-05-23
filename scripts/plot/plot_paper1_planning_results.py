@@ -12,7 +12,7 @@ for candidate in (ROOT, SRC_DIR):
     if candidate_str not in sys.path:
         sys.path.insert(0, candidate_str)
 
-from scripts.plot.common import RESULTS_PLOT_DIR, load_planning_visual_bundle
+from scripts.plot.common import RESULTS_PLOT_DIR, ROOT, load_planning_visual_bundle
 from scripts.plot.plotting.data_pipeline import build_figure_ready_tables, write_figure_ready_tables
 from scripts.plot.plotting.exports import build_plot_manifest, save_plot_figure_set
 from scripts.plot.plotting.paper1_planning_figures import (
@@ -40,14 +40,29 @@ def main() -> int:
     metrics, _, _ = load_planning_visual_bundle(figures_dir=figures_dir)
     tables = build_figure_ready_tables(metrics)
     
-    root_data = figures_dir if figures_dir else Path('D:/EnergyStorage/JOCP/data/processed/figures_tables')
+    root_data = figures_dir if figures_dir else ROOT / 'data' / 'processed' / 'figures_tables'
     confidence_df = pd.read_csv(root_data / 'paper1_recommendation_confidence_summary.csv')
     benchmark_df = pd.read_csv(root_data / 'paper1_benchmark_claim_summary.csv')
-    pathway_summary_path = Path('D:/EnergyStorage/JOCP/outputs/planning/pathway_summary.csv')
+    pathway_summary_path = ROOT / 'outputs' / 'planning' / 'pathway_summary.csv'
     pathway_summary_df = pd.read_csv(pathway_summary_path)
-    portfolio_allocations_path = Path('D:/EnergyStorage/JOCP/outputs/planning/portfolio_allocations.csv')
+    pathway_summary_df = pathway_summary_df[
+        pathway_summary_df['pathway'].astype(str).str.lower().isin(['pyrolysis', 'htc'])
+    ].copy()
+    portfolio_allocations_path = ROOT / 'outputs' / 'planning' / 'portfolio_allocations.csv'
     portfolio_allocations_df = pd.read_csv(portfolio_allocations_path)
-    ablation_summary_path = Path('D:/EnergyStorage/JOCP/outputs/benchmark/targeted_planning_ablations/targeted_planning_ablations_summary.csv')
+    portfolio_allocations_df = portfolio_allocations_df[
+        portfolio_allocations_df['pathway'].astype(str).str.lower().isin(['pyrolysis', 'htc'])
+    ].copy()
+    ablation_summary_path = (
+        ROOT
+        / 'outputs'
+        / 'benchmark'
+        / 'baseline'
+        / 'targeted_planning_ablations'
+        / 'targeted_planning_ablations_summary.csv'
+    )
+    if not ablation_summary_path.exists():
+        ablation_summary_path = ROOT / 'outputs' / 'benchmark' / 'targeted_planning_ablations' / 'targeted_planning_ablations_summary.csv'
     ablation_summary_df = pd.read_csv(ablation_summary_path)
 
     # Build and Save individual figures

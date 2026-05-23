@@ -8,7 +8,12 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from .common import build_run_manifest, write_json
+from .common import (
+    build_reproducibility_manifest,
+    build_run_manifest,
+    write_json,
+    write_reproducibility_manifest,
+)
 from .config import BENCHMARK_OUTPUTS_DIR
 from .planning.inputs import load_planning_input_bundle
 from .planning.optimization import _documented_allocation_fallback
@@ -18,6 +23,21 @@ from .planning.solve import (
     build_portfolio_summary,
     build_scenario_summary,
     execute_planning_pipeline,
+)
+
+CORE_BENCHMARK_COMPARATORS = (
+    "classic_multiobjective_optimizer",
+    "no_robustness_penalty",
+    "uncertainty_penalty_max_interval",
+    "uncertainty_penalty_combined_only",
+    "no_carbon_constraint",
+)
+
+DIAGNOSTIC_BENCHMARK_COMPARATORS = (
+    "ranking_only_unconstrained",
+    "greedy_weighted_score_heuristic",
+    "mcda_weighted_sum_comparator",
+    "topsis_comparator",
 )
 
 
@@ -303,8 +323,11 @@ def write_benchmark_outputs(
         "benchmark_diagnostics": target_dir / "benchmark_diagnostics.csv",
         "benchmark_bootstrap_shift_samples": target_dir / "benchmark_bootstrap_shift_samples.csv",
         "benchmark_statistical_summary": target_dir / "benchmark_statistical_summary.csv",
+        "benchmark_effect_tier_audit": target_dir / "benchmark_effect_tier_audit.csv",
         "run_config": target_dir / "run_config.json",
+        "reproducibility_manifest": target_dir / "reproducibility_manifest.json",
     }
+    effect_tier_audit = build_benchmark_effect_tier_audit(bootstrap_stats_frame)
 
     summary_frame.to_csv(outputs["benchmark_summary"], index=False)
     allocation_frame.to_csv(outputs["benchmark_allocations"], index=False)
@@ -313,6 +336,7 @@ def write_benchmark_outputs(
     diagnostics_frame.to_csv(outputs["benchmark_diagnostics"], index=False)
     bootstrap_shift_frame.to_csv(outputs["benchmark_bootstrap_shift_samples"], index=False)
     bootstrap_stats_frame.to_csv(outputs["benchmark_statistical_summary"], index=False)
+    effect_tier_audit.to_csv(outputs["benchmark_effect_tier_audit"], index=False)
     write_json(
         outputs["run_config"],
         build_run_manifest(
@@ -327,11 +351,66 @@ def write_benchmark_outputs(
             bootstrap_random_seed=int(bootstrap_random_seed),
             bootstrap_shift_row_count=int(len(bootstrap_shift_frame)),
             bootstrap_statistical_summary_row_count=int(len(bootstrap_stats_frame)),
+            benchmark_effect_tier_audit_row_count=int(len(effect_tier_audit)),
             output_files={key: str(path) for key, path in outputs.items()},
-            purpose="Ablation and benchmark suite proving which planning conclusions depend on evidence-aware and constraint-aware design choices.",
+            purpose=(
+                "Ablation and benchmark suite stress-testing which planning conclusions depend on "
+                "evidence-aware and constraint-aware design choices."
+            ),
+        ),
+    )
+    write_reproducibility_manifest(
+        outputs["reproducibility_manifest"],
+        build_reproducibility_manifest(
+            command="waste2energy-benchmark",
+            inputs=[dataset_path],
+            outputs=[path for key, path in outputs.items() if key != "reproducibility_manifest"],
+            parameters={
+                "benchmark_variant_count": len(variants),
+                "bootstrap_replicates": bootstrap_replicates,
+                "bootstrap_random_seed": bootstrap_random_seed,
+                "variant_keys": [variant.key for variant in variants],
+            },
         ),
     )
     return {key: str(path) for key, path in outputs.items()}
+
+
+def build_benchmark_effect_tier_audit(bootstrap_stats_frame: pd.DataFrame) -> pd.DataFrame:
+    """Build reviewer-facing role labels for benchmark effect-tier evidence."""
+
+    columns = [
+        "scenario_name",
+        "benchmark_variant",
+        "comparator_role",
+        "effect_significance_tier",
+        "bootstrap_replicate_count",
+        "claim_gate_role",
+    ]
+    if bootstrap_stats_frame.empty:
+        return pd.DataFrame(columns=columns)
+    frame = bootstrap_stats_frame.copy()
+    if "benchmark_variant" not in frame.columns:
+        return pd.DataFrame(columns=columns)
+    frame["comparator_role"] = frame["benchmark_variant"].astype(str).map(_comparator_role)
+    frame["claim_gate_role"] = frame["comparator_role"].map(
+        {
+            "core": "blocking",
+            "diagnostic": "contextual",
+        }
+    ).fillna("not_used_for_claim")
+    for column in columns:
+        if column not in frame.columns:
+            frame[column] = ""
+    return frame[columns].sort_values(["scenario_name", "benchmark_variant"]).reset_index(drop=True)
+
+
+def _comparator_role(variant_key: str) -> str:
+    if variant_key in CORE_BENCHMARK_COMPARATORS:
+        return "core"
+    if variant_key in DIAGNOSTIC_BENCHMARK_COMPARATORS:
+        return "diagnostic"
+    return "other"
 
 
 def _execute_benchmark_variant(

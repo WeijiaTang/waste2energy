@@ -45,9 +45,12 @@ def assemble_objective_frame(
 
         config = PlanningConfig()
     frame = base_frame.copy()
+    merge_keys = ["optimization_case_id", "pathway"]
+    if "scenario_name" in frame.columns and "scenario_name" in surrogate_predictions.columns:
+        merge_keys.append("scenario_name")
     merged = frame.merge(
         surrogate_predictions,
-        on=["optimization_case_id", "pathway"],
+        on=merge_keys,
         how="left",
         validate="one_to_one",
     )

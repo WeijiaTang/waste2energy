@@ -6,6 +6,7 @@ results/
 data/processed/figures_tables/
 data/processed/model_ready/
 data/processed/unified_features/
+data/raw/literature-ad/
 /outputs/
 
 # Python-generated files

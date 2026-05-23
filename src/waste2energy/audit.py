@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import json
+import re
 import warnings
+from dataclasses import replace
 from datetime import timedelta
 from pathlib import Path
 
@@ -11,7 +13,14 @@ import numpy as np
 import pandas as pd
 
 from .common import parse_manifest_timestamp
-from .config import BENCHMARK_OUTPUTS_DIR, FIGURES_TABLES_DIR, OUTPUTS_ROOT, resolve_surrogate_outputs_dir
+from .config import (
+    BENCHMARK_OUTPUTS_DIR,
+    FIGURES_TABLES_DIR,
+    MODEL_READY_DIR,
+    OUTPUTS_ROOT,
+    get_objective_weight_system,
+    resolve_surrogate_outputs_dir,
+)
 from .data import DATASET_KEYS, TARGET_COLUMNS
 from .evidence_policy import (
     SURROGATE_LED_SHARE_THRESHOLD,
@@ -22,6 +31,8 @@ from .evidence_policy import (
 )
 from .models import MODEL_KEYS
 from .planning.confidence import build_recommendation_confidence_summary
+from .planning.inputs import load_planning_input_bundle
+from .planning.solve import PlanningConfig, execute_planning_pipeline
 
 
 class InconsistencyWarning(UserWarning):
@@ -122,6 +133,26 @@ def build_confirmatory_audit(
     )
     planning_ml_consistency = build_planning_ml_consistency_summary(active_planning_dir, pathway_reliability)
     _emit_surrogate_led_inconsistency_warnings(planning_ml_consistency)
+    hhv_imputation_sensitivity = build_hhv_imputation_sensitivity(active_planning_dir)
+    hhv_replanning_sensitivity = build_hhv_replanning_sensitivity(active_planning_dir)
+    hhv_dominance_audit = build_hhv_dominance_audit(
+        active_planning_dir,
+        hhv_imputation_sensitivity=hhv_imputation_sensitivity,
+        hhv_replanning_sensitivity=hhv_replanning_sensitivity,
+    )
+    surrogate_extrapolation_audit = build_surrogate_extrapolation_audit(
+        active_planning_dir,
+        ml_flags=ml_flags,
+    )
+    binding_constraint_audit = build_binding_constraint_audit(
+        active_planning_dir,
+        active_benchmark_dir,
+    )
+    duplicate_candidate_audit = build_duplicate_candidate_audit(active_planning_dir)
+    ad_boundary_fairness_audit = build_ad_boundary_fairness_audit(
+        active_planning_dir,
+        active_benchmark_dir,
+    )
     planning_data_quality = _read_csv_if_exists(active_planning_dir / "planning_data_quality_summary.csv")
     benchmark_claim_summary = build_benchmark_claim_summary(active_benchmark_dir)
     benchmark_manuscript_sentences = build_benchmark_manuscript_sentences(benchmark_claim_summary)
@@ -158,6 +189,13 @@ def build_confirmatory_audit(
         "planning_recommendation_confidence_summary": planning_recommendation_confidence,
         "planning_transferability_risk_summary": planning_transferability_risk,
         "planning_ml_consistency_summary": planning_ml_consistency,
+        "hhv_imputation_sensitivity": hhv_imputation_sensitivity,
+        "hhv_replanning_sensitivity": hhv_replanning_sensitivity,
+        "hhv_dominance_audit": hhv_dominance_audit,
+        "surrogate_extrapolation_audit": surrogate_extrapolation_audit,
+        "binding_constraint_audit": binding_constraint_audit,
+        "duplicate_candidate_audit": duplicate_candidate_audit,
+        "ad_boundary_fairness_audit": ad_boundary_fairness_audit,
         "planning_data_quality_summary": planning_data_quality,
         "benchmark_claim_summary": benchmark_claim_summary,
         "benchmark_manuscript_sentences": benchmark_manuscript_sentences,
@@ -595,8 +633,11 @@ def build_planning_ml_consistency_summary(
             risk_tier = "managed_risk"
             risk_note = "Planning allocation remains broadly aligned with available pathway-level ML evidence."
         surrogate_supported_share = pd.NA
+        surrogate_supported_with_imputed_key_feature_share = pd.NA
+        fully_observed_surrogate_supported_share = pd.NA
         surrogate_feature_imputed_share = pd.NA
         surrogate_imputed_feature_columns = ""
+        surrogate_support_evidence_tier = "not_evaluated"
         surrogate_led_consistency = "not_evaluated"
         if not portfolio_allocations.empty and "scenario_name" in portfolio_allocations.columns:
             scenario_allocations = portfolio_allocations[
@@ -623,8 +664,29 @@ def build_planning_ml_consistency_summary(
                         pd.Series([""] * len(scenario_allocations), index=scenario_allocations.index),
                     ).fillna("").astype(str)
                     imputed_mask = imputed_flag | imputed_columns.str.len().gt(0)
+                    key_imputed_mask = imputed_columns.str.contains(
+                        "feedstock_hhv_mj_per_kg",
+                        case=False,
+                        na=False,
+                    )
                     surrogate_feature_imputed_share = float(allocated_feed.loc[imputed_mask].sum() / total_feed)
+                    surrogate_supported_with_imputed_key_feature_share = float(
+                        allocated_feed.loc[support_mask & key_imputed_mask].sum() / total_feed
+                    )
+                    fully_observed_surrogate_supported_share = float(
+                        allocated_feed.loc[support_mask & ~key_imputed_mask].sum() / total_feed
+                    )
                     surrogate_imputed_feature_columns = _join_pipe_values(imputed_columns)
+                    if surrogate_supported_share >= SURROGATE_LED_SHARE_THRESHOLD:
+                        surrogate_support_evidence_tier = (
+                            "surrogate_supported_with_imputed_key_feature"
+                            if surrogate_supported_with_imputed_key_feature_share > 0.0
+                            else "surrogate_supported"
+                        )
+                    elif surrogate_supported_with_imputed_key_feature_share > 0.0:
+                        surrogate_support_evidence_tier = "partial_surrogate_supported_with_imputed_key_feature"
+                    else:
+                        surrogate_support_evidence_tier = "insufficient_surrogate_supported_share"
                     surrogate_led_consistency = (
                         "consistent" if surrogate_supported_share >= 0.80 else "inconsistent"
                     )
@@ -639,11 +701,686 @@ def build_planning_ml_consistency_summary(
                 "unsupported_allocation_share": unsupported_mass,
                 "weak_allocation_share": weak_mass,
                 "surrogate_supported_allocation_share": surrogate_supported_share,
+                "surrogate_supported_with_imputed_key_feature_allocation_share": (
+                    surrogate_supported_with_imputed_key_feature_share
+                ),
+                "fully_observed_surrogate_supported_allocation_share": fully_observed_surrogate_supported_share,
                 "surrogate_feature_imputed_allocation_share": surrogate_feature_imputed_share,
                 "surrogate_imputed_feature_columns": surrogate_imputed_feature_columns,
+                "surrogate_support_evidence_tier": surrogate_support_evidence_tier,
                 "surrogate_led_consistency": surrogate_led_consistency,
                 "risk_tier": risk_tier,
                 "risk_note": risk_note,
+            }
+        )
+    return pd.DataFrame(rows).sort_values("scenario_name").reset_index(drop=True)
+
+
+def build_hhv_imputation_sensitivity(planning_dir: Path) -> pd.DataFrame:
+    """Summarize ±5/±10% stresses for selected rows with imputed feedstock HHV."""
+
+    allocations = _read_csv_if_exists(planning_dir / "portfolio_allocations.csv")
+    required = {"scenario_name", "pathway", "allocated_feed_ton_per_year"}
+    if allocations.empty or not required.issubset(allocations.columns):
+        return pd.DataFrame()
+
+    working = allocations.copy()
+    imputed_columns = working.get(
+        "surrogate_imputed_feature_columns",
+        pd.Series([""] * len(working), index=working.index),
+    ).fillna("").astype(str)
+    hhv_imputed_mask = imputed_columns.str.contains(
+        "feedstock_hhv_mj_per_kg",
+        case=False,
+        na=False,
+    )
+    selected = working.loc[hhv_imputed_mask].copy()
+    if selected.empty:
+        return pd.DataFrame(
+            [
+                {
+                    "scenario_name": pd.NA,
+                    "pathway": pd.NA,
+                    "stress_case": "no_hhv_imputed_selected_rows",
+                    "allocated_share_pct": 0.0,
+                    "selected_row_count": 0,
+                    "sample_ids": "",
+                    "manure_subtypes": "",
+                    "baseline_composition_hhv_mj_per_kg": pd.NA,
+                    "stressed_hhv_mj_per_kg": pd.NA,
+                    "hhv_delta_pct": 0.0,
+                    "evidence_tier": "surrogate_supported",
+                    "interpretation": "No selected allocation row used feedstock_hhv_mj_per_kg imputation.",
+                }
+            ]
+        )
+
+    allocated = _numeric_column(working, "allocated_feed_ton_per_year")
+    totals = allocated.groupby(working["scenario_name"].astype(str)).transform("sum").replace(0.0, pd.NA)
+    working["_allocated_share_pct"] = (allocated / totals * 100.0).fillna(0.0)
+    selected["_allocated_share_pct"] = working.loc[selected.index, "_allocated_share_pct"]
+    selected["_derived_hhv"] = selected.apply(_derive_feedstock_hhv_from_ultimate_analysis, axis=1)
+
+    stress_specs = [
+        ("composition-derived baseline", 0.00),
+        ("HHV imputation -10%", -0.10),
+        ("HHV imputation -5%", -0.05),
+        ("HHV imputation +5%", 0.05),
+        ("HHV imputation +10%", 0.10),
+    ]
+    rows: list[dict[str, object]] = []
+    for (scenario_name, pathway), subset in selected.groupby(["scenario_name", "pathway"], dropna=False):
+        mass = _numeric_column(subset, "allocated_feed_ton_per_year")
+        total_mass = float(mass.sum())
+        weights = mass / total_mass if total_mass > 0.0 else pd.Series(0.0, index=subset.index)
+        derived = pd.to_numeric(subset["_derived_hhv"], errors="coerce")
+        weighted_hhv = float((derived.fillna(0.0) * weights).sum()) if total_mass > 0.0 else pd.NA
+        share_pct = float(pd.to_numeric(subset["_allocated_share_pct"], errors="coerce").fillna(0.0).sum())
+        sample_ids = _join_pipe_values(subset.get("sample_id", pd.Series([""] * len(subset), index=subset.index)))
+        subtypes = _join_pipe_values(subset.get("manure_subtype", pd.Series([""] * len(subset), index=subset.index)))
+        for label, delta in stress_specs:
+            rows.append(
+                {
+                    "scenario_name": scenario_name,
+                    "pathway": str(pathway).lower(),
+                    "stress_case": label,
+                    "allocated_share_pct": round(share_pct, 3),
+                    "selected_row_count": int(len(subset)),
+                    "sample_ids": sample_ids,
+                    "manure_subtypes": subtypes,
+                    "baseline_composition_hhv_mj_per_kg": round(float(weighted_hhv), 3)
+                    if pd.notna(weighted_hhv)
+                    else pd.NA,
+                    "stressed_hhv_mj_per_kg": round(float(weighted_hhv) * (1.0 + delta), 3)
+                    if pd.notna(weighted_hhv)
+                    else pd.NA,
+                    "hhv_delta_pct": round(delta * 100.0, 1),
+                    "evidence_tier": "surrogate_supported_with_imputed_key_feature",
+                    "interpretation": (
+                        "Selected surrogate rows use composition-derived feedstock_hhv_mj_per_kg; "
+                        "the stress cases disclose feature-input dependence rather than claiming new validation."
+                    ),
+                }
+            )
+    return pd.DataFrame(rows).sort_values(["scenario_name", "pathway", "hhv_delta_pct"]).reset_index(drop=True)
+
+
+def build_hhv_replanning_sensitivity(planning_dir: Path) -> pd.DataFrame:
+    """Run true replanning after perturbing composition-derived feedstock HHV.
+
+    Unlike :func:`build_hhv_imputation_sensitivity`, this executes the surrogate
+    and optimizer again after materializing ``feedstock_hhv_mj_per_kg`` at
+    ±5/±10%.  The output reports pathway-share changes relative to the exported
+    baseline portfolio.
+    """
+
+    run_config = _read_json_if_exists(planning_dir / "run_config.json")
+    dataset_path = run_config.get("dataset_path") if isinstance(run_config, dict) else None
+    try:
+        bundle = load_planning_input_bundle(dataset_path=dataset_path or None)
+        config = _planning_config_from_run_config(run_config)
+    except Exception as exc:
+        return pd.DataFrame(
+            [
+                {
+                    "scenario_name": pd.NA,
+                    "pathway": pd.NA,
+                    "stress_case": "replanning_unavailable",
+                    "hhv_delta_pct": pd.NA,
+                    "baseline_share_pct": pd.NA,
+                    "stressed_share_pct": pd.NA,
+                    "share_change_pct_point": pd.NA,
+                    "baseline_selected_sample_ids": "",
+                    "stressed_selected_sample_ids": "",
+                    "replanning_status": "failed_to_initialize",
+                    "note": str(exc),
+                }
+            ]
+        )
+
+    frame = bundle.frame.copy()
+    if "feedstock_hhv_mj_per_kg" not in frame.columns:
+        return pd.DataFrame()
+    hhv_missing = pd.to_numeric(frame["feedstock_hhv_mj_per_kg"], errors="coerce").isna()
+    derived_hhv = frame.apply(_derive_feedstock_hhv_from_ultimate_analysis, axis=1)
+    derivable = pd.to_numeric(derived_hhv, errors="coerce").notna()
+    pathway_mask = frame.get("pathway", pd.Series([""] * len(frame), index=frame.index)).astype(str).str.lower().isin(
+        ["pyrolysis", "htc"]
+    )
+    stress_mask = hhv_missing & derivable & pathway_mask
+    if not stress_mask.any():
+        return pd.DataFrame(
+            [
+                {
+                    "scenario_name": pd.NA,
+                    "pathway": pd.NA,
+                    "stress_case": "no_derivable_hhv_rows",
+                    "hhv_delta_pct": 0.0,
+                    "baseline_share_pct": pd.NA,
+                    "stressed_share_pct": pd.NA,
+                    "share_change_pct_point": pd.NA,
+                    "baseline_selected_sample_ids": "",
+                    "stressed_selected_sample_ids": "",
+                    "replanning_status": "not_evaluated",
+                    "note": "No thermochemical rows with missing but derivable feedstock_hhv_mj_per_kg were found.",
+                }
+            ]
+        )
+
+    baseline_allocations = _read_csv_if_exists(planning_dir / "portfolio_allocations.csv")
+    stress_specs = [
+        ("HHV replanning -10%", -0.10),
+        ("HHV replanning -5%", -0.05),
+        ("HHV replanning baseline-derived", 0.00),
+        ("HHV replanning +5%", 0.05),
+        ("HHV replanning +10%", 0.10),
+    ]
+    rows: list[dict[str, object]] = []
+    for label, delta in stress_specs:
+        stressed_frame = frame.copy()
+        stressed_frame.loc[stress_mask, "feedstock_hhv_mj_per_kg"] = (
+            pd.to_numeric(derived_hhv.loc[stress_mask], errors="coerce") * (1.0 + delta)
+        )
+        try:
+            execution = execute_planning_pipeline(bundle=replace(bundle, frame=stressed_frame), config=config)
+            stressed_allocations = execution["portfolio_allocations"].copy()
+            status = "replanned"
+            note = (
+                f"Replanned with {int(stress_mask.sum())} thermochemical rows using "
+                f"composition-derived feedstock_hhv_mj_per_kg x {1.0 + delta:.2f}."
+            )
+        except Exception as exc:
+            stressed_allocations = pd.DataFrame()
+            status = "failed"
+            note = str(exc)
+        scenarios = sorted(
+            set(baseline_allocations.get("scenario_name", pd.Series(dtype="object")).dropna().astype(str))
+            | set(stressed_allocations.get("scenario_name", pd.Series(dtype="object")).dropna().astype(str))
+        )
+        for scenario_name in scenarios:
+            for pathway in ("pyrolysis", "htc"):
+                baseline_share = _allocated_pathway_share_pct(baseline_allocations, scenario_name, pathway)
+                stressed_share = _allocated_pathway_share_pct(stressed_allocations, scenario_name, pathway)
+                rows.append(
+                    {
+                        "scenario_name": scenario_name,
+                        "pathway": pathway,
+                        "stress_case": label,
+                        "hhv_delta_pct": round(delta * 100.0, 1),
+                        "baseline_share_pct": round(float(baseline_share), 3),
+                        "stressed_share_pct": round(float(stressed_share), 3),
+                        "share_change_pct_point": round(float(stressed_share) - float(baseline_share), 3),
+                        "baseline_selected_sample_ids": _selected_sample_ids_for_pathway(
+                            baseline_allocations,
+                            scenario_name=scenario_name,
+                            pathway=pathway,
+                        ),
+                        "stressed_selected_sample_ids": _selected_sample_ids_for_pathway(
+                            stressed_allocations,
+                            scenario_name=scenario_name,
+                            pathway=pathway,
+                        ),
+                        "replanning_status": status,
+                        "note": note,
+                    }
+                )
+    return pd.DataFrame(rows).sort_values(["scenario_name", "pathway", "hhv_delta_pct"]).reset_index(drop=True)
+
+
+def build_hhv_dominance_audit(
+    planning_dir: Path,
+    *,
+    hhv_imputation_sensitivity: pd.DataFrame | None = None,
+    hhv_replanning_sensitivity: pd.DataFrame | None = None,
+) -> pd.DataFrame:
+    """Condense HHV-imputation stresses into reviewer-facing dominance evidence.
+
+    The audit asks whether the imputed feedstock HHV feature changes the pathway
+    recommendation, as opposed to merely swapping same-pathway case IDs.
+    """
+
+    replanning = (
+        hhv_replanning_sensitivity.copy()
+        if hhv_replanning_sensitivity is not None
+        else _read_csv_if_exists(planning_dir / "hhv_replanning_sensitivity.csv")
+    )
+    if replanning.empty:
+        replanning = _read_csv_if_exists(OUTPUTS_ROOT / "audit" / "hhv_replanning_sensitivity.csv")
+    imputation = (
+        hhv_imputation_sensitivity.copy()
+        if hhv_imputation_sensitivity is not None
+        else _read_csv_if_exists(OUTPUTS_ROOT / "audit" / "hhv_imputation_sensitivity.csv")
+    )
+    allocations = _read_csv_if_exists(planning_dir / "portfolio_allocations.csv")
+    scenarios = sorted(
+        set(allocations.get("scenario_name", pd.Series(dtype="object")).dropna().astype(str))
+        | set(replanning.get("scenario_name", pd.Series(dtype="object")).dropna().astype(str))
+    )
+    if not scenarios:
+        return pd.DataFrame()
+
+    affected_lookup: dict[str, float] = {}
+    if not imputation.empty and {"scenario_name", "stress_case", "allocated_share_pct"}.issubset(imputation.columns):
+        baseline_rows = imputation[
+            imputation["stress_case"].astype(str).eq("composition-derived baseline")
+        ].copy()
+        for scenario_name, subset in baseline_rows.groupby("scenario_name", dropna=False):
+            affected_lookup[str(scenario_name)] = float(
+                pd.to_numeric(subset["allocated_share_pct"], errors="coerce").fillna(0.0).sum()
+            )
+
+    rows: list[dict[str, object]] = []
+    for scenario_name in scenarios:
+        subset = replanning[replanning.get("scenario_name", pd.Series(dtype="object")).astype(str).eq(scenario_name)].copy()
+        if subset.empty:
+            max_abs_change = pd.NA
+            pathway_changed = False
+            case_changed = False
+            status = "not_evaluated"
+        else:
+            max_abs_change = float(pd.to_numeric(subset["share_change_pct_point"], errors="coerce").abs().max())
+            baseline_pathways = set(
+                subset.loc[
+                    pd.to_numeric(
+                        subset.get("baseline_share_pct", pd.Series([0.0] * len(subset), index=subset.index)),
+                        errors="coerce",
+                    )
+                    .fillna(0.0)
+                    .gt(1.0),
+                    "pathway",
+                ]
+                .astype(str)
+                .str.lower()
+            )
+            pathway_changed = False
+            for _stress, stress_rows in subset.groupby("stress_case", dropna=False):
+                stressed_pathways = set(
+                    stress_rows.loc[
+                        pd.to_numeric(
+                            stress_rows.get(
+                                "stressed_share_pct",
+                                pd.Series([0.0] * len(stress_rows), index=stress_rows.index),
+                            ),
+                            errors="coerce",
+                        )
+                        .fillna(0.0)
+                        .gt(1.0),
+                        "pathway",
+                    ]
+                    .astype(str)
+                    .str.lower()
+                )
+                if stressed_pathways != baseline_pathways:
+                    pathway_changed = True
+                    break
+            case_changed = bool(
+                (
+                    subset.get("baseline_selected_sample_ids", pd.Series([""] * len(subset), index=subset.index))
+                    .fillna("")
+                    .astype(str)
+                    != subset.get("stressed_selected_sample_ids", pd.Series([""] * len(subset), index=subset.index))
+                    .fillna("")
+                    .astype(str)
+                ).any()
+            )
+            failed = subset.get("replanning_status", pd.Series([""] * len(subset), index=subset.index)).astype(str).str.contains(
+                "failed", case=False, na=False
+            )
+            status = "failed" if bool(failed.any()) else "evaluated"
+        affected_share = affected_lookup.get(scenario_name, 0.0)
+        conclusion = _classify_hhv_dominance(
+            max_abs_change=max_abs_change,
+            pathway_changed=pathway_changed,
+            case_changed=case_changed,
+        )
+        rows.append(
+            {
+                "scenario_name": scenario_name,
+                "affected_imputed_share_pct": round(float(affected_share), 3),
+                "max_abs_pathway_share_change_pct_point": round(float(max_abs_change), 3)
+                if pd.notna(max_abs_change)
+                else pd.NA,
+                "selected_pathways_changed": pathway_changed,
+                "selected_case_changed": case_changed,
+                "hhv_dominance_conclusion": conclusion,
+                "reviewer_safe_sentence": _build_hhv_dominance_sentence(
+                    scenario_name=scenario_name,
+                    affected_share=affected_share,
+                    max_abs_change=max_abs_change,
+                    conclusion=conclusion,
+                ),
+                "audit_status": status,
+            }
+        )
+    return pd.DataFrame(rows).sort_values("scenario_name").reset_index(drop=True)
+
+
+def build_surrogate_extrapolation_audit(
+    planning_dir: Path,
+    *,
+    ml_flags: pd.DataFrame | None = None,
+    training_dataset_path: Path | None = None,
+) -> pd.DataFrame:
+    """Audit the external-validity ceiling of selected thermochemical portfolios."""
+
+    allocations = _read_csv_if_exists(planning_dir / "portfolio_allocations.csv")
+    if allocations.empty or not {"scenario_name", "pathway"}.issubset(allocations.columns):
+        return pd.DataFrame()
+    flags = ml_flags.copy() if ml_flags is not None else _read_csv_if_exists(OUTPUTS_ROOT / "audit" / "ml_claim_flag_table.csv")
+    training = _read_csv_if_exists(training_dataset_path or (MODEL_READY_DIR / "ml_training_dataset.csv"))
+    range_lookup = _build_training_range_lookup(training)
+
+    selected = allocations[
+        allocations["pathway"].astype(str).str.lower().isin(["pyrolysis", "htc"])
+        & (_numeric_column(allocations, "allocated_feed_ton_per_year") > 0.0)
+    ].copy()
+    if selected.empty:
+        return pd.DataFrame()
+    allocated = _numeric_column(selected, "allocated_feed_ton_per_year")
+    scenario_totals = allocated.groupby(selected["scenario_name"].astype(str)).transform("sum").replace(0.0, pd.NA)
+    selected["_allocated_share_pct"] = (allocated / scenario_totals * 100.0).fillna(0.0)
+
+    rows: list[dict[str, object]] = []
+    for (scenario_name, pathway), subset in selected.groupby(["scenario_name", "pathway"], dropna=False):
+        pathway_key = str(pathway).lower()
+        lso = _leave_study_out_rows_for_pathway(flags, pathway_key)
+        weakest_status = _weakest_claim_status(lso.get("claim_status", pd.Series(dtype="object")))
+        weak_targets = _join_pipe_values(
+            lso.loc[
+                lso.get("claim_status", pd.Series(dtype="object")).astype(str).isin(["weak", "unsupported"]),
+                "target_column",
+            ]
+            if "target_column" in lso.columns
+            else pd.Series(dtype="object")
+        )
+        min_r2 = (
+            float(pd.to_numeric(lso.get("best_test_r2"), errors="coerce").min())
+            if not lso.empty and "best_test_r2" in lso.columns
+            else pd.NA
+        )
+        range_summary = _selected_range_summary(subset, range_lookup.get(pathway_key, {}))
+        ceiling = _classify_surrogate_extrapolation_ceiling(
+            weakest_status=weakest_status,
+            all_in_range=range_summary["within_training_range_all_features"],
+            missing_range=range_summary["feature_range_status"] == "training_range_unavailable",
+        )
+        share_pct = float(pd.to_numeric(subset["_allocated_share_pct"], errors="coerce").fillna(0.0).sum())
+        rows.append(
+            {
+                "scenario_name": str(scenario_name),
+                "pathway": pathway_key,
+                "allocated_share_pct": round(share_pct, 3),
+                "leave_study_out_target_count": int(len(lso)),
+                "min_leave_study_out_test_r2": round(float(min_r2), 3) if pd.notna(min_r2) else pd.NA,
+                "weakest_leave_study_out_claim_status": weakest_status,
+                "weak_or_unsupported_targets": weak_targets,
+                "selected_rows_evaluated": int(len(subset)),
+                "feature_range_status": range_summary["feature_range_status"],
+                "within_training_range_all_features": range_summary["within_training_range_all_features"],
+                "out_of_range_feature_count": range_summary["out_of_range_feature_count"],
+                "out_of_range_features": range_summary["out_of_range_features"],
+                "extrapolation_evidence_ceiling": ceiling,
+                "reviewer_safe_sentence": _build_surrogate_extrapolation_sentence(
+                    pathway=pathway_key,
+                    weakest_status=weakest_status,
+                    min_r2=min_r2,
+                    ceiling=ceiling,
+                    out_of_range_features=range_summary["out_of_range_features"],
+                ),
+            }
+        )
+    return pd.DataFrame(rows).sort_values(["scenario_name", "pathway"]).reset_index(drop=True)
+
+
+def build_binding_constraint_audit(planning_dir: Path, benchmark_dir: Path) -> pd.DataFrame:
+    """Expose which portfolio constraints bind and how cap relaxation changes shares."""
+
+    diagnostics = _read_csv_if_exists(planning_dir / "optimization_diagnostics.csv")
+    allocations = _read_csv_if_exists(planning_dir / "portfolio_allocations.csv")
+    cap_diagnostics = _read_csv_if_exists(
+        _resolve_targeted_ablation_dir_for_audit(benchmark_dir) / "portfolio_cap_diagnostics.csv"
+    )
+    if diagnostics.empty or "scenario_name" not in diagnostics.columns:
+        return pd.DataFrame()
+
+    rows: list[dict[str, object]] = []
+    for _, row in diagnostics.iterrows():
+        scenario_name = str(row.get("scenario_name"))
+        base_pyro = _allocated_pathway_share_pct(allocations, scenario_name, "pyrolysis")
+        base_htc = _allocated_pathway_share_pct(allocations, scenario_name, "htc")
+        relaxed = _cap_diagnostic_row(
+            cap_diagnostics,
+            scenario_name=scenario_name,
+            ablation_key="candidate_and_subtype_caps_relaxed",
+        )
+        candidate_relaxed = _cap_diagnostic_row(
+            cap_diagnostics,
+            scenario_name=scenario_name,
+            ablation_key="candidate_cap_relaxed_100pct",
+        )
+        relaxed_pyro = _optional_float(relaxed.get("pyrolysis_allocated_share_pct")) if not relaxed.empty else pd.NA
+        relaxed_htc = _optional_float(relaxed.get("htc_allocated_share_pct")) if not relaxed.empty else pd.NA
+        candidate_relaxed_max = (
+            _optional_float(candidate_relaxed.get("max_candidate_allocated_share_pct"))
+            if not candidate_relaxed.empty
+            else pd.NA
+        )
+        rows.append(
+            {
+                "scenario_name": scenario_name,
+                "candidate_cap_binding": _coerce_bool_flag(row.get("candidate_cap_binding")),
+                "candidate_cap_slack_ton_per_year": _optional_float(row.get("candidate_cap_slack_ton_per_year")),
+                "subtype_cap_binding": _coerce_bool_flag(row.get("subtype_cap_binding")),
+                "subtype_cap_slack_ton_per_year": _optional_float(row.get("subtype_cap_slack_ton_per_year")),
+                "residual_carbon_constraint_binding": _coerce_bool_flag(row.get("carbon_budget_binding")),
+                "residual_carbon_slack_kgco2e": _optional_float(row.get("carbon_budget_slack_kgco2e")),
+                "min_distinct_subtypes_binding": _coerce_bool_flag(row.get("min_distinct_subtypes_binding")),
+                "max_selected_binding": _coerce_bool_flag(row.get("max_selected_binding")),
+                "baseline_pyrolysis_share_pct": round(float(base_pyro), 3),
+                "baseline_htc_share_pct": round(float(base_htc), 3),
+                "cap_relaxed_pyrolysis_share_pct": round(float(relaxed_pyro), 3)
+                if pd.notna(relaxed_pyro)
+                else pd.NA,
+                "cap_relaxed_htc_share_pct": round(float(relaxed_htc), 3) if pd.notna(relaxed_htc) else pd.NA,
+                "cap_relaxed_pyrolysis_share_change_pct_point": round(float(relaxed_pyro) - float(base_pyro), 3)
+                if pd.notna(relaxed_pyro)
+                else pd.NA,
+                "cap_relaxed_htc_share_change_pct_point": round(float(relaxed_htc) - float(base_htc), 3)
+                if pd.notna(relaxed_htc)
+                else pd.NA,
+                "candidate_cap_relaxed_max_candidate_share_pct": round(float(candidate_relaxed_max), 3)
+                if pd.notna(candidate_relaxed_max)
+                else pd.NA,
+                "interpretation": _binding_constraint_interpretation(row, relaxed_pyro, base_pyro),
+            }
+        )
+    return pd.DataFrame(rows).sort_values("scenario_name").reset_index(drop=True)
+
+
+def build_duplicate_candidate_audit(planning_dir: Path) -> pd.DataFrame:
+    """Find selected pyrolysis rows with identical rounded condition/target signatures."""
+
+    allocations = _read_csv_if_exists(planning_dir / "portfolio_allocations.csv")
+    if allocations.empty or "pathway" not in allocations.columns:
+        return pd.DataFrame()
+    selected = allocations[
+        allocations["pathway"].astype(str).str.lower().eq("pyrolysis")
+        & (_numeric_column(allocations, "allocated_feed_ton_per_year") > 0.0)
+    ].copy()
+    if selected.empty:
+        return pd.DataFrame()
+
+    key_columns = [
+        "process_temperature_c",
+        "residence_time_min",
+        "heating_rate_c_per_min",
+        "predicted_product_char_yield_pct",
+        "predicted_product_char_hhv_mj_per_kg",
+        "predicted_energy_recovery_pct",
+        "predicted_carbon_retention_pct",
+        "product_char_yield_pct",
+        "product_char_hhv_mj_per_kg",
+        "energy_recovery_pct",
+        "carbon_retention_pct",
+        "feedstock_carbon_pct",
+        "feedstock_hydrogen_pct",
+        "feedstock_nitrogen_pct",
+        "feedstock_oxygen_pct",
+        "feedstock_ash_pct",
+    ]
+    for column in key_columns:
+        selected[f"_dup_{column}"] = pd.to_numeric(
+            selected.get(column, pd.Series([pd.NA] * len(selected), index=selected.index)),
+            errors="coerce",
+        ).round(3)
+    group_cols = [f"_dup_{column}" for column in key_columns]
+    selected["_duplicate_signature"] = selected[group_cols].apply(
+        lambda row: "|".join(str(value) for value in row.to_numpy()),
+        axis=1,
+    )
+
+    rows: list[dict[str, object]] = []
+    for (scenario_name, _signature), subset in selected.groupby(["scenario_name", "_duplicate_signature"], dropna=False):
+        if len(subset) < 2:
+            continue
+        subtype_count = subset.get("manure_subtype", pd.Series(dtype=object)).astype(str).nunique(dropna=True)
+        sample_count = subset.get("sample_id", pd.Series(dtype=object)).astype(str).nunique(dropna=True)
+        share_pct = float(pd.to_numeric(subset.get("allocated_feed_share"), errors="coerce").fillna(0.0).sum() * 100.0)
+        rows.append(
+            {
+                "scenario_name": scenario_name,
+                "pathway": "pyrolysis",
+                "duplicate_group_id": f"{scenario_name}::pyrolysis::{len(rows) + 1:02d}",
+                "rows_in_group": int(len(subset)),
+                "distinct_sample_ids": int(sample_count),
+                "distinct_subtypes": int(subtype_count),
+                "allocated_share_pct": round(share_pct, 3),
+                "sample_ids": _join_pipe_values(subset.get("sample_id", pd.Series([""] * len(subset), index=subset.index))),
+                "manure_subtypes": _join_pipe_values(
+                    subset.get("manure_subtype", pd.Series([""] * len(subset), index=subset.index))
+                ),
+                "operating_condition": _format_duplicate_operating_condition(subset.iloc[0]),
+                "predicted_target_signature": _format_duplicate_target_signature(subset.iloc[0]),
+                "audit_finding": (
+                    "duplicate_operating_and_target_signature"
+                    if subtype_count > 1
+                    else "duplicate_operating_signature_same_subtype"
+                ),
+                "interpretation": (
+                    "Selected pyrolysis rows share the same rounded operating-condition and predicted-target signature; "
+                    "portfolio diversity should be interpreted as subtype/constraint diversification rather than "
+                    "independent thermochemical regimes."
+                ),
+            }
+        )
+    if rows:
+        return pd.DataFrame(rows).sort_values(["scenario_name", "allocated_share_pct"], ascending=[True, False]).reset_index(drop=True)
+    return pd.DataFrame(
+        [
+            {
+                "scenario_name": pd.NA,
+                "pathway": "pyrolysis",
+                "duplicate_group_id": "none",
+                "rows_in_group": 0,
+                "distinct_sample_ids": 0,
+                "distinct_subtypes": 0,
+                "allocated_share_pct": 0.0,
+                "sample_ids": "",
+                "manure_subtypes": "",
+                "operating_condition": "",
+                "predicted_target_signature": "",
+                "audit_finding": "no_duplicate_selected_pyrolysis_signature",
+                "interpretation": "No duplicate selected pyrolysis operating/target signatures were found.",
+            }
+        ]
+    )
+
+
+def build_ad_boundary_fairness_audit(planning_dir: Path, benchmark_dir: Path) -> pd.DataFrame:
+    """Document AD as a boundary/reference diagnostic rather than a rejected technology."""
+
+    ad_reference = _read_csv_if_exists(planning_dir / "ad_reference_diagnostics.csv")
+    targeted_dir = _resolve_targeted_ablation_summary_dir_for_audit(benchmark_dir)
+    ablations = _read_csv_if_exists(targeted_dir / "targeted_planning_ablations_summary.csv")
+    scenarios = sorted(
+        set(ad_reference.get("scenario_name", pd.Series(dtype="object")).dropna().astype(str))
+        | set(ablations.get("scenario_name", pd.Series(dtype="object")).dropna().astype(str))
+    )
+    if not scenarios:
+        return pd.DataFrame()
+
+    rows: list[dict[str, object]] = []
+    for scenario_name in scenarios:
+        ad_ref_row = _first_matching_row(ad_reference, scenario_name=scenario_name)
+        ad_reference_present = not ad_ref_row.empty
+        primary_ad_share = (
+            _optional_float(ad_ref_row.get("baseline_portfolio_share_pct"))
+            if ad_reference_present
+            else pd.NA
+        )
+        complement_10 = _ablation_share(
+            ablations,
+            scenario_name=scenario_name,
+            ablation_family="ad_complementarity",
+            ablation_key="ad_min_share_10pct",
+            share_column="ad_allocated_share_pct",
+        )
+        complement_20 = _ablation_share(
+            ablations,
+            scenario_name=scenario_name,
+            ablation_family="ad_complementarity",
+            ablation_key="ad_min_share_20pct",
+            share_column="ad_allocated_share_pct",
+        )
+        digestate_max = _max_ablation_share(
+            ablations,
+            scenario_name=scenario_name,
+            ablation_family="coproduct_boundary",
+            key_contains="digestate_rng_credit",
+            share_column="ad_allocated_share_pct",
+        )
+        ad_floor_feasible = pd.notna(complement_10) and float(complement_10) >= 9.9
+        evidence_status = _classify_ad_boundary_evidence_status(
+            ad_reference_present=ad_reference_present,
+            complement_10=complement_10,
+            complement_20=complement_20,
+            digestate_max=digestate_max,
+        )
+        role_conclusion = (
+            "boundary_reference_not_technical_inferiority"
+            if evidence_status == "evaluated" and ad_floor_feasible
+            else "boundary_evidence_incomplete"
+        )
+        boundary_sentence = (
+            "AD is excluded from the primary thermochemical optimizer because the evidence, cost, RNG, "
+            "and digestate-revenue boundaries are not commensurate with HTC/pyrolysis rows; AD remains "
+            "feasible as a biological-reference or policy-floor diagnostic and is not interpreted as "
+            "technically inferior."
+            if role_conclusion == "boundary_reference_not_technical_inferiority"
+            else (
+                "AD boundary evidence is incomplete because one or more AD floor/credit diagnostics are missing; "
+                "do not use this export to support a non-inferiority boundary statement."
+            )
+        )
+        rows.append(
+            {
+                "scenario_name": scenario_name,
+                "primary_optimizer_ad_share_pct": round(float(primary_ad_share), 3)
+                if pd.notna(primary_ad_share)
+                else pd.NA,
+                "ad_min_10pct_floor_share_pct": round(float(complement_10), 3)
+                if pd.notna(complement_10)
+                else pd.NA,
+                "ad_min_20pct_floor_share_pct": round(float(complement_20), 3)
+                if pd.notna(complement_20)
+                else pd.NA,
+                "digestate_rng_credit_max_ad_share_pct": round(float(digestate_max), 3)
+                if pd.notna(digestate_max)
+                else pd.NA,
+                "ad_policy_floor_feasible": bool(ad_floor_feasible),
+                "ad_boundary_evidence_status": evidence_status,
+                "ad_role_conclusion": role_conclusion,
+                "not_technical_inferiority_sentence": boundary_sentence,
             }
         )
     return pd.DataFrame(rows).sort_values("scenario_name").reset_index(drop=True)
@@ -1112,7 +1849,217 @@ def build_planning_artifact_consistency_summary(
                     ),
                 }
             )
+    _append_profile_artifact_consistency_rows(
+        rows,
+        expected=expected,
+        artifact_label="paper1_core_boundary_regime_table.csv",
+        artifact=_read_csv_if_exists(figures_root / "paper1_core_boundary_regime_table.csv"),
+        selector_column="boundary_regime",
+        selector_value="Declared asymmetric credit + diversification rule",
+        tolerance_pct_point=tolerance_pct_point,
+    )
+    _append_profile_artifact_consistency_rows(
+        rows,
+        expected=expected,
+        artifact_label="paper1_driver_decomposition_table.csv",
+        artifact=_read_csv_if_exists(figures_root / "paper1_driver_decomposition_table.csv"),
+        selector_column="diagnostic",
+        selector_value="Declared asymmetric baseline",
+        tolerance_pct_point=tolerance_pct_point,
+    )
+    _append_policy_cost_consistency_rows(
+        rows,
+        portfolio_summary=_read_csv_if_exists(planning_root / "portfolio_summary.csv"),
+        artifact=_read_csv_if_exists(figures_root / "paper1_policy_cost_decomposition_table.csv"),
+    )
     return pd.DataFrame(rows).sort_values(["artifact_label", "scenario_name", "pathway"]).reset_index(drop=True)
+
+
+def _append_profile_artifact_consistency_rows(
+    rows: list[dict[str, object]],
+    *,
+    expected: pd.DataFrame,
+    artifact_label: str,
+    artifact: pd.DataFrame,
+    selector_column: str,
+    selector_value: str,
+    tolerance_pct_point: float,
+) -> None:
+    """Compare compact manuscript profile cells such as ``P 89.3 / H 10.7``."""
+
+    if artifact.empty:
+        return
+    scenario_columns = {
+        "baseline_region_case": "baseline_region",
+        "high_supply_case": "high_supply",
+        "policy_support_case": "policy_support",
+    }
+    required_columns = {selector_column, *scenario_columns.values()}
+    if not required_columns.issubset(artifact.columns):
+        for _, ref_row in expected.iterrows():
+            rows.append(
+                {
+                    "artifact_label": artifact_label,
+                    "scenario_name": ref_row["scenario_name"],
+                    "pathway": ref_row["pathway"],
+                    "expected_share_pct": ref_row["expected_share_pct"],
+                    "observed_share_pct": pd.NA,
+                    "absolute_difference_pct_point": pd.NA,
+                    "consistency_status": "missing_artifact_or_columns",
+                    "consistency_note": f"Artifact lacks required compact-profile columns: {sorted(required_columns)}.",
+                }
+            )
+        return
+    matches = artifact[artifact[selector_column].astype(str).eq(selector_value)]
+    if matches.empty:
+        for _, ref_row in expected.iterrows():
+            rows.append(
+                {
+                    "artifact_label": artifact_label,
+                    "scenario_name": ref_row["scenario_name"],
+                    "pathway": ref_row["pathway"],
+                    "expected_share_pct": ref_row["expected_share_pct"],
+                    "observed_share_pct": pd.NA,
+                    "absolute_difference_pct_point": pd.NA,
+                    "consistency_status": "missing_artifact_or_columns",
+                    "consistency_note": f"Artifact lacks the synchronized row '{selector_value}'.",
+                }
+            )
+        return
+    profile_row = matches.iloc[0]
+    for _, ref_row in expected.iterrows():
+        scenario_name = str(ref_row["scenario_name"])
+        pathway = str(ref_row["pathway"]).lower()
+        if pathway not in {"pyrolysis", "htc", "ad"} or scenario_name not in scenario_columns:
+            continue
+        observed_share = _extract_profile_share_pct(profile_row.get(scenario_columns[scenario_name]), pathway)
+        expected_share = _optional_float(ref_row.get("expected_share_pct"))
+        diff = (
+            abs(float(observed_share) - float(expected_share))
+            if pd.notna(observed_share) and pd.notna(expected_share)
+            else pd.NA
+        )
+        status = "pass" if pd.notna(diff) and float(diff) <= tolerance_pct_point else "fail"
+        rows.append(
+            {
+                "artifact_label": artifact_label,
+                "scenario_name": scenario_name,
+                "pathway": pathway,
+                "expected_share_pct": round(float(expected_share), 3)
+                if pd.notna(expected_share)
+                else pd.NA,
+                "observed_share_pct": round(float(observed_share), 3)
+                if pd.notna(observed_share)
+                else pd.NA,
+                "absolute_difference_pct_point": round(float(diff), 3)
+                if pd.notna(diff)
+                else pd.NA,
+                "consistency_status": status,
+                "consistency_note": (
+                    f"Compact profile differs by more than {tolerance_pct_point:.1f} percentage point."
+                    if status == "fail"
+                    else "Compact profile is aligned with portfolio_allocations.csv."
+                ),
+            }
+        )
+
+
+def _append_policy_cost_consistency_rows(
+    rows: list[dict[str, object]],
+    *,
+    portfolio_summary: pd.DataFrame,
+    artifact: pd.DataFrame,
+    tolerance_musd: float = 0.01,
+) -> None:
+    """Compare manuscript cost table against canonical portfolio_summary cost."""
+
+    if portfolio_summary.empty or artifact.empty:
+        return
+    if not {"scenario_name", "portfolio_cost_objective"}.issubset(portfolio_summary.columns):
+        return
+    if not {"scenario", "final_net_cost_musd_per_year"}.issubset(artifact.columns):
+        for scenario_name in portfolio_summary["scenario_name"].dropna().astype(str).unique():
+            rows.append(
+                {
+                    "artifact_label": "paper1_policy_cost_decomposition_table.csv",
+                    "scenario_name": scenario_name,
+                    "pathway": "portfolio_cost_musd_per_year",
+                    "expected_share_pct": pd.NA,
+                    "observed_share_pct": pd.NA,
+                    "absolute_difference_pct_point": pd.NA,
+                    "consistency_status": "missing_artifact_or_columns",
+                    "consistency_note": "Cost artifact lacks final_net_cost_musd_per_year.",
+                }
+            )
+        return
+    display_to_scenario = {
+        "baseline-region": "baseline_region_case",
+        "high-supply": "high_supply_case",
+        "policy-support": "policy_support_case",
+    }
+    expected_cost = portfolio_summary.copy()
+    expected_cost["expected_cost_musd"] = _numeric_column(expected_cost, "portfolio_cost_objective") / 1_000_000.0
+    observed = artifact.copy()
+    observed["scenario_name"] = observed["scenario"].astype(str).map(display_to_scenario).fillna(observed["scenario"].astype(str))
+    observed["observed_cost_musd"] = _numeric_column(observed, "final_net_cost_musd_per_year")
+    merged = expected_cost[["scenario_name", "expected_cost_musd"]].merge(
+        observed[["scenario_name", "observed_cost_musd"]],
+        on="scenario_name",
+        how="left",
+    )
+    for _, row in merged.iterrows():
+        expected_value = _optional_float(row.get("expected_cost_musd"))
+        observed_value = _optional_float(row.get("observed_cost_musd"))
+        diff = (
+            abs(float(observed_value) - float(expected_value))
+            if pd.notna(observed_value) and pd.notna(expected_value)
+            else pd.NA
+        )
+        status = "pass" if pd.notna(diff) and float(diff) <= tolerance_musd else "fail"
+        rows.append(
+            {
+                "artifact_label": "paper1_policy_cost_decomposition_table.csv",
+                "scenario_name": row["scenario_name"],
+                "pathway": "portfolio_cost_musd_per_year",
+                "expected_share_pct": round(float(expected_value), 3)
+                if pd.notna(expected_value)
+                else pd.NA,
+                "observed_share_pct": round(float(observed_value), 3)
+                if pd.notna(observed_value)
+                else pd.NA,
+                "absolute_difference_pct_point": round(float(diff), 3)
+                if pd.notna(diff)
+                else pd.NA,
+                "consistency_status": status,
+                "consistency_note": (
+                    f"Final cost differs by more than {tolerance_musd:.2f} MUSD y^-1."
+                    if status == "fail"
+                    else "Final cost is aligned with portfolio_summary.csv."
+                ),
+            }
+        )
+
+
+def _extract_profile_share_pct(value: object, pathway: str) -> float:
+    text = str(value or "").strip()
+    if not text or text.lower() == "nan" or text == "--":
+        return 0.0
+    lowered = text.lower()
+    aliases = {
+        "pyrolysis": ("p", "pyrolysis"),
+        "htc": ("h", "htc"),
+        "ad": ("ad",),
+    }
+    for canonical, pathway_aliases in aliases.items():
+        if any(f"{alias}-only" in lowered for alias in pathway_aliases):
+            return 100.0 if pathway == canonical else 0.0
+    patterns = {
+        "pyrolysis": r"(?:^|[^a-z0-9])(?:p|pyrolysis)\s*([0-9]+(?:\.[0-9]+)?)",
+        "htc": r"(?:^|[^a-z0-9])(?:h|htc)\s*([0-9]+(?:\.[0-9]+)?)",
+        "ad": r"(?:^|[^a-z0-9])(?:ad)\s*([0-9]+(?:\.[0-9]+)?)",
+    }
+    match = re.search(patterns.get(pathway, ""), lowered)
+    return float(match.group(1)) if match else 0.0
 
 
 def build_artifact_inventory(
@@ -1729,6 +2676,458 @@ def _selected_from_summary_frame(frame: pd.DataFrame) -> pd.DataFrame | None:
     return selected.reset_index(drop=True)
 
 
+def _derive_feedstock_hhv_from_ultimate_analysis(row: pd.Series) -> float | object:
+    required = {
+        "feedstock_carbon_pct": "carbon",
+        "feedstock_hydrogen_pct": "hydrogen",
+        "feedstock_nitrogen_pct": "nitrogen",
+        "feedstock_oxygen_pct": "oxygen",
+        "feedstock_ash_pct": "ash",
+    }
+    values: dict[str, float] = {}
+    for column, key in required.items():
+        value = pd.to_numeric(pd.Series([row.get(column)]), errors="coerce").iloc[0]
+        if pd.isna(value):
+            return pd.NA
+        values[key] = float(value)
+    hhv = (
+        0.3491 * values["carbon"]
+        + 1.1783 * values["hydrogen"]
+        - 0.1034 * values["oxygen"]
+        - 0.0151 * values["nitrogen"]
+        - 0.0211 * values["ash"]
+    )
+    return float(hhv) if np.isfinite(hhv) and hhv > 0.0 else pd.NA
+
+
+def _resolve_targeted_ablation_dir_for_audit(benchmark_dir: Path) -> Path:
+    candidates = [
+        benchmark_dir / "targeted_planning_ablations",
+        benchmark_dir.parent / "targeted_planning_ablations",
+        BENCHMARK_OUTPUTS_DIR / "targeted_planning_ablations",
+    ]
+    for candidate in candidates:
+        if (candidate / "portfolio_cap_diagnostics.csv").exists():
+            return candidate
+    return candidates[0]
+
+
+def _resolve_targeted_ablation_summary_dir_for_audit(benchmark_dir: Path) -> Path:
+    candidates = [
+        benchmark_dir / "targeted_planning_ablations",
+        benchmark_dir.parent / "targeted_planning_ablations",
+        BENCHMARK_OUTPUTS_DIR / "targeted_planning_ablations",
+    ]
+    for candidate in candidates:
+        if (candidate / "targeted_planning_ablations_summary.csv").exists():
+            return candidate
+    return candidates[0]
+
+
+def _planning_config_from_run_config(run_config: dict[str, object] | None) -> PlanningConfig:
+    if not run_config:
+        return PlanningConfig(enable_pareto_export=False)
+    raw_config = run_config.get("planning_config", {})
+    if not isinstance(raw_config, dict):
+        return PlanningConfig(enable_pareto_export=False)
+    weight_payload = raw_config.get("objective_weight_system", {})
+    weights = weight_payload.get("weights", {}) if isinstance(weight_payload, dict) else {}
+    preset = str(raw_config.get("objective_weight_preset", "balanced_cleaner_production"))
+    objective_weight_system = get_objective_weight_system(
+        preset_name=preset,
+        energy=weights.get("energy") if isinstance(weights, dict) else None,
+        environment=weights.get("environment") if isinstance(weights, dict) else None,
+        cost=weights.get("cost") if isinstance(weights, dict) else None,
+    )
+    return PlanningConfig(
+        objective_weight_preset=preset,
+        objective_weight_system=objective_weight_system,
+        top_k_per_scenario=int(raw_config.get("top_k_per_scenario", 5) or 5),
+        max_portfolio_candidates=int(raw_config.get("max_portfolio_candidates", 3) or 3),
+        max_candidate_share=float(raw_config.get("max_candidate_share", 0.45) or 0.45),
+        max_subtype_share=float(raw_config.get("max_subtype_share", 0.60) or 0.60),
+        min_distinct_subtypes=int(raw_config.get("min_distinct_subtypes", 2) or 2),
+        deployable_capacity_fraction=float(raw_config.get("deployable_capacity_fraction", 0.85) or 0.85),
+        robustness_factor=float(raw_config.get("robustness_factor", 0.35) or 0.35),
+        carbon_budget_factor=float(raw_config.get("carbon_budget_factor", 1.0) or 1.0),
+        constraint_relaxation_ratio=float(raw_config.get("constraint_relaxation_ratio", 1.0) or 1.0),
+        subtype_relaxation_ratio=float(raw_config.get("subtype_relaxation_ratio", 1.0) or 1.0),
+        enforce_candidate_cap=_coerce_bool_flag(raw_config.get("enforce_candidate_cap", True)),
+        enforce_subtype_cap=_coerce_bool_flag(raw_config.get("enforce_subtype_cap", True)),
+        enforce_max_selected=_coerce_bool_flag(raw_config.get("enforce_max_selected", True)),
+        enforce_min_distinct_subtypes=_coerce_bool_flag(raw_config.get("enforce_min_distinct_subtypes", True)),
+        scenario_metric_variance_scale=float(raw_config.get("scenario_metric_variance_scale", 1.0) or 1.0),
+        primary_optimization_pathways=tuple(raw_config.get("primary_optimization_pathways", ("pyrolysis", "htc"))),
+        scenario_external_evidence_table_path=raw_config.get("scenario_external_evidence_table_path") or None,
+        optimization_method=str(raw_config.get("optimization_method", "auto") or "auto"),
+        pyomo_solver_preference=str(raw_config.get("pyomo_solver_preference", "auto") or "auto"),
+        pareto_point_count=0,
+        enable_pareto_export=False,
+        uncertainty_penalty_mode=str(raw_config.get("uncertainty_penalty_mode", "prefer_interval_mean")),
+        evidence_utility_factor=float(raw_config.get("evidence_utility_factor", 0.15) or 0.15),
+        allow_surrogate_fallback=_coerce_bool_flag(raw_config.get("allow_surrogate_fallback", True)),
+        htc_model_priority=tuple(raw_config.get("htc_model_priority", PlanningConfig().htc_model_priority)),
+        partial_surrogate_weight=float(raw_config.get("partial_surrogate_weight", PlanningConfig().partial_surrogate_weight)),
+        static_fallback_weight=float(raw_config.get("static_fallback_weight", PlanningConfig().static_fallback_weight)),
+        unsupported_pathway_weight=float(raw_config.get("unsupported_pathway_weight", PlanningConfig().unsupported_pathway_weight)),
+        partial_surrogate_uncertainty_multiplier=float(
+            raw_config.get(
+                "partial_surrogate_uncertainty_multiplier",
+                PlanningConfig().partial_surrogate_uncertainty_multiplier,
+            )
+        ),
+        static_fallback_uncertainty_multiplier=float(
+            raw_config.get(
+                "static_fallback_uncertainty_multiplier",
+                PlanningConfig().static_fallback_uncertainty_multiplier,
+            )
+        ),
+        unsupported_pathway_uncertainty_multiplier=float(
+            raw_config.get(
+                "unsupported_pathway_uncertainty_multiplier",
+                PlanningConfig().unsupported_pathway_uncertainty_multiplier,
+            )
+        ),
+        partial_surrogate_information_premium_usd_per_ton=float(
+            raw_config.get(
+                "partial_surrogate_information_premium_usd_per_ton",
+                PlanningConfig().partial_surrogate_information_premium_usd_per_ton,
+            )
+        ),
+        static_fallback_information_premium_usd_per_ton=float(
+            raw_config.get(
+                "static_fallback_information_premium_usd_per_ton",
+                PlanningConfig().static_fallback_information_premium_usd_per_ton,
+            )
+        ),
+        unsupported_pathway_information_premium_usd_per_ton=float(
+            raw_config.get(
+                "unsupported_pathway_information_premium_usd_per_ton",
+                PlanningConfig().unsupported_pathway_information_premium_usd_per_ton,
+            )
+        ),
+        minimum_surrogate_artifact_test_r2=raw_config.get("minimum_surrogate_artifact_test_r2"),
+    )
+
+
+def _classify_hhv_dominance(
+    *,
+    max_abs_change: object,
+    pathway_changed: bool,
+    case_changed: bool,
+) -> str:
+    if pd.isna(max_abs_change):
+        return "not_evaluated"
+    if pathway_changed or float(max_abs_change) > 5.0:
+        return "potentially_pathway_dominant"
+    if float(max_abs_change) <= 1.0:
+        return "not_pathway_dominant_but_case_sensitive" if case_changed else "not_pathway_dominant"
+    return "limited_share_sensitivity_not_pathway_dominant"
+
+
+def _build_hhv_dominance_sentence(
+    *,
+    scenario_name: str,
+    affected_share: float,
+    max_abs_change: object,
+    conclusion: str,
+) -> str:
+    if pd.isna(max_abs_change):
+        return f"{scenario_name}: HHV-imputation dominance was not evaluated."
+    if conclusion == "potentially_pathway_dominant":
+        return (
+            f"{scenario_name}: HHV perturbation changes pathway shares by up to {float(max_abs_change):.1f} pp "
+            "or changes selected pathways, so pathway-level conclusions require explicit HHV-boundary qualification."
+        )
+    case_note = "although selected case IDs can switch" if "case_sensitive" in conclusion else "with stable selected cases"
+    return (
+        f"{scenario_name}: {affected_share:.1f}% of selected allocation uses composition-derived feedstock HHV, "
+        f"but ±10% replanning changes pathway shares by at most {float(max_abs_change):.1f} pp, {case_note}; "
+        "HHV imputation is therefore not a pathway-dominant driver under the tested stresses."
+    )
+
+
+_SURROGATE_RANGE_FEATURES = (
+    "feedstock_carbon_pct",
+    "feedstock_hydrogen_pct",
+    "feedstock_nitrogen_pct",
+    "feedstock_oxygen_pct",
+    "feedstock_moisture_pct",
+    "feedstock_volatile_matter_pct",
+    "feedstock_fixed_carbon_pct",
+    "feedstock_ash_pct",
+    "feedstock_hhv_mj_per_kg",
+    "process_temperature_c",
+    "residence_time_min",
+    "heating_rate_c_per_min",
+    "blend_manure_ratio",
+    "blend_wet_waste_ratio",
+)
+
+
+def _build_training_range_lookup(training: pd.DataFrame) -> dict[str, dict[str, tuple[float, float]]]:
+    if training.empty or "pathway" not in training.columns:
+        return {}
+    lookup: dict[str, dict[str, tuple[float, float]]] = {}
+    for pathway, subset in training.groupby(training["pathway"].astype(str).str.lower(), dropna=False):
+        ranges: dict[str, tuple[float, float]] = {}
+        for column in _SURROGATE_RANGE_FEATURES:
+            if column not in subset.columns:
+                continue
+            values = pd.to_numeric(subset[column], errors="coerce").dropna()
+            if values.empty:
+                continue
+            ranges[column] = (float(values.min()), float(values.max()))
+        lookup[str(pathway)] = ranges
+    return lookup
+
+
+def _leave_study_out_rows_for_pathway(flags: pd.DataFrame, pathway: str) -> pd.DataFrame:
+    if flags.empty or not {"summary_label", "dataset_key"}.issubset(flags.columns):
+        return pd.DataFrame()
+    dataset_prefix = "pyrolysis" if str(pathway).lower().startswith("pyro") else str(pathway).lower()
+    return flags[
+        flags["summary_label"].astype(str).eq("leave_study_out")
+        & flags["dataset_key"].astype(str).str.lower().str.contains(dataset_prefix, na=False)
+    ].copy()
+
+
+def _weakest_claim_status(statuses: pd.Series) -> str:
+    order = {"unsupported": 0, "weak": 1, "supportive": 2}
+    values = [str(value).lower() for value in statuses.dropna().tolist()]
+    if not values:
+        return "not_evaluated"
+    return min(values, key=lambda value: order.get(value, 99))
+
+
+def _selected_range_summary(
+    selected: pd.DataFrame,
+    training_ranges: dict[str, tuple[float, float]],
+) -> dict[str, object]:
+    if not training_ranges:
+        return {
+            "feature_range_status": "training_range_unavailable",
+            "within_training_range_all_features": False,
+            "out_of_range_feature_count": pd.NA,
+            "out_of_range_features": "",
+        }
+    out_of_range: list[str] = []
+    evaluated = 0
+    for column, (minimum, maximum) in training_ranges.items():
+        if column not in selected.columns:
+            continue
+        values = pd.to_numeric(selected[column], errors="coerce").dropna()
+        if values.empty:
+            continue
+        evaluated += 1
+        tolerance = max(abs(minimum), abs(maximum), 1.0) * 1e-9
+        if float(values.min()) < minimum - tolerance or float(values.max()) > maximum + tolerance:
+            out_of_range.append(
+                f"{column}[{float(values.min()):.3g},{float(values.max()):.3g}] "
+                f"vs train[{minimum:.3g},{maximum:.3g}]"
+            )
+    if evaluated == 0:
+        return {
+            "feature_range_status": "selected_features_unavailable",
+            "within_training_range_all_features": False,
+            "out_of_range_feature_count": pd.NA,
+            "out_of_range_features": "",
+        }
+    return {
+        "feature_range_status": "evaluated",
+        "within_training_range_all_features": len(out_of_range) == 0,
+        "out_of_range_feature_count": int(len(out_of_range)),
+        "out_of_range_features": "; ".join(out_of_range),
+    }
+
+
+def _classify_surrogate_extrapolation_ceiling(
+    *,
+    weakest_status: str,
+    all_in_range: bool,
+    missing_range: bool,
+) -> str:
+    if missing_range or weakest_status == "not_evaluated":
+        return "screening_only_validation_incomplete"
+    if weakest_status == "unsupported":
+        return "screening_only_external_validity_not_established"
+    if weakest_status == "weak":
+        return "evidence_gated_screening_only"
+    if not all_in_range:
+        return "interpolation_range_flag_screening_only"
+    return "conditional_interpolation_support_screening_only"
+
+
+def _build_surrogate_extrapolation_sentence(
+    *,
+    pathway: str,
+    weakest_status: str,
+    min_r2: object,
+    ceiling: str,
+    out_of_range_features: str,
+) -> str:
+    r2_text = "--" if pd.isna(min_r2) else f"{float(min_r2):.2f}"
+    range_text = f"; selected features outside training ranges: {out_of_range_features}" if out_of_range_features else ""
+    return (
+        f"{pathway}: leave-study-out weakest target is {weakest_status} (min test R2={r2_text}), "
+        f"so claims are capped at {ceiling}{range_text}. The surrogate is used as an evidence-gated "
+        "screening diagnostic, not as facility-level external validation."
+    )
+
+
+def _allocated_pathway_share_pct(allocations: pd.DataFrame, scenario_name: str, pathway: str) -> float:
+    if allocations.empty or not {"scenario_name", "pathway"}.issubset(allocations.columns):
+        return 0.0
+    subset = allocations[allocations["scenario_name"].astype(str).eq(str(scenario_name))].copy()
+    if subset.empty:
+        return 0.0
+    allocated = _numeric_column(subset, "allocated_feed_ton_per_year")
+    total = float(allocated.sum())
+    if total <= 0.0:
+        return 0.0
+    pathway_total = float(
+        allocated.loc[subset["pathway"].astype(str).str.lower().eq(str(pathway).lower())].sum()
+    )
+    return pathway_total / total * 100.0
+
+
+def _selected_sample_ids_for_pathway(allocations: pd.DataFrame, *, scenario_name: str, pathway: str) -> str:
+    if allocations.empty or not {"scenario_name", "pathway", "sample_id"}.issubset(allocations.columns):
+        return ""
+    subset = allocations[
+        allocations["scenario_name"].astype(str).eq(str(scenario_name))
+        & allocations["pathway"].astype(str).str.lower().eq(str(pathway).lower())
+        & (_numeric_column(allocations, "allocated_feed_ton_per_year") > 0.0)
+    ]
+    return _join_pipe_values(subset.get("sample_id", pd.Series(dtype="object")))
+
+
+def _cap_diagnostic_row(cap_diagnostics: pd.DataFrame, *, scenario_name: str, ablation_key: str) -> pd.Series:
+    if cap_diagnostics.empty or not {"scenario_name", "ablation_key"}.issubset(cap_diagnostics.columns):
+        return pd.Series(dtype="object")
+    match = cap_diagnostics[
+        cap_diagnostics["scenario_name"].astype(str).eq(str(scenario_name))
+        & cap_diagnostics["ablation_key"].astype(str).eq(str(ablation_key))
+    ]
+    return match.iloc[0] if not match.empty else pd.Series(dtype="object")
+
+
+def _first_matching_row(frame: pd.DataFrame, *, scenario_name: str) -> pd.Series:
+    if frame.empty or "scenario_name" not in frame.columns:
+        return pd.Series(dtype="object")
+    match = frame[frame["scenario_name"].astype(str).eq(str(scenario_name))]
+    return match.iloc[0] if not match.empty else pd.Series(dtype="object")
+
+
+def _ablation_share(
+    frame: pd.DataFrame,
+    *,
+    scenario_name: str,
+    ablation_family: str,
+    ablation_key: str,
+    share_column: str,
+) -> object:
+    if frame.empty or not {"scenario_name", "ablation_family", "ablation_key", share_column}.issubset(frame.columns):
+        return pd.NA
+    match = frame[
+        frame["scenario_name"].astype(str).eq(str(scenario_name))
+        & frame["ablation_family"].astype(str).eq(str(ablation_family))
+        & frame["ablation_key"].astype(str).eq(str(ablation_key))
+    ]
+    if match.empty:
+        return pd.NA
+    return _optional_float(match.iloc[0].get(share_column))
+
+
+def _max_ablation_share(
+    frame: pd.DataFrame,
+    *,
+    scenario_name: str,
+    ablation_family: str,
+    key_contains: str,
+    share_column: str,
+) -> object:
+    if frame.empty or not {"scenario_name", "ablation_family", "ablation_key", share_column}.issubset(frame.columns):
+        return pd.NA
+    match = frame[
+        frame["scenario_name"].astype(str).eq(str(scenario_name))
+        & frame["ablation_family"].astype(str).eq(str(ablation_family))
+        & frame["ablation_key"].astype(str).str.contains(str(key_contains), case=False, na=False)
+    ]
+    if match.empty:
+        return pd.NA
+    values = pd.to_numeric(match[share_column], errors="coerce").dropna()
+    return float(values.max()) if not values.empty else pd.NA
+
+
+def _classify_ad_boundary_evidence_status(
+    *,
+    ad_reference_present: bool,
+    complement_10: object,
+    complement_20: object,
+    digestate_max: object,
+) -> str:
+    missing: list[str] = []
+    if not ad_reference_present:
+        missing.append("missing_ad_reference")
+    if pd.isna(complement_10):
+        missing.append("missing_ad_floor_10pct")
+    if pd.isna(complement_20):
+        missing.append("missing_ad_floor_20pct")
+    if pd.isna(digestate_max):
+        missing.append("missing_digestate_credit")
+    return "evaluated" if not missing else "|".join(missing)
+
+
+def _binding_constraint_interpretation(row: pd.Series, relaxed_pyro: object, base_pyro: float) -> str:
+    binding = []
+    if _coerce_bool_flag(row.get("candidate_cap_binding")):
+        binding.append("candidate cap")
+    if _coerce_bool_flag(row.get("subtype_cap_binding")):
+        binding.append("subtype cap")
+    if _coerce_bool_flag(row.get("carbon_budget_binding")):
+        binding.append("residual carbon budget")
+    if _coerce_bool_flag(row.get("min_distinct_subtypes_binding")):
+        binding.append("minimum subtype diversity")
+    if _coerce_bool_flag(row.get("max_selected_binding")):
+        binding.append("maximum selected-row count")
+    if pd.notna(relaxed_pyro):
+        delta = float(relaxed_pyro) - float(base_pyro)
+        shift = f"cap-relaxed pyrolysis share changes by {delta:+.1f} percentage points"
+    else:
+        shift = "cap-relaxation comparator unavailable"
+    binding_text = ", ".join(binding) if binding else "no audited constraint"
+    return f"Binding diagnostics: {binding_text}; {shift}."
+
+
+def _format_duplicate_operating_condition(row: pd.Series) -> str:
+    temp = _optional_float(row.get("process_temperature_c"))
+    residence = _optional_float(row.get("residence_time_min"))
+    heating = _optional_float(row.get("heating_rate_c_per_min"))
+    heating_text = "--" if pd.isna(heating) else f"{float(heating):.1f}"
+    return (
+        f"T={float(temp):.1f} C, residence={float(residence):.1f} min, "
+        f"heating={heating_text} C min^-1"
+        if pd.notna(temp) and pd.notna(residence)
+        else "--"
+    )
+
+
+def _format_duplicate_target_signature(row: pd.Series) -> str:
+    fields = [
+        ("yield", "predicted_product_char_yield_pct", "product_char_yield_pct"),
+        ("HHV", "predicted_product_char_hhv_mj_per_kg", "product_char_hhv_mj_per_kg"),
+        ("energy", "predicted_energy_recovery_pct", "energy_recovery_pct"),
+        ("carbon", "predicted_carbon_retention_pct", "carbon_retention_pct"),
+    ]
+    parts: list[str] = []
+    for label, predicted, fallback in fields:
+        value = _optional_float(row.get(predicted, row.get(fallback)))
+        if pd.notna(value):
+            parts.append(f"{label}={float(value):.2f}")
+    return ", ".join(parts) if parts else "--"
+
+
 def _coerce_bool_flag(value: object) -> bool:
     if isinstance(value, bool):
         return value
@@ -1790,7 +3189,7 @@ def _portfolio_share_reference(path: Path) -> pd.DataFrame:
         [
             {"scenario_name": scenario_name, "pathway": pathway, "expected_share_pct": 0.0}
             for scenario_name in scenario_names
-            for pathway in ("pyrolysis", "htc", "ad")
+            for pathway in ("pyrolysis", "htc")
         ]
     )
     return (

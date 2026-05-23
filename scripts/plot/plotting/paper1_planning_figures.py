@@ -22,6 +22,14 @@ from .theme import (
 
 SCENARIO_ORDER = ['baseline_region_case', 'high_supply_case', 'policy_support_case']
 
+def _coerce_bool_flag(value: object) -> bool:
+    if isinstance(value, bool):
+        return value
+    if pd.isna(value):
+        return False
+    return str(value).strip().lower() in {"true", "1", "yes", "y", "selected"}
+
+
 def build_figure_score_comparison(frame: pd.DataFrame):
     plt = configure_publication_theme()
     fig, ax = plt.subplots(figsize=(8, 6))
@@ -62,7 +70,7 @@ def build_figure_allocation_stack(pathway_summary: pd.DataFrame):
     working["share_pct"] = share
     scenarios = [s for s in SCENARIO_ORDER if s in set(working["scenario_name"].astype(str))]
     pathways = [p for p in ["pyrolysis", "htc", "ad", "baseline"] if p in set(working["pathway"])]
-    fig, ax = plt.subplots(figsize=(8.5, 5.0))
+    fig, ax = plt.subplots(figsize=(8.5, 5.2))
     y = np.arange(len(scenarios))
     left = np.zeros(len(scenarios))
     for pathway in pathways:
@@ -88,7 +96,7 @@ def build_figure_allocation_stack(pathway_summary: pd.DataFrame):
     ax.set_yticklabels([scenario_label(s) for s in scenarios], fontweight="bold", color="#334155")
     ax.set_xlim(0, 100)
     ax.set_xlabel("Allocated throughput share (%)", fontweight="bold")
-    ax.set_title("Optimized pathway allocation under the synchronized baseline", fontweight="bold")
+    ax.set_title("Boundary-conditioned deterministic allocation", fontweight="bold")
     style_axis(ax, grid_axis="x")
     ax.legend(loc="lower center", bbox_to_anchor=(0.5, -0.28), ncol=max(1, len(pathways)), frameon=False)
     plt.tight_layout()
@@ -96,7 +104,7 @@ def build_figure_allocation_stack(pathway_summary: pd.DataFrame):
 
 def build_figure_evidence_composition(confidence_df):
     plt = configure_publication_theme()
-    fig, ax = plt.subplots(figsize=(8, 5))
+    fig, ax = plt.subplots(figsize=(8.2, 5.2))
     working = confidence_df.copy()
     if working.empty or "allocated_feed_ton_per_year" not in working.columns:
         ax.text(0.5, 0.5, "No allocated evidence-tier data available", ha="center", va="center")
@@ -106,7 +114,11 @@ def build_figure_evidence_composition(confidence_df):
     def _tier(row: pd.Series) -> str:
         level = str(row.get("surrogate_support_level", "")).lower()
         pathway = str(row.get("pathway", "")).lower()
+        imputed_columns = str(row.get("surrogate_imputed_feature_columns", "") or "").lower()
+        imputed_flag = _coerce_bool_flag(row.get("surrogate_feature_imputation_flag", False))
         if level == "surrogate_supported":
+            if imputed_flag or "feedstock_hhv_mj_per_kg" in imputed_columns:
+                return "Surrogate-supported with imputed key feature"
             return "Surrogate-supported"
         if "unsupported" in level or pathway == "ad":
             return "Proxy/reference"
@@ -124,8 +136,13 @@ def build_figure_evidence_composition(confidence_df):
     )
     totals = grouped.groupby("scenario_name")["allocated_feed_ton_per_year"].transform("sum").replace(0.0, np.nan)
     grouped["share"] = (grouped["allocated_feed_ton_per_year"] / totals).fillna(0.0)
-    modes = ["Surrogate-supported", "Fallback-backed", "Proxy/reference"]
-    colors = ["#059669", "#D97706", "#94A3B8"]
+    modes = [
+        "Surrogate-supported",
+        "Surrogate-supported with imputed key feature",
+        "Fallback-backed",
+        "Proxy/reference",
+    ]
+    colors = ["#059669", "#65A30D", "#D97706", "#94A3B8"]
     scenarios = [s for s in SCENARIO_ORDER if s in set(grouped["scenario_name"].astype(str))]
     y = np.arange(len(scenarios))
     left = np.zeros(len(scenarios))
@@ -139,11 +156,55 @@ def build_figure_evidence_composition(confidence_df):
             if value >= 0.08:
                 ax.text(left[idx] + value / 2, idx, f"{value * 100:.0f}%", ha="center", va="center", color="white", fontweight="bold", fontsize=8)
         left += np.asarray(vals)
+    imputed_columns = working.get(
+        "surrogate_imputed_feature_columns",
+        pd.Series([""] * len(working), index=working.index),
+    ).fillna("").astype(str)
+    imputed_mask = imputed_columns.str.contains("feedstock_hhv_mj_per_kg", case=False, na=False)
+    imputed = (
+        working[imputed_mask]
+        .groupby("scenario_name")["allocated_feed_ton_per_year"]
+        .sum()
+        .reindex(scenarios)
+        .fillna(0.0)
+    )
+    scenario_totals = (
+        working.groupby("scenario_name")["allocated_feed_ton_per_year"]
+        .sum()
+        .reindex(scenarios)
+        .replace(0.0, np.nan)
+    )
+    imputed_vals = (imputed / scenario_totals).fillna(0.0).to_numpy()
+    ax.barh(
+        y,
+        imputed_vals,
+        left=np.zeros(len(scenarios)),
+        height=0.5,
+        facecolor="none",
+        edgecolor="#0F172A",
+        hatch="////",
+        linewidth=0.6,
+        label="Feature-imputed input",
+        zorder=5,
+    )
+    for idx, value in enumerate(imputed_vals):
+        if value >= 0.08:
+            ax.text(
+                value / 2,
+                idx + 0.24,
+                f"HHV derived {value * 100:.1f}%",
+                ha="center",
+                va="bottom",
+                color="#0F172A",
+                fontsize=7,
+                fontweight="bold",
+            )
     ax.set_yticks(y)
     ax.set_yticklabels([scenario_label(s) for s in scenarios], fontweight='bold', color='#334155')
-    ax.set_xlabel('Share of Allocated Throughput by Evidence Tier', fontweight='bold')
+    ax.set_xlabel('Share of allocated throughput by evidence tier', fontweight='bold')
+    ax.set_title("Thermochemical allocations separate full vs HHV-imputed surrogate support", fontweight="bold")
     ax.set_xlim(0, 1.0)
-    ax.legend(loc='lower center', bbox_to_anchor=(0.5, -0.3), ncol=3, frameon=False)
+    ax.legend(loc='lower center', bbox_to_anchor=(0.5, -0.42), ncol=2, frameon=False)
     style_axis(ax, grid_axis='x')
     plt.tight_layout()
     return fig
@@ -161,9 +222,7 @@ def build_figure_boundary_regime_map(ablation_df: pd.DataFrame):
         ("Locked baseline", "ad_complementarity", "ad_min_share_00pct"),
         ("No product credit", "economic_baseline", "no_product_credit_baseline"),
         ("Symmetric credits", "economic_baseline", "symmetric_product_credit_baseline"),
-        ("No pyrolysis credit", "coproduct_boundary", "no_pyrolysis_product_credit"),
-        ("Hydrochar 75%", "coproduct_boundary", "hydrochar_credit_75pct"),
-        ("Hydrochar 100%", "coproduct_boundary", "hydrochar_credit_100pct"),
+        ("Pyrolysis max share 80%", "pathway_cap_sensitivity", "pyrolysis_max_share_080pct"),
     ]
     scenarios = [s for s in SCENARIO_ORDER if s in set(ablation_df["scenario_name"].astype(str))]
     display_rows = []
@@ -184,7 +243,6 @@ def build_figure_boundary_regime_map(ablation_df: pd.DataFrame):
     tier_color = {
         "pyrolysis": soften_hex(pathway_color("pyrolysis"), 0.18),
         "htc": soften_hex(pathway_color("htc"), 0.18),
-        "ad": soften_hex(pathway_color("ad"), 0.18),
         "mixed": "#E2E8F0",
     }
     for r, (label, rows) in enumerate(display_rows):
@@ -197,9 +255,8 @@ def build_figure_boundary_regime_map(ablation_df: pd.DataFrame):
                 row = match.iloc[0]
                 p = float(pd.to_numeric(pd.Series([row.get("pyrolysis_allocated_share_pct")]), errors="coerce").fillna(0).iloc[0])
                 h = float(pd.to_numeric(pd.Series([row.get("htc_allocated_share_pct")]), errors="coerce").fillna(0).iloc[0])
-                a = float(pd.to_numeric(pd.Series([row.get("ad_allocated_share_pct")]), errors="coerce").fillna(0).iloc[0])
-                text = f"P {p:.0f}\\nH {h:.0f}\\nA {a:.0f}"
-                vals = {"pyrolysis": p, "htc": h, "ad": a}
+                text = f"P {p:.1f}\nH {h:.1f}"
+                vals = {"pyrolysis": p, "htc": h}
                 dominant = max(vals, key=vals.get)
                 if sorted(vals.values(), reverse=True)[0] < 70:
                     dominant = "mixed"
@@ -214,7 +271,7 @@ def build_figure_boundary_regime_map(ablation_df: pd.DataFrame):
     ax.set_yticks(np.arange(len(display_rows)) + 0.5)
     ax.set_yticklabels([label for label, _ in display_rows], fontweight="bold", color="#334155")
     ax.invert_yaxis()
-    ax.set_title("Boundary-regime diagnostic map", fontweight="bold", pad=14)
+    ax.set_title("Thermochemical boundary-regime diagnostic map (AD reported separately)", fontweight="bold", pad=14)
     ax.tick_params(length=0)
     for spine in ax.spines.values():
         spine.set_visible(False)

@@ -199,6 +199,125 @@ def test_surrogate_evaluator_downgrades_when_any_target_uses_fallback(monkeypatc
     assert predictions.loc[0, "predicted_product_char_hhv_mj_per_kg"] == 20.0
 
 
+def test_surrogate_evaluator_preserves_scenario_name_for_repeated_case_ids(monkeypatch):
+    frame = pd.DataFrame(
+        [
+            {
+                "optimization_case_id": "case-1",
+                "scenario_name": "baseline",
+                "pathway": "pyrolysis",
+                "feedstock_moisture_pct": 70.0,
+                "product_char_yield_pct": 30.0,
+                "product_char_hhv_mj_per_kg": 20.0,
+                "energy_recovery_pct": 55.0,
+                "carbon_retention_pct": 40.0,
+            },
+            {
+                "optimization_case_id": "case-1",
+                "scenario_name": "stress",
+                "pathway": "pyrolysis",
+                "feedstock_moisture_pct": 80.0,
+                "product_char_yield_pct": 35.0,
+                "product_char_hhv_mj_per_kg": 21.0,
+                "energy_recovery_pct": 57.0,
+                "carbon_retention_pct": 42.0,
+            },
+        ]
+    )
+    evaluator = SurrogateEvaluator()
+    artifact = type(
+        "Artifact",
+        (),
+        {
+            "model_key": "rf",
+            "dataset_key": "pyrolysis_direct",
+            "split_strategy": "strict_group",
+            "feature_columns": ("feedstock_moisture_pct",),
+            "model_path": Path("dummy.joblib"),
+            "metrics_path": Path("dummy_metrics.json"),
+            "calibration_predictions_path": None,
+        },
+    )()
+
+    class DummyModel:
+        def predict(self, feature_frame):
+            return feature_frame["feedstock_moisture_pct"].to_numpy()
+
+    monkeypatch.setattr(evaluator, "_resolve_artifact", lambda **kwargs: artifact)
+    monkeypatch.setattr(evaluator, "_load_model", lambda _artifact: DummyModel())
+    monkeypatch.setattr(evaluator, "_estimate_prediction_interval", lambda _artifact: (1.0, 1.0, "test", 1))
+
+    predictions = evaluator.evaluate(frame)
+
+    assert len(predictions) == 2
+    assert predictions["scenario_name"].tolist() == ["baseline", "stress"]
+    assert predictions["predicted_product_char_yield_pct"].tolist() == [70.0, 80.0]
+
+
+def test_surrogate_evaluator_mixed_trained_and_fallback_keeps_scenario_keys(monkeypatch):
+    frame = pd.DataFrame(
+        [
+            {
+                "optimization_case_id": "case-1",
+                "scenario_name": "baseline",
+                "pathway": "pyrolysis",
+                "feedstock_moisture_pct": 70.0,
+                "product_char_yield_pct": 30.0,
+                "product_char_hhv_mj_per_kg": 20.0,
+                "energy_recovery_pct": 55.0,
+                "carbon_retention_pct": 40.0,
+            },
+            {
+                "optimization_case_id": "case-1",
+                "scenario_name": "stress",
+                "pathway": "pyrolysis",
+                "feedstock_moisture_pct": 80.0,
+                "product_char_yield_pct": 35.0,
+                "product_char_hhv_mj_per_kg": 21.0,
+                "energy_recovery_pct": 57.0,
+                "carbon_retention_pct": 42.0,
+            },
+        ]
+    )
+    evaluator = SurrogateEvaluator()
+
+    def artifact_for_target(*, target_column, **_kwargs):
+        feature_columns = (
+            ("feature_that_cannot_be_derived",)
+            if target_column == "product_char_hhv_mj_per_kg"
+            else ("feedstock_moisture_pct",)
+        )
+        return type(
+            "Artifact",
+            (),
+            {
+                "model_key": "rf",
+                "dataset_key": "pyrolysis_direct",
+                "split_strategy": "strict_group",
+                "feature_columns": feature_columns,
+                "model_path": Path("dummy.joblib"),
+                "metrics_path": Path("dummy_metrics.json"),
+                "calibration_predictions_path": None,
+            },
+        )()
+
+    class DummyModel:
+        def predict(self, feature_frame):
+            return feature_frame["feedstock_moisture_pct"].to_numpy()
+
+    monkeypatch.setattr(evaluator, "_resolve_artifact", artifact_for_target)
+    monkeypatch.setattr(evaluator, "_load_model", lambda _artifact: DummyModel())
+    monkeypatch.setattr(evaluator, "_estimate_prediction_interval", lambda _artifact: (1.0, 1.0, "test", 1))
+
+    predictions = evaluator.evaluate(frame)
+
+    assert predictions["scenario_name"].tolist() == ["baseline", "stress"]
+    assert predictions.loc[0, "surrogate_prediction_status"] == "trained_surrogate_with_documented_fallback"
+    assert predictions["predicted_product_char_yield_pct"].tolist() == [70.0, 80.0]
+    assert predictions["predicted_product_char_hhv_mj_per_kg"].tolist() == [20.0, 21.0]
+    assert "feature_that_cannot_be_derived" in predictions.loc[1, "surrogate_missing_feature_columns"]
+
+
 def test_build_surrogate_predictions_keeps_partial_fallback_mode(monkeypatch):
     frame = pd.DataFrame(
         [{"optimization_case_id": "case-1", "pathway": "pyrolysis"}]

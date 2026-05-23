@@ -39,6 +39,7 @@ def test_benchmark_suite_smoke(tmp_path):
     diagnostics = pd.read_csv(output_dir / "benchmark_diagnostics.csv")
     bootstrap_samples = pd.read_csv(output_dir / "benchmark_bootstrap_shift_samples.csv")
     statistical_summary = pd.read_csv(output_dir / "benchmark_statistical_summary.csv")
+    effect_tier_audit = pd.read_csv(output_dir / "benchmark_effect_tier_audit.csv")
     run_config = json.loads((output_dir / "run_config.json").read_text(encoding="utf-8"))
 
     assert not summary.empty
@@ -47,12 +48,24 @@ def test_benchmark_suite_smoke(tmp_path):
     assert not diagnostics.empty
     assert not bootstrap_samples.empty
     assert not statistical_summary.empty
+    assert not effect_tier_audit.empty
     assert summary["benchmark_variant"].isin(result["benchmark_variant_keys"]).all()
     assert "comparator_family" in summary.columns
     assert "allocation_mode" in summary.columns
     assert "portfolio_pathway_shift" in shifts.columns
     assert shifts["benchmark_variant"].ne("baseline_evidence_aware").all()
     assert "effect_significance_tier" in statistical_summary.columns
+    assert {
+        "scenario_name",
+        "benchmark_variant",
+        "comparator_role",
+        "effect_significance_tier",
+        "bootstrap_replicate_count",
+        "claim_gate_role",
+    }.issubset(effect_tier_audit.columns)
+    assert set(effect_tier_audit["claim_gate_role"]).issubset(
+        {"blocking", "contextual", "not_used_for_claim"}
+    )
     assert summary[summary["benchmark_variant"].eq("mcda_weighted_sum_comparator")]["allocation_mode"].eq(
         "mcda_weighted_sum"
     ).all()

@@ -381,6 +381,16 @@ def test_scenario_run_reporting_outputs_stay_with_explicit_planning_dir(tmp_path
     )
 
     assert result["reporting_outputs"]["planning_results_table"] == str(planning_dir / "main_results_table.csv")
+    assert result["reporting_outputs"]["planning_results_table_thermochemical"] == str(
+        planning_dir / "main_results_table_thermochemical.csv"
+    )
+    assert result["reporting_outputs"]["planning_ad_reference_diagnostics"] == str(
+        planning_dir / "ad_reference_diagnostics.csv"
+    )
+    thermochemical = pd.read_csv(planning_dir / "main_results_table_thermochemical.csv")
+    assert not thermochemical["pathway"].astype(str).str.lower().eq("ad").any()
+    ad_reference = pd.read_csv(planning_dir / "ad_reference_diagnostics.csv")
+    assert not ad_reference.empty
     assert result["audit_outputs"]["planning_claim_flag_table"] == str(tmp_path / "audit" / "planning_claim_flag_table.csv")
 
 

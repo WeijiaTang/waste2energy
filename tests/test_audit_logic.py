@@ -9,11 +9,18 @@ import pandas as pd
 import pytest
 
 import waste2energy.manuscript_sync as manuscript_sync_module
+import waste2energy.audit as audit_module
 from waste2energy.audit import (
     InconsistencyWarning,
     build_artifact_inventory,
     build_benchmark_claim_summary,
     build_benchmark_manuscript_sentences,
+    build_ad_boundary_fairness_audit,
+    build_binding_constraint_audit,
+    build_duplicate_candidate_audit,
+    build_hhv_dominance_audit,
+    build_hhv_imputation_sensitivity,
+    build_hhv_replanning_sensitivity,
     build_ml_best_result_summary,
     build_ml_claim_flag_table,
     build_ml_refit_provenance_summary,
@@ -23,6 +30,7 @@ from waste2energy.audit import (
     build_planning_claim_flag_table,
     build_planning_transferability_risk_summary,
     build_planning_ml_consistency_summary,
+    build_surrogate_extrapolation_audit,
     build_confirmatory_audit,
 )
 from waste2energy.manuscript_sync import sync_planning_summary_to_latex
@@ -322,6 +330,91 @@ def test_planning_artifact_consistency_flags_stale_allocation_tables(tmp_path):
     assert pyrolysis["expected_share_pct"] == 88.3
     assert pyrolysis["observed_share_pct"] == 90.0
     assert pyrolysis["absolute_difference_pct_point"] == 1.7
+
+
+def test_planning_artifact_consistency_checks_compact_profiles_and_costs(tmp_path):
+    planning_dir = tmp_path / "planning"
+    figures_dir = tmp_path / "figures_tables"
+    audit_dir = tmp_path / "audit"
+    for directory in (planning_dir, figures_dir, audit_dir):
+        directory.mkdir()
+
+    pd.DataFrame(
+        [
+            {"scenario_name": "baseline_region_case", "pathway": "pyrolysis", "allocated_feed_ton_per_year": 89.3},
+            {"scenario_name": "baseline_region_case", "pathway": "htc", "allocated_feed_ton_per_year": 10.7},
+        ]
+    ).to_csv(planning_dir / "portfolio_allocations.csv", index=False)
+    pd.DataFrame(
+        [
+            {
+                "scenario_name": "baseline_region_case",
+                "portfolio_cost_objective": 2_950_000.0,
+            }
+        ]
+    ).to_csv(planning_dir / "portfolio_summary.csv", index=False)
+    fresh_rows = pd.DataFrame(
+        [
+            {"scenario_name": "baseline_region_case", "pathway": "pyrolysis", "baseline_portfolio_share_pct": 89.3},
+            {"scenario_name": "baseline_region_case", "pathway": "htc", "baseline_portfolio_share_pct": 10.7},
+            {"scenario_name": "baseline_region_case", "pathway": "ad", "baseline_portfolio_share_pct": 0.0},
+        ]
+    )
+    fresh_rows.to_csv(planning_dir / "main_results_table.csv", index=False)
+    fresh_rows.to_csv(figures_dir / "paper1_planning_results_table.csv", index=False)
+    fresh_rows.to_csv(audit_dir / "planning_claim_flag_table.csv", index=False)
+    pd.DataFrame(
+        [
+            {
+                "diagnostic": "Declared asymmetric baseline",
+                "baseline_region": "P 90.0 / H 10.0",
+                "high_supply": "--",
+                "policy_support": "--",
+            }
+        ]
+    ).to_csv(figures_dir / "paper1_driver_decomposition_table.csv", index=False)
+    pd.DataFrame(
+        [
+            {
+                "boundary_regime": "Declared asymmetric credit + diversification rule",
+                "baseline_region": "P 89.3 / H 10.7",
+                "high_supply": "--",
+                "policy_support": "--",
+            }
+        ]
+    ).to_csv(figures_dir / "paper1_core_boundary_regime_table.csv", index=False)
+    pd.DataFrame(
+        [
+            {
+                "scenario": "baseline-region",
+                "final_net_cost_musd_per_year": 1.00,
+            }
+        ]
+    ).to_csv(figures_dir / "paper1_policy_cost_decomposition_table.csv", index=False)
+
+    summary = build_planning_artifact_consistency_summary(
+        planning_dir,
+        figures_dir=figures_dir,
+        audit_dir=audit_dir,
+        tolerance_pct_point=0.1,
+    )
+
+    failed = summary[summary["consistency_status"] == "fail"]
+    assert {
+        "paper1_driver_decomposition_table.csv",
+        "paper1_policy_cost_decomposition_table.csv",
+    }.issubset(set(failed["artifact_label"]))
+    driver_pyrolysis = failed[
+        (failed["artifact_label"] == "paper1_driver_decomposition_table.csv")
+        & (failed["scenario_name"] == "baseline_region_case")
+        & (failed["pathway"] == "pyrolysis")
+    ].iloc[0]
+    assert driver_pyrolysis["expected_share_pct"] == 89.3
+    assert driver_pyrolysis["observed_share_pct"] == 90.0
+    cost_row = failed[failed["artifact_label"] == "paper1_policy_cost_decomposition_table.csv"].iloc[0]
+    assert cost_row["pathway"] == "portfolio_cost_musd_per_year"
+    assert cost_row["expected_share_pct"] == 2.95
+    assert cost_row["observed_share_pct"] == 1.0
 
 
 def test_build_benchmark_claim_summary_flags_core_innovation_when_pathways_shift(tmp_path):
@@ -1292,6 +1385,9 @@ def test_planning_ml_consistency_reports_surrogate_feature_imputation_share(tmp_
 
     assert row["surrogate_supported_allocation_share"] == pytest.approx(1.0)
     assert row["surrogate_feature_imputed_allocation_share"] == pytest.approx(0.9)
+    assert row["surrogate_supported_with_imputed_key_feature_allocation_share"] == pytest.approx(0.9)
+    assert row["fully_observed_surrogate_supported_allocation_share"] == pytest.approx(0.1)
+    assert row["surrogate_support_evidence_tier"] == "surrogate_supported_with_imputed_key_feature"
     assert row["surrogate_imputed_feature_columns"] == "feedstock_hhv_mj_per_kg"
 
 
@@ -1325,6 +1421,443 @@ def test_planning_ml_consistency_separates_missing_mapping_from_unsupported(tmp_
     assert row["missing_reliability_allocation_share"] == 0.8
     assert row["unsupported_allocation_share"] == 0.0
     assert "without any pathway-level reliability mapping" in row["risk_note"]
+
+
+def test_hhv_imputation_sensitivity_exports_imputed_key_feature_tier(tmp_path):
+    planning_dir = tmp_path / "planning_hhv"
+    planning_dir.mkdir()
+    pd.DataFrame(
+        [
+            {
+                "scenario_name": "baseline_region_case",
+                "pathway": "pyrolysis",
+                "allocated_feed_ton_per_year": 90.0,
+                "allocated_feed_share": 0.9,
+                "sample_id": "P-1",
+                "manure_subtype": "dairy",
+                "feedstock_carbon_pct": 44.0,
+                "feedstock_hydrogen_pct": 6.0,
+                "feedstock_nitrogen_pct": 3.0,
+                "feedstock_oxygen_pct": 34.0,
+                "feedstock_ash_pct": 12.0,
+                "surrogate_feature_imputation_flag": True,
+                "surrogate_imputed_feature_columns": "feedstock_hhv_mj_per_kg",
+            },
+            {
+                "scenario_name": "baseline_region_case",
+                "pathway": "htc",
+                "allocated_feed_ton_per_year": 10.0,
+                "allocated_feed_share": 0.1,
+                "sample_id": "H-1",
+                "manure_subtype": "dairy",
+                "surrogate_feature_imputation_flag": True,
+                "surrogate_imputed_feature_columns": "some_other_feature",
+            },
+        ]
+    ).to_csv(planning_dir / "portfolio_allocations.csv", index=False)
+
+    result = build_hhv_imputation_sensitivity(planning_dir)
+
+    assert set(result["stress_case"]) == {
+        "composition-derived baseline",
+        "HHV imputation -10%",
+        "HHV imputation -5%",
+        "HHV imputation +5%",
+        "HHV imputation +10%",
+    }
+    assert result["allocated_share_pct"].iloc[0] == pytest.approx(90.0)
+    assert set(result["evidence_tier"]) == {"surrogate_supported_with_imputed_key_feature"}
+
+
+def test_hhv_replanning_sensitivity_reruns_optimizer_with_perturbed_hhv(tmp_path, monkeypatch):
+    from waste2energy.planning.inputs import PlanningInputBundle
+
+    planning_dir = tmp_path / "planning_hhv_replan"
+    planning_dir.mkdir()
+    pd.DataFrame(
+        [
+            {"scenario_name": "baseline_region_case", "pathway": "pyrolysis", "allocated_feed_ton_per_year": 90.0, "sample_id": "P-base"},
+            {"scenario_name": "baseline_region_case", "pathway": "htc", "allocated_feed_ton_per_year": 10.0, "sample_id": "H-base"},
+        ]
+    ).to_csv(planning_dir / "portfolio_allocations.csv", index=False)
+    (planning_dir / "run_config.json").write_text(
+        json.dumps({"dataset_path": "dummy.csv", "planning_config": {"primary_optimization_pathways": ["pyrolysis", "htc"]}}),
+        encoding="utf-8",
+    )
+    frame = pd.DataFrame(
+        [
+            {
+                "scenario_name": "baseline_region_case",
+                "pathway": "pyrolysis",
+                "sample_id": "P-stress",
+                "feedstock_hhv_mj_per_kg": pd.NA,
+                "feedstock_carbon_pct": 44.0,
+                "feedstock_hydrogen_pct": 6.0,
+                "feedstock_nitrogen_pct": 3.0,
+                "feedstock_oxygen_pct": 34.0,
+                "feedstock_ash_pct": 12.0,
+            }
+        ]
+    )
+    bundle = PlanningInputBundle(
+        frame=frame,
+        dataset_path=tmp_path / "dummy.csv",
+        scenario_names=("baseline_region_case",),
+        pathways=("pyrolysis", "htc"),
+        real_cost_columns=(),
+        surrogate_feature_columns=("feedstock_hhv_mj_per_kg",),
+        unit_registry={},
+    )
+
+    monkeypatch.setattr(audit_module, "load_planning_input_bundle", lambda dataset_path=None: bundle)
+
+    baseline_hhv = float(audit_module._derive_feedstock_hhv_from_ultimate_analysis(frame.iloc[0]))
+
+    def fake_execute_planning_pipeline(*, bundle, config):
+        stressed_hhv = float(pd.to_numeric(bundle.frame["feedstock_hhv_mj_per_kg"], errors="coerce").iloc[0])
+        pyro_share = 95.0 if stressed_hhv > baseline_hhv else 85.0 if stressed_hhv < baseline_hhv else 90.0
+        return {
+            "portfolio_allocations": pd.DataFrame(
+                [
+                    {
+                        "scenario_name": "baseline_region_case",
+                        "pathway": "pyrolysis",
+                        "allocated_feed_ton_per_year": pyro_share,
+                        "sample_id": "P-stress",
+                    },
+                    {
+                        "scenario_name": "baseline_region_case",
+                        "pathway": "htc",
+                        "allocated_feed_ton_per_year": 100.0 - pyro_share,
+                        "sample_id": "H-stress",
+                    },
+                ]
+            )
+        }
+
+    monkeypatch.setattr(audit_module, "execute_planning_pipeline", fake_execute_planning_pipeline)
+
+    result = build_hhv_replanning_sensitivity(planning_dir)
+
+    plus = result[
+        (result["pathway"] == "pyrolysis")
+        & (result["stress_case"] == "HHV replanning +10%")
+    ].iloc[0]
+    baseline = result[
+        (result["pathway"] == "pyrolysis")
+        & (result["stress_case"] == "HHV replanning baseline-derived")
+    ].iloc[0]
+    assert plus["replanning_status"] == "replanned"
+    assert plus["share_change_pct_point"] == pytest.approx(5.0)
+    assert baseline["share_change_pct_point"] == pytest.approx(0.0)
+
+
+def test_hhv_dominance_audit_distinguishes_case_switch_from_pathway_dominance(tmp_path):
+    planning_dir = tmp_path / "planning_hhv_dominance"
+    planning_dir.mkdir()
+    pd.DataFrame(
+        [
+            {"scenario_name": "baseline_region_case", "pathway": "pyrolysis", "allocated_feed_ton_per_year": 90.0},
+            {"scenario_name": "baseline_region_case", "pathway": "htc", "allocated_feed_ton_per_year": 10.0},
+        ]
+    ).to_csv(planning_dir / "portfolio_allocations.csv", index=False)
+    imputation = pd.DataFrame(
+        [
+            {
+                "scenario_name": "baseline_region_case",
+                "pathway": "pyrolysis",
+                "stress_case": "composition-derived baseline",
+                "allocated_share_pct": 90.0,
+            }
+        ]
+    )
+    replanning = pd.DataFrame(
+        [
+            {
+                "scenario_name": "baseline_region_case",
+                "pathway": "pyrolysis",
+                "stress_case": "HHV replanning +10%",
+                "baseline_share_pct": 90.0,
+                "stressed_share_pct": 89.4,
+                "share_change_pct_point": -0.6,
+                "baseline_selected_sample_ids": "P-1",
+                "stressed_selected_sample_ids": "P-2",
+                "replanning_status": "replanned",
+            },
+            {
+                "scenario_name": "baseline_region_case",
+                "pathway": "htc",
+                "stress_case": "HHV replanning +10%",
+                "baseline_share_pct": 10.0,
+                "stressed_share_pct": 10.6,
+                "share_change_pct_point": 0.6,
+                "baseline_selected_sample_ids": "H-1",
+                "stressed_selected_sample_ids": "H-1",
+                "replanning_status": "replanned",
+            },
+        ]
+    )
+
+    result = build_hhv_dominance_audit(
+        planning_dir,
+        hhv_imputation_sensitivity=imputation,
+        hhv_replanning_sensitivity=replanning,
+    )
+    row = result.iloc[0]
+
+    assert row["affected_imputed_share_pct"] == pytest.approx(90.0)
+    assert row["max_abs_pathway_share_change_pct_point"] == pytest.approx(0.6)
+    assert bool(row["selected_case_changed"]) is True
+    assert row["hhv_dominance_conclusion"] == "not_pathway_dominant_but_case_sensitive"
+
+
+def test_binding_constraint_audit_reports_binding_and_cap_relaxation_shift(tmp_path):
+    planning_dir = tmp_path / "planning_binding"
+    benchmark_dir = tmp_path / "benchmark" / "baseline"
+    ablation_dir = benchmark_dir / "targeted_planning_ablations"
+    planning_dir.mkdir()
+    ablation_dir.mkdir(parents=True)
+    pd.DataFrame(
+        [
+            {
+                "scenario_name": "baseline_region_case",
+                "pathway": "pyrolysis",
+                "allocated_feed_ton_per_year": 90.0,
+            },
+            {
+                "scenario_name": "baseline_region_case",
+                "pathway": "htc",
+                "allocated_feed_ton_per_year": 10.0,
+            },
+        ]
+    ).to_csv(planning_dir / "portfolio_allocations.csv", index=False)
+    pd.DataFrame(
+        [
+            {
+                "scenario_name": "baseline_region_case",
+                "candidate_cap_binding": True,
+                "candidate_cap_slack_ton_per_year": 0.0,
+                "subtype_cap_binding": False,
+                "subtype_cap_slack_ton_per_year": 5.0,
+                "carbon_budget_binding": False,
+                "carbon_budget_slack_kgco2e": 1000.0,
+                "min_distinct_subtypes_binding": True,
+                "max_selected_binding": True,
+            }
+        ]
+    ).to_csv(planning_dir / "optimization_diagnostics.csv", index=False)
+    pd.DataFrame(
+        [
+            {
+                "scenario_name": "baseline_region_case",
+                "ablation_key": "candidate_and_subtype_caps_relaxed",
+                "pyrolysis_allocated_share_pct": 95.0,
+                "htc_allocated_share_pct": 5.0,
+            },
+            {
+                "scenario_name": "baseline_region_case",
+                "ablation_key": "candidate_cap_relaxed_100pct",
+                "max_candidate_allocated_share_pct": 55.0,
+            },
+        ]
+    ).to_csv(ablation_dir / "portfolio_cap_diagnostics.csv", index=False)
+
+    result = build_binding_constraint_audit(planning_dir, benchmark_dir)
+    row = result.iloc[0]
+
+    assert bool(row["candidate_cap_binding"]) is True
+    assert bool(row["residual_carbon_constraint_binding"]) is False
+    assert row["baseline_pyrolysis_share_pct"] == pytest.approx(90.0)
+    assert row["cap_relaxed_pyrolysis_share_change_pct_point"] == pytest.approx(5.0)
+    assert "candidate cap" in row["interpretation"]
+
+
+def test_duplicate_candidate_audit_flags_same_pyrolysis_signature_across_subtypes(tmp_path):
+    planning_dir = tmp_path / "planning_dup"
+    planning_dir.mkdir()
+    base = {
+        "scenario_name": "baseline_region_case",
+        "pathway": "pyrolysis",
+        "allocated_feed_ton_per_year": 45.0,
+        "allocated_feed_share": 0.45,
+        "process_temperature_c": 400.0,
+        "residence_time_min": 30.0,
+        "heating_rate_c_per_min": 10.0,
+        "predicted_product_char_yield_pct": 40.0,
+        "predicted_product_char_hhv_mj_per_kg": 24.0,
+        "predicted_energy_recovery_pct": 50.0,
+        "predicted_carbon_retention_pct": 51.0,
+        "feedstock_carbon_pct": 44.0,
+        "feedstock_hydrogen_pct": 6.0,
+        "feedstock_nitrogen_pct": 3.0,
+        "feedstock_oxygen_pct": 34.0,
+        "feedstock_ash_pct": 12.0,
+    }
+    pd.DataFrame(
+        [
+            {**base, "sample_id": "P-1", "manure_subtype": "dairy"},
+            {**base, "sample_id": "P-2", "manure_subtype": "swine"},
+            {**base, "sample_id": "H-1", "pathway": "htc", "manure_subtype": "dairy", "allocated_feed_ton_per_year": 10.0},
+        ]
+    ).to_csv(planning_dir / "portfolio_allocations.csv", index=False)
+
+    result = build_duplicate_candidate_audit(planning_dir)
+    row = result.iloc[0]
+
+    assert row["rows_in_group"] == 2
+    assert row["distinct_subtypes"] == 2
+    assert row["allocated_share_pct"] == pytest.approx(90.0)
+    assert row["audit_finding"] == "duplicate_operating_and_target_signature"
+
+
+def test_surrogate_extrapolation_audit_caps_weak_lso_claims_at_screening(tmp_path):
+    planning_dir = tmp_path / "planning_surrogate_extrap"
+    planning_dir.mkdir()
+    pd.DataFrame(
+        [
+            {
+                "scenario_name": "baseline_region_case",
+                "pathway": "pyrolysis",
+                "allocated_feed_ton_per_year": 90.0,
+                "feedstock_carbon_pct": 44.0,
+                "process_temperature_c": 400.0,
+                "residence_time_min": 30.0,
+            }
+        ]
+    ).to_csv(planning_dir / "portfolio_allocations.csv", index=False)
+    ml_flags = pd.DataFrame(
+        [
+            {
+                "summary_label": "leave_study_out",
+                "dataset_key": "pyrolysis_direct",
+                "target_column": "energy_recovery_pct",
+                "best_test_r2": -0.01,
+                "claim_status": "unsupported",
+            },
+            {
+                "summary_label": "leave_study_out",
+                "dataset_key": "pyrolysis_direct",
+                "target_column": "product_char_yield_pct",
+                "best_test_r2": 0.76,
+                "claim_status": "supportive",
+            },
+        ]
+    )
+    training = tmp_path / "training.csv"
+    pd.DataFrame(
+        [
+            {
+                "pathway": "pyrolysis",
+                "feedstock_carbon_pct": 40.0,
+                "process_temperature_c": 350.0,
+                "residence_time_min": 20.0,
+            },
+            {
+                "pathway": "pyrolysis",
+                "feedstock_carbon_pct": 50.0,
+                "process_temperature_c": 500.0,
+                "residence_time_min": 60.0,
+            },
+        ]
+    ).to_csv(training, index=False)
+
+    result = build_surrogate_extrapolation_audit(
+        planning_dir,
+        ml_flags=ml_flags,
+        training_dataset_path=training,
+    )
+    row = result.iloc[0]
+
+    assert row["weakest_leave_study_out_claim_status"] == "unsupported"
+    assert row["min_leave_study_out_test_r2"] == pytest.approx(-0.01)
+    assert bool(row["within_training_range_all_features"]) is True
+    assert row["extrapolation_evidence_ceiling"] == "screening_only_external_validity_not_established"
+
+
+def test_ad_boundary_fairness_audit_prevents_technical_inferiority_claim(tmp_path):
+    planning_dir = tmp_path / "planning_ad_boundary"
+    benchmark_dir = tmp_path / "benchmark" / "baseline"
+    ablation_dir = benchmark_dir / "targeted_planning_ablations"
+    planning_dir.mkdir()
+    ablation_dir.mkdir(parents=True)
+    pd.DataFrame(
+        [
+            {
+                "scenario_name": "baseline_region_case",
+                "pathway": "ad",
+                "baseline_portfolio_share_pct": 0.0,
+            }
+        ]
+    ).to_csv(planning_dir / "ad_reference_diagnostics.csv", index=False)
+    pd.DataFrame(
+        [
+            {
+                "ablation_family": "ad_complementarity",
+                "ablation_key": "ad_min_share_10pct",
+                "scenario_name": "baseline_region_case",
+                "ad_allocated_share_pct": 18.0,
+            },
+            {
+                "ablation_family": "ad_complementarity",
+                "ablation_key": "ad_min_share_20pct",
+                "scenario_name": "baseline_region_case",
+                "ad_allocated_share_pct": 25.0,
+            },
+            {
+                "ablation_family": "coproduct_boundary",
+                "ablation_key": "digestate_rng_credit_300pct",
+                "scenario_name": "baseline_region_case",
+                "ad_allocated_share_pct": 0.0,
+            },
+        ]
+    ).to_csv(ablation_dir / "targeted_planning_ablations_summary.csv", index=False)
+
+    result = build_ad_boundary_fairness_audit(planning_dir, benchmark_dir)
+    row = result.iloc[0]
+
+    assert row["primary_optimizer_ad_share_pct"] == pytest.approx(0.0)
+    assert row["ad_min_10pct_floor_share_pct"] == pytest.approx(18.0)
+    assert bool(row["ad_policy_floor_feasible"]) is True
+    assert row["ad_boundary_evidence_status"] == "evaluated"
+    assert row["ad_role_conclusion"] == "boundary_reference_not_technical_inferiority"
+    assert "not interpreted as technically inferior" in row["not_technical_inferiority_sentence"]
+
+
+def test_ad_boundary_fairness_audit_flags_missing_ad_reference(tmp_path):
+    planning_dir = tmp_path / "planning_ad_missing_reference"
+    benchmark_dir = tmp_path / "benchmark" / "baseline"
+    ablation_dir = benchmark_dir / "targeted_planning_ablations"
+    planning_dir.mkdir()
+    ablation_dir.mkdir(parents=True)
+    pd.DataFrame(
+        [
+            {
+                "ablation_family": "ad_complementarity",
+                "ablation_key": "ad_min_share_10pct",
+                "scenario_name": "baseline_region_case",
+                "ad_allocated_share_pct": 18.0,
+            },
+            {
+                "ablation_family": "ad_complementarity",
+                "ablation_key": "ad_min_share_20pct",
+                "scenario_name": "baseline_region_case",
+                "ad_allocated_share_pct": 25.0,
+            },
+            {
+                "ablation_family": "coproduct_boundary",
+                "ablation_key": "digestate_rng_credit_300pct",
+                "scenario_name": "baseline_region_case",
+                "ad_allocated_share_pct": 0.0,
+            },
+        ]
+    ).to_csv(ablation_dir / "targeted_planning_ablations_summary.csv", index=False)
+
+    result = build_ad_boundary_fairness_audit(planning_dir, benchmark_dir)
+    row = result.iloc[0]
+
+    assert row["ad_boundary_evidence_status"] == "missing_ad_reference"
+    assert row["ad_role_conclusion"] == "boundary_evidence_incomplete"
+    assert pd.isna(row["primary_optimizer_ad_share_pct"])
 
 
 def test_planning_ml_consistency_marks_data_gap_when_no_evidence_scores_are_available(tmp_path):
@@ -1627,6 +2160,68 @@ def test_manuscript_sync_copies_canonical_planning_artifacts(tmp_path):
 
     synchronized = pd.read_csv(figures_dir / "paper1_planning_results_table.csv")
     assert synchronized.loc[0, "baseline_portfolio_share_pct"] == pytest.approx(11.1)
+
+
+def test_manuscript_sync_filters_ad_from_primary_planning_artifacts(tmp_path):
+    planning_dir = tmp_path / "planning_artifacts_ad"
+    figures_dir = tmp_path / "figures_artifacts_ad"
+    planning_dir.mkdir()
+    figures_dir.mkdir()
+    pd.DataFrame(
+        [
+            {"scenario_name": "baseline_region_case", "pathway": "pyrolysis", "baseline_portfolio_share_pct": 90.0},
+            {"scenario_name": "baseline_region_case", "pathway": "htc", "baseline_portfolio_share_pct": 10.0},
+            {"scenario_name": "baseline_region_case", "pathway": "ad", "baseline_portfolio_share_pct": 0.0},
+        ]
+    ).to_csv(planning_dir / "main_results_table.csv", index=False)
+
+    manuscript_sync_module._sync_planning_result_artifacts(
+        planning_dir=planning_dir,
+        figures_dir=figures_dir,
+    )
+
+    synchronized = pd.read_csv(figures_dir / "paper1_planning_results_table.csv")
+    assert set(synchronized["pathway"]) == {"pyrolysis", "htc"}
+
+
+def test_monte_carlo_uq_table_excludes_ad_from_primary_summary(tmp_path):
+    benchmark_dir = tmp_path / "benchmark" / "baseline"
+    ablation_dir = benchmark_dir / "targeted_planning_ablations"
+    ablation_dir.mkdir(parents=True)
+    pd.DataFrame(
+        [
+            {
+                "scenario_name": "baseline_region_case",
+                "pathway": "pyrolysis",
+                "monte_carlo_replicates": 10,
+                "selection_probability": 1.0,
+                "share_pct_median": 90.0,
+                "share_pct_p05": 70.0,
+                "share_pct_p95": 100.0,
+                "cost_musd_per_year_median": 0.1,
+                "carbon_ktco2e_per_year_median": 1.0,
+            },
+            {
+                "scenario_name": "baseline_region_case",
+                "pathway": "ad",
+                "monte_carlo_replicates": 10,
+                "selection_probability": 0.0,
+                "share_pct_median": 0.0,
+                "share_pct_p05": 0.0,
+                "share_pct_p95": 0.0,
+                "cost_musd_per_year_median": 0.1,
+                "carbon_ktco2e_per_year_median": 1.0,
+            },
+        ]
+    ).to_csv(ablation_dir / "monte_carlo_uq_summary.csv", index=False)
+    pd.DataFrame([{"ablation_key": "placeholder"}]).to_csv(
+        ablation_dir / "targeted_planning_ablations_summary.csv",
+        index=False,
+    )
+
+    table = manuscript_sync_module._build_monte_carlo_uq_table(benchmark_dir=benchmark_dir)
+
+    assert set(table["pathway"]) == {"pyrolysis"}
 
 
 def test_manuscript_sync_writes_mixed_dominance_sentence_when_scenarios_diverge(tmp_path):

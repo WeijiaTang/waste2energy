@@ -346,6 +346,8 @@ def write_main_results_table(
 
     outputs = {
         "planning_results_table": planning_root / "main_results_table.csv",
+        "planning_results_table_thermochemical": planning_root / "main_results_table_thermochemical.csv",
+        "planning_ad_reference_diagnostics": planning_root / "ad_reference_diagnostics.csv",
         "planning_results_manifest": planning_root / "main_results_table_manifest.json",
         "figures_results_table": figures_root / "paper1_planning_results_table.csv",
         "planning_visual_metrics_long": planning_root / "main_results_visual_metrics_long.csv",
@@ -357,7 +359,11 @@ def write_main_results_table(
         "planning_recommendation_confidence_summary": planning_root / "recommendation_confidence_summary.csv",
         "figures_recommendation_confidence_summary": figures_root / "paper1_recommendation_confidence_summary.csv",
     }
+    thermochemical_table = _thermochemical_main_results_table(table)
+    ad_reference_diagnostics = _ad_reference_diagnostics_table(table)
     table.to_csv(outputs["planning_results_table"], index=False)
+    thermochemical_table.to_csv(outputs["planning_results_table_thermochemical"], index=False)
+    ad_reference_diagnostics.to_csv(outputs["planning_ad_reference_diagnostics"], index=False)
     table.to_csv(outputs["figures_results_table"], index=False)
     visualization_bundle["metric_long"].to_csv(outputs["planning_visual_metrics_long"], index=False)
     visualization_bundle["annotations"].to_csv(outputs["planning_visual_annotations"], index=False)
@@ -369,6 +375,69 @@ def write_main_results_table(
     write_json(outputs["planning_visual_manifest"], visualization_manifest)
     write_json(outputs["figures_visual_manifest"], visualization_manifest)
     return {key: str(value) for key, value in outputs.items()}
+
+
+def _thermochemical_main_results_table(table: pd.DataFrame) -> pd.DataFrame:
+    if table.empty or "pathway" not in table.columns:
+        return table.copy()
+    return table[table["pathway"].astype(str).str.lower().isin(["pyrolysis", "htc"])].copy().reset_index(drop=True)
+
+
+def _ad_reference_diagnostics_table(table: pd.DataFrame) -> pd.DataFrame:
+    if table.empty or "pathway" not in table.columns:
+        return pd.DataFrame(
+            [
+                {
+                    "scenario_name": pd.NA,
+                    "pathway": "ad",
+                    "reference_role": "biological_reference_policy_floor_diagnostic",
+                    "baseline_portfolio_share_pct": pd.NA,
+                    "selected_in_baseline_portfolio": False,
+                    "claim_boundary": "comparison only",
+                    "diagnostic_note": "Main results table unavailable.",
+                }
+            ]
+        )
+    ad_rows = table[table["pathway"].astype(str).str.lower().eq("ad")].copy()
+    if ad_rows.empty:
+        scenarios = (
+            table["scenario_name"].dropna().astype(str).drop_duplicates().tolist()
+            if "scenario_name" in table.columns
+            else [pd.NA]
+        )
+        ad_rows = pd.DataFrame(
+            [
+                {
+                    "scenario_name": scenario_name,
+                    "pathway": "ad",
+                    "baseline_portfolio_share_pct": 0.0,
+                    "selected_in_baseline_portfolio": False,
+                    "claim_boundary": "comparison only",
+                    "results_sentence": "AD is reported only as a biological-reference/policy-floor diagnostic.",
+                }
+                for scenario_name in scenarios
+            ]
+        )
+    ad_rows["reference_role"] = "biological_reference_policy_floor_diagnostic"
+    ad_rows["diagnostic_note"] = (
+        "AD is excluded from the primary thermochemical optimizer and retained only for "
+        "biological-reference/policy-floor diagnostics."
+    )
+    preferred_columns = [
+        "scenario_name",
+        "pathway",
+        "reference_role",
+        "selected_in_baseline_portfolio",
+        "baseline_portfolio_share_pct",
+        "max_stress_selection_rate",
+        "best_case_score_index",
+        "claim_boundary",
+        "surrogate_support_level",
+        "results_sentence",
+        "diagnostic_note",
+    ]
+    available = [column for column in preferred_columns if column in ad_rows.columns]
+    return ad_rows[available].reset_index(drop=True)
 
 
 def build_main_results_visualization_bundle(table: pd.DataFrame) -> dict[str, object]:
@@ -556,21 +625,27 @@ def _aggregate_pathway_stress(frame: pd.DataFrame) -> pd.DataFrame:
                         errors="coerce",
                     ).fillna(0.0).max()
                 ),
-                "stable_case_count": int(subset["stable_under_majority_rule"].fillna(False).astype(bool).sum()),
-                "consensus_case_count": int(subset["stable_under_consensus_rule"].fillna(False).astype(bool).sum()),
+                "stable_case_count": int(_coerce_bool_series(subset["stable_under_majority_rule"]).sum()),
+                "consensus_case_count": int(_coerce_bool_series(subset["stable_under_consensus_rule"]).sum()),
                 "stress_test_tags": "|".join(sorted(tags)) if tags else "none",
                 "uncertainty_stress_support": _format_uncertainty_stress_support(subset),
                 "selected_under_max_interval_uncertainty": bool(
-                    subset.get(
-                        "selected_under_max_interval_uncertainty",
-                        pd.Series([False] * len(subset), index=subset.index),
-                    ).fillna(False).astype(bool).any()
+                    _coerce_bool_series(
+                        subset.get(
+                            "selected_under_max_interval_uncertainty",
+                            pd.Series([False] * len(subset), index=subset.index),
+                        ),
+                        index=subset.index,
+                    ).any()
                 ),
                 "selected_under_combined_only_uncertainty": bool(
-                    subset.get(
-                        "selected_under_combined_only_uncertainty",
-                        pd.Series([False] * len(subset), index=subset.index),
-                    ).fillna(False).astype(bool).any()
+                    _coerce_bool_series(
+                        subset.get(
+                            "selected_under_combined_only_uncertainty",
+                            pd.Series([False] * len(subset), index=subset.index),
+                        ),
+                        index=subset.index,
+                    ).any()
                 ),
             }
         )
@@ -829,11 +904,13 @@ def _format_uncertainty_stress_support(frame: pd.DataFrame) -> str:
     max_interval = frame.get(
         "selected_under_max_interval_uncertainty",
         pd.Series([False] * len(frame), index=frame.index),
-    ).fillna(False).astype(bool)
+    )
+    max_interval = _coerce_bool_series(max_interval, index=frame.index)
     combined_only = frame.get(
         "selected_under_combined_only_uncertainty",
         pd.Series([False] * len(frame), index=frame.index),
-    ).fillna(False).astype(bool)
+    )
+    combined_only = _coerce_bool_series(combined_only, index=frame.index)
     if max_interval.any():
         tags.append("max_interval")
     if combined_only.any():
@@ -943,6 +1020,22 @@ def _optional_float(value: object) -> float | object:
     if pd.isna(numeric):
         return pd.NA
     return float(numeric)
+
+
+def _coerce_bool_flag(value: object) -> bool:
+    if isinstance(value, bool):
+        return value
+    if pd.isna(value):
+        return False
+    return str(value).strip().lower() in {"1", "true", "yes", "y", "selected"}
+
+
+def _coerce_bool_series(values: object, *, index: pd.Index | None = None) -> pd.Series:
+    if isinstance(values, pd.Series):
+        series = values.copy()
+    else:
+        series = pd.Series(values, index=index)
+    return series.map(_coerce_bool_flag)
 
 
 def _require_numeric_columns(
